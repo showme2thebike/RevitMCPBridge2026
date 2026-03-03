@@ -2002,6 +2002,291 @@ namespace RevitMCPBridge2026
             }
         }
 
+        /// <summary>
+        /// Gets the element IDs connected to a specific electrical circuit
+        /// </summary>
+        [MCPMethod("getCircuitElements", Category = "MEP", Description = "Gets all element IDs connected to a specific electrical circuit")]
+        public static string GetCircuitElements(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                if (parameters["circuitId"] == null)
+                {
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = "circuitId is required" });
+                }
+
+                int circuitIdInt = parameters["circuitId"].ToObject<int>();
+                ElementId circuitId = new ElementId(circuitIdInt);
+                Element element = doc.GetElement(circuitId);
+
+                if (element == null || !(element is ElectricalSystem))
+                {
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = $"Element {circuitIdInt} is not an electrical circuit" });
+                }
+
+                ElectricalSystem circuit = element as ElectricalSystem;
+                var elementList = new List<object>();
+
+                if (circuit.Elements != null)
+                {
+                    foreach (Element connectedElement in circuit.Elements)
+                    {
+                        elementList.Add(new
+                        {
+                            elementId = connectedElement.Id.Value,
+                            name = connectedElement.Name,
+                            category = connectedElement.Category?.Name,
+                            familyName = (connectedElement as FamilyInstance)?.Symbol?.FamilyName
+                        });
+                    }
+                }
+
+                var circuitNumber = circuit.get_Parameter(BuiltInParameter.RBS_ELEC_CIRCUIT_NUMBER)?.AsString();
+                var circuitName = circuit.get_Parameter(BuiltInParameter.RBS_ELEC_CIRCUIT_NAME)?.AsString();
+                var poles = circuit.get_Parameter(BuiltInParameter.RBS_ELEC_NUMBER_OF_POLES)?.AsInteger();
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    circuitId = circuitIdInt,
+                    circuitNumber = circuitNumber,
+                    circuitName = circuitName,
+                    poles = poles,
+                    elementCount = elementList.Count,
+                    elements = elementList
+                });
+            }
+            catch (Exception ex)
+            {
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = ex.Message, stackTrace = ex.StackTrace });
+            }
+        }
+
+        /// <summary>
+        /// Adds elements to an existing electrical circuit
+        /// </summary>
+        [MCPMethod("addToCircuit", Category = "MEP", Description = "Adds element IDs to an existing electrical circuit")]
+        public static string AddToCircuit(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                if (parameters["circuitId"] == null || parameters["elementIds"] == null)
+                {
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = "circuitId and elementIds are required" });
+                }
+
+                int circuitIdInt = parameters["circuitId"].ToObject<int>();
+                var elementIds = parameters["elementIds"].ToObject<List<int>>();
+
+                ElementId circuitId = new ElementId(circuitIdInt);
+                Element element = doc.GetElement(circuitId);
+
+                if (element == null || !(element is ElectricalSystem))
+                {
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = $"Element {circuitIdInt} is not an electrical circuit" });
+                }
+
+                ElectricalSystem circuit = element as ElectricalSystem;
+                var elemSet = new ElementSet();
+                foreach (var id in elementIds)
+                {
+                    var el = doc.GetElement(new ElementId(id));
+                    if (el != null) elemSet.Insert(el);
+                }
+
+                using (var trans = new Transaction(doc, "Add Elements to Circuit"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    circuit.AddToCircuit(elemSet);
+
+                    trans.Commit();
+
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        circuitId = circuitIdInt,
+                        addedCount = elementIds.Count,
+                        totalElements = circuit.Elements?.Size ?? 0,
+                        message = $"Added {elementIds.Count} elements to circuit"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = ex.Message, stackTrace = ex.StackTrace });
+            }
+        }
+
+        /// <summary>
+        /// Removes elements from an electrical circuit
+        /// </summary>
+        [MCPMethod("removeFromCircuit", Category = "MEP", Description = "Removes element IDs from an electrical circuit")]
+        public static string RemoveFromCircuit(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                if (parameters["circuitId"] == null || parameters["elementIds"] == null)
+                {
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = "circuitId and elementIds are required" });
+                }
+
+                int circuitIdInt = parameters["circuitId"].ToObject<int>();
+                var elementIds = parameters["elementIds"].ToObject<List<int>>();
+
+                ElementId circuitId = new ElementId(circuitIdInt);
+                Element element = doc.GetElement(circuitId);
+
+                if (element == null || !(element is ElectricalSystem))
+                {
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = $"Element {circuitIdInt} is not an electrical circuit" });
+                }
+
+                ElectricalSystem circuit = element as ElectricalSystem;
+                var elemSet = new ElementSet();
+                foreach (var id in elementIds)
+                {
+                    var el = doc.GetElement(new ElementId(id));
+                    if (el != null) elemSet.Insert(el);
+                }
+
+                using (var trans = new Transaction(doc, "Remove Elements from Circuit"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    circuit.RemoveFromCircuit(elemSet);
+
+                    trans.Commit();
+
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        circuitId = circuitIdInt,
+                        removedCount = elementIds.Count,
+                        remainingElements = circuit.Elements?.Size ?? 0,
+                        message = $"Removed {elementIds.Count} elements from circuit"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = ex.Message, stackTrace = ex.StackTrace });
+            }
+        }
+
+        /// <summary>
+        /// Consolidates two circuits: moves all elements from source to target, then deletes source
+        /// </summary>
+        [MCPMethod("consolidateCircuits", Category = "MEP", Description = "Merges source circuit into target circuit (moves elements, deletes source)")]
+        public static string ConsolidateCircuits(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                if (parameters["sourceCircuitId"] == null || parameters["targetCircuitId"] == null)
+                {
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = "sourceCircuitId and targetCircuitId are required" });
+                }
+
+                int sourceId = parameters["sourceCircuitId"].ToObject<int>();
+                int targetId = parameters["targetCircuitId"].ToObject<int>();
+
+                ElectricalSystem sourceCircuit = doc.GetElement(new ElementId(sourceId)) as ElectricalSystem;
+                ElectricalSystem targetCircuit = doc.GetElement(new ElementId(targetId)) as ElectricalSystem;
+
+                if (sourceCircuit == null)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = $"Source circuit {sourceId} not found" });
+                if (targetCircuit == null)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = $"Target circuit {targetId} not found" });
+
+                // Collect source element IDs
+                var sourceElementIds = new List<ElementId>();
+                if (sourceCircuit.Elements != null)
+                {
+                    foreach (Element el in sourceCircuit.Elements)
+                    {
+                        sourceElementIds.Add(el.Id);
+                    }
+                }
+
+                if (sourceElementIds.Count == 0)
+                {
+                    // Source is empty — just delete it
+                    using (var trans = new Transaction(doc, "Delete Empty Circuit"))
+                    {
+                        trans.Start();
+                        doc.Delete(new ElementId(sourceId));
+                        trans.Commit();
+                    }
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        message = "Source circuit was empty — deleted",
+                        sourceCircuitId = sourceId,
+                        targetCircuitId = targetId,
+                        movedElements = 0
+                    });
+                }
+
+                string sourceName = sourceCircuit.get_Parameter(BuiltInParameter.RBS_ELEC_CIRCUIT_NAME)?.AsString() ?? "unnamed";
+                string targetName = targetCircuit.get_Parameter(BuiltInParameter.RBS_ELEC_CIRCUIT_NAME)?.AsString() ?? "unnamed";
+
+                using (var trans = new Transaction(doc, $"Consolidate '{sourceName}' into '{targetName}'"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    // Step 1: Build ElementSet from source elements
+                    var sourceElemSet = new ElementSet();
+                    foreach (var eid in sourceElementIds)
+                    {
+                        var el = doc.GetElement(eid);
+                        if (el != null) sourceElemSet.Insert(el);
+                    }
+
+                    // Step 2: Remove elements from source circuit
+                    sourceCircuit.RemoveFromCircuit(sourceElemSet);
+
+                    // Step 3: Add elements to target circuit
+                    targetCircuit.AddToCircuit(sourceElemSet);
+
+                    // Step 4: Delete the now-empty source circuit
+                    doc.Delete(new ElementId(sourceId));
+
+                    trans.Commit();
+
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        sourceCircuitId = sourceId,
+                        targetCircuitId = targetId,
+                        movedElements = sourceElementIds.Count,
+                        targetTotalElements = targetCircuit.Elements?.Size ?? 0,
+                        message = $"Consolidated '{sourceName}' ({sourceElementIds.Count} elements) into '{targetName}'"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = ex.Message, stackTrace = ex.StackTrace });
+            }
+        }
+
         #endregion
 
         #region MEP Equipment and Fixtures

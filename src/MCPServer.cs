@@ -2673,6 +2673,14 @@ namespace RevitMCPBridge
                         return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.MEPMethods.CreateDuctFitting(uiApp, parameters));
                     case "createElectricalCircuit":
                         return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.MEPMethods.CreateElectricalCircuit(uiApp, parameters));
+                    case "getCircuitElements":
+                        return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.MEPMethods.GetCircuitElements(uiApp, parameters));
+                    case "addToCircuit":
+                        return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.MEPMethods.AddToCircuit(uiApp, parameters));
+                    case "removeFromCircuit":
+                        return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.MEPMethods.RemoveFromCircuit(uiApp, parameters));
+                    case "consolidateCircuits":
+                        return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.MEPMethods.ConsolidateCircuits(uiApp, parameters));
                     case "createMEPSpace":
                         return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.MEPMethods.CreateMEPSpace(uiApp, parameters));
                     case "createMEPSystem":
