@@ -5,6 +5,8 @@ using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using Newtonsoft.Json.Linq;
 using RevitMCPBridge;
+using RevitMCPBridge.Helpers;
+using RevitMCPBridge.Validation;
 
 namespace RevitMCPBridge2026
 {
@@ -29,14 +31,10 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["filterName"] == null || parameters["categories"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterName and categories are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "createViewFilter");
+                v.Require("filterName");
+                v.Require("categories");
+                v.ThrowIfInvalid();
 
                 string filterName = parameters["filterName"].ToString();
                 var categoryIdsInt = parameters["categories"].ToObject<List<int>>();
@@ -61,24 +59,17 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        filterId = (int)filter.Id.Value,
-                        filterName = filter.Name,
-                        categoriesCount = categoryIds.Count,
-                        message = "View filter created successfully. Use AddRuleToFilter to add filter rules."
-                    });
+                    return ResponseBuilder.Success()
+                        .With("filterId", (int)filter.Id.Value)
+                        .With("filterName", filter.Name)
+                        .With("categoriesCount", categoryIds.Count)
+                        .With("message", "View filter created successfully. Use AddRuleToFilter to add filter rules.")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -123,21 +114,14 @@ namespace RevitMCPBridge2026
                     });
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    filtersCount = filters.Count,
-                    filters
-                });
+                return ResponseBuilder.Success()
+                    .With("filtersCount", filters.Count)
+                    .With("filters", filters)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -151,26 +135,17 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["filterId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "getViewFilterInfo");
+                v.Require("filterId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 ICollection<ElementId> categories = filter.GetCategories();
@@ -193,25 +168,18 @@ namespace RevitMCPBridge2026
                     filterType = "None";
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    filterId = filterIdInt,
-                    filterName = filter.Name,
-                    categories = categories.Select(id => (int)id.Value).ToList(),
-                    categoriesCount = categories.Count,
-                    hasRules = hasRules,
-                    filterType = filterType
-                });
+                return ResponseBuilder.Success()
+                    .With("filterId", filterIdInt)
+                    .With("filterName", filter.Name)
+                    .With("categories", categories.Select(id => (int)id.Value).ToList())
+                    .With("categoriesCount", categories.Count)
+                    .With("hasRules", hasRules)
+                    .With("filterType", filterType)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -225,26 +193,17 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["filterId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "modifyViewFilter");
+                v.Require("filterId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 using (var trans = new Transaction(doc, "Modify View Filter"))
@@ -275,23 +234,16 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        filterId = filterIdInt,
-                        filterName = filter.Name,
-                        message = "Filter modified successfully"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("filterId", filterIdInt)
+                        .With("filterName", filter.Name)
+                        .With("message", "Filter modified successfully")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -305,26 +257,17 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["filterId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "deleteViewFilter");
+                v.Require("filterId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 string filterName = filter.Name;
@@ -340,24 +283,17 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        deletedFilterId = filterIdInt,
-                        deletedFilterName = filterName,
-                        deletedCount = deletedIds.Count,
-                        message = "Filter deleted successfully"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("deletedFilterId", filterIdInt)
+                        .With("deletedFilterName", filterName)
+                        .With("deletedCount", deletedIds.Count)
+                        .With("message", "Filter deleted successfully")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -376,16 +312,12 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["parameterId"] == null || parameters["ruleType"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "parameterId and ruleType are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "createFilterRule");
+                v.Require("parameterId").IsType<int>();
+                v.Require("ruleType");
+                v.ThrowIfInvalid();
 
-                int paramIdInt = parameters["parameterId"].ToObject<int>();
+                int paramIdInt = v.GetRequired<int>("parameterId");
                 ElementId parameterId = new ElementId(paramIdInt);
                 string ruleType = parameters["ruleType"].ToString().ToLower();
 
@@ -393,26 +325,17 @@ namespace RevitMCPBridge2026
                 // They must be created and immediately applied to a filter using ElementParameterFilter
                 // This method returns a rule specification that can be used with AddRuleToFilter
 
-                var ruleSpec = new
-                {
-                    success = true,
-                    parameterId = paramIdInt,
-                    ruleType = ruleType,
-                    value = parameters["value"]?.ToString(),
-                    message = "Rule specification created. Use AddRuleToFilter to apply this rule to a filter.",
-                    note = "Filter rules in Revit API must be created inline with filters - use AddRuleToFilter for actual implementation"
-                };
-
-                return Newtonsoft.Json.JsonConvert.SerializeObject(ruleSpec);
+                return ResponseBuilder.Success()
+                    .With("parameterId", paramIdInt)
+                    .With("ruleType", ruleType)
+                    .With("value", parameters["value"]?.ToString())
+                    .With("message", "Rule specification created. Use AddRuleToFilter to apply this rule to a filter.")
+                    .With("note", "Filter rules in Revit API must be created inline with filters - use AddRuleToFilter for actual implementation")
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -427,20 +350,17 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["filterId"] == null || parameters["parameterId"] == null ||
-                    parameters["ruleType"] == null || parameters["value"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterId, parameterId, ruleType, and value are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "addRuleToFilter");
+                v.Require("filterId").IsType<int>();
+                v.Require("parameterId").IsType<int>();
+                v.Require("ruleType");
+                v.Require("value");
+                v.ThrowIfInvalid();
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
-                int paramIdInt = parameters["parameterId"].ToObject<int>();
+                int paramIdInt = v.GetRequired<int>("parameterId");
                 ElementId parameterId = new ElementId(paramIdInt);
 
                 string ruleType = parameters["ruleType"].ToString().ToLower();
@@ -450,11 +370,7 @@ namespace RevitMCPBridge2026
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 using (var trans = new Transaction(doc, "Add Rule to Filter"))
@@ -502,11 +418,7 @@ namespace RevitMCPBridge2026
                             break;
                         default:
                             trans.RollBack();
-                            return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                            {
-                                success = false,
-                                error = $"Unknown rule type: {ruleType}. Supported: equals, notequals, contains, beginswith, endswith, greater, greaterorequal, less, lessorequal"
-                            });
+                            return ResponseBuilder.Error($"Unknown rule type: {ruleType}. Supported: equals, notequals, contains, beginswith, endswith, greater, greaterorequal, less, lessorequal").Build();
                     }
 
                     // Get existing rules and add new one
@@ -530,27 +442,20 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        filterId = filterIdInt,
-                        filterName = filter.Name,
-                        parameterId = paramIdInt,
-                        ruleType = ruleType,
-                        value = value,
-                        totalRules = rules.Count,
-                        message = "Rule added to filter successfully"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("filterId", filterIdInt)
+                        .With("filterName", filter.Name)
+                        .With("parameterId", paramIdInt)
+                        .With("ruleType", ruleType)
+                        .With("value", value)
+                        .With("totalRules", rules.Count)
+                        .With("message", "Rule added to filter successfully")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -565,41 +470,30 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["filterId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "getFilterRules");
+                v.Require("filterId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 // Get the filter
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 var elementFilter = filter.GetElementFilter() as ElementParameterFilter;
                 if (elementFilter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        filterId = filterIdInt,
-                        filterName = filter.Name,
-                        rulesCount = 0,
-                        rules = new List<object>(),
-                        message = "Filter has no rules"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("filterId", filterIdInt)
+                        .With("filterName", filter.Name)
+                        .With("rulesCount", 0)
+                        .With("rules", new List<object>())
+                        .With("message", "Filter has no rules")
+                        .Build();
                 }
 
                 var rules = new List<object>();
@@ -616,23 +510,16 @@ namespace RevitMCPBridge2026
                     rules.Add(ruleInfo);
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    filterId = filterIdInt,
-                    filterName = filter.Name,
-                    rulesCount = rules.Count,
-                    rules = rules
-                });
+                return ResponseBuilder.Success()
+                    .With("filterId", filterIdInt)
+                    .With("filterName", filter.Name)
+                    .With("rulesCount", rules.Count)
+                    .With("rules", rules)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -647,28 +534,20 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["filterId"] == null || parameters["ruleIndex"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterId and ruleIndex are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "removeRuleFromFilter");
+                v.Require("filterId").IsType<int>();
+                v.Require("ruleIndex").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
-                int ruleIndex = parameters["ruleIndex"].ToObject<int>();
+                int ruleIndex = v.GetRequired<int>("ruleIndex");
 
                 // Get the filter
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 using (var trans = new Transaction(doc, "Remove Rule from Filter"))
@@ -682,22 +561,14 @@ namespace RevitMCPBridge2026
                     if (elementFilter == null)
                     {
                         trans.RollBack();
-                        return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                        {
-                            success = false,
-                            error = "Filter has no rules to remove"
-                        });
+                        return ResponseBuilder.Error("Filter has no rules to remove").Build();
                     }
 
                     var existingRules = elementFilter.GetRules();
                     if (ruleIndex < 0 || ruleIndex >= existingRules.Count)
                     {
                         trans.RollBack();
-                        return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                        {
-                            success = false,
-                            error = $"Rule index {ruleIndex} out of range. Filter has {existingRules.Count} rules (0-{existingRules.Count - 1})"
-                        });
+                        return ResponseBuilder.Error($"Rule index {ruleIndex} out of range. Filter has {existingRules.Count} rules (0-{existingRules.Count - 1})").Build();
                     }
 
                     // Create new list without the specified rule
@@ -723,27 +594,20 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        filterId = filterIdInt,
-                        filterName = filter.Name,
-                        removedRuleIndex = ruleIndex,
-                        remainingRules = newRules.Count,
-                        message = newRules.Count > 0
+                    return ResponseBuilder.Success()
+                        .With("filterId", filterIdInt)
+                        .With("filterName", filter.Name)
+                        .With("removedRuleIndex", ruleIndex)
+                        .With("remainingRules", newRules.Count)
+                        .With("message", newRules.Count > 0
                             ? $"Rule at index {ruleIndex} removed. {newRules.Count} rules remaining."
-                            : "Rule removed. Filter now has no rules."
-                    });
+                            : "Rule removed. Filter now has no rules.")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -761,39 +625,27 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["viewId"] == null || parameters["filterId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "viewId and filterId are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "applyFilterToView");
+                v.Require("viewId").IsType<int>();
+                v.Require("filterId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int viewIdInt = parameters["viewId"].ToObject<int>();
+                int viewIdInt = v.GetRequired<int>("viewId");
                 ElementId viewId = new ElementId(viewIdInt);
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 View view = doc.GetElement(viewId) as View;
                 if (view == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"View with ID {viewIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"View with ID {viewIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 using (var trans = new Transaction(doc, "Apply Filter to View"))
@@ -812,25 +664,18 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        viewId = viewIdInt,
-                        filterId = filterIdInt,
-                        filterName = filter.Name,
-                        visible = visible,
-                        message = "Filter applied to view successfully. Use SetFilterOverrides to set graphics overrides."
-                    });
+                    return ResponseBuilder.Success()
+                        .With("viewId", viewIdInt)
+                        .With("filterId", filterIdInt)
+                        .With("filterName", filter.Name)
+                        .With("visible", visible)
+                        .With("message", "Filter applied to view successfully. Use SetFilterOverrides to set graphics overrides.")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -844,29 +689,21 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["viewId"] == null || parameters["filterId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "viewId and filterId are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "removeFilterFromView");
+                v.Require("viewId").IsType<int>();
+                v.Require("filterId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int viewIdInt = parameters["viewId"].ToObject<int>();
+                int viewIdInt = v.GetRequired<int>("viewId");
                 ElementId viewId = new ElementId(viewIdInt);
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 View view = doc.GetElement(viewId) as View;
                 if (view == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"View with ID {viewIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"View with ID {viewIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 using (var trans = new Transaction(doc, "Remove Filter from View"))
@@ -880,23 +717,16 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        viewId = viewIdInt,
-                        filterId = filterIdInt,
-                        message = "Filter removed from view successfully"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("viewId", viewIdInt)
+                        .With("filterId", filterIdInt)
+                        .With("message", "Filter removed from view successfully")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -910,26 +740,17 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["viewId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "viewId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "getFiltersInView");
+                v.Require("viewId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int viewIdInt = parameters["viewId"].ToObject<int>();
+                int viewIdInt = v.GetRequired<int>("viewId");
                 ElementId viewId = new ElementId(viewIdInt);
 
                 View view = doc.GetElement(viewId) as View;
                 if (view == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"View with ID {viewIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"View with ID {viewIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 var filters = new List<object>();
@@ -951,22 +772,15 @@ namespace RevitMCPBridge2026
                     }
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    viewId = viewIdInt,
-                    filtersCount = filters.Count,
-                    filters
-                });
+                return ResponseBuilder.Success()
+                    .With("viewId", viewIdInt)
+                    .With("filtersCount", filters.Count)
+                    .With("filters", filters)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -980,29 +794,21 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["viewId"] == null || parameters["filterId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "viewId and filterId are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "setFilterOverrides");
+                v.Require("viewId").IsType<int>();
+                v.Require("filterId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int viewIdInt = parameters["viewId"].ToObject<int>();
+                int viewIdInt = v.GetRequired<int>("viewId");
                 ElementId viewId = new ElementId(viewIdInt);
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 View view = doc.GetElement(viewId) as View;
                 if (view == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"View with ID {viewIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"View with ID {viewIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 using (var trans = new Transaction(doc, "Set Filter Overrides"))
@@ -1053,23 +859,16 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        viewId = viewIdInt,
-                        filterId = filterIdInt,
-                        message = "Filter overrides set successfully"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("viewId", viewIdInt)
+                        .With("filterId", filterIdInt)
+                        .With("message", "Filter overrides set successfully")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1084,53 +883,38 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["viewId"] == null || parameters["filterId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "viewId and filterId are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "getFilterOverrides");
+                v.Require("viewId").IsType<int>();
+                v.Require("filterId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int viewIdInt = parameters["viewId"].ToObject<int>();
+                int viewIdInt = v.GetRequired<int>("viewId");
                 ElementId viewId = new ElementId(viewIdInt);
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 // Get view and filter
                 View view = doc.GetElement(viewId) as View;
                 if (view == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"View with ID {viewIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"View with ID {viewIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 // Get overrides
                 OverrideGraphicSettings overrides = view.GetFilterOverrides(filterId);
 
-                // Extract override settings
-                var result = new
-                {
-                    success = true,
-                    viewId = viewIdInt,
-                    filterId = filterIdInt,
-                    filterName = filter.Name,
-                    overrides = new
+                return ResponseBuilder.Success()
+                    .With("viewId", viewIdInt)
+                    .With("filterId", filterIdInt)
+                    .With("filterName", filter.Name)
+                    .With("overrides", new
                     {
                         hasProjectionLineColor = overrides.ProjectionLineColor.IsValid,
                         projectionLineColor = overrides.ProjectionLineColor.IsValid ? new
@@ -1150,19 +934,12 @@ namespace RevitMCPBridge2026
                         cutLineWeight = overrides.CutLineWeight,
                         transparency = overrides.Transparency,
                         halftone = overrides.Halftone
-                    }
-                };
-
-                return Newtonsoft.Json.JsonConvert.SerializeObject(result);
+                    })
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1181,16 +958,11 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["categoryId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "categoryId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "selectElementsByFilter");
+                v.Require("categoryId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int categoryIdInt = parameters["categoryId"].ToObject<int>();
+                int categoryIdInt = v.GetRequired<int>("categoryId");
                 ElementId categoryId = new ElementId(categoryIdInt);
 
                 // Start with category filter
@@ -1205,11 +977,7 @@ namespace RevitMCPBridge2026
 
                     if (view == null)
                     {
-                        return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                        {
-                            success = false,
-                            error = $"View with ID {viewIdInt} not found"
-                        });
+                        return ResponseBuilder.Error($"View with ID {viewIdInt} not found", "NOT_FOUND").Build();
                     }
 
                     collector = new FilteredElementCollector(doc, viewId);
@@ -1289,24 +1057,17 @@ namespace RevitMCPBridge2026
                 var elementIds = collector.ToElementIds();
                 var elementIdsList = elementIds.Select(id => (int)id.Value).ToList();
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    categoryId = categoryIdInt,
-                    viewId = parameters["viewId"] != null ? parameters["viewId"].ToObject<int>() : (int?)null,
-                    elementsCount = elementIdsList.Count,
-                    elementIds = elementIdsList,
-                    filtersApplied = parameters["parameterFilters"]?.ToObject<List<JObject>>()?.Count ?? 0
-                });
+                return ResponseBuilder.Success()
+                    .With("categoryId", categoryIdInt)
+                    .With("viewId", parameters["viewId"] != null ? parameters["viewId"].ToObject<int>() : (int?)null)
+                    .With("elementsCount", elementIdsList.Count)
+                    .With("elementIds", elementIdsList)
+                    .With("filtersApplied", parameters["parameterFilters"]?.ToObject<List<JObject>>()?.Count ?? 0)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1321,16 +1082,11 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["categoryId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "categoryId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "countElementsByFilter");
+                v.Require("categoryId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int categoryIdInt = parameters["categoryId"].ToObject<int>();
+                int categoryIdInt = v.GetRequired<int>("categoryId");
                 ElementId categoryId = new ElementId(categoryIdInt);
 
                 // Start with category filter
@@ -1345,11 +1101,7 @@ namespace RevitMCPBridge2026
 
                     if (view == null)
                     {
-                        return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                        {
-                            success = false,
-                            error = $"View with ID {viewIdInt} not found"
-                        });
+                        return ResponseBuilder.Error($"View with ID {viewIdInt} not found", "NOT_FOUND").Build();
                     }
 
                     collector = new FilteredElementCollector(doc, viewId);
@@ -1428,23 +1180,16 @@ namespace RevitMCPBridge2026
                 // Count elements
                 int count = collector.GetElementCount();
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    categoryId = categoryIdInt,
-                    viewId = parameters["viewId"] != null ? parameters["viewId"].ToObject<int>() : (int?)null,
-                    count = count,
-                    filtersApplied = parameters["parameterFilters"]?.ToObject<List<JObject>>()?.Count ?? 0
-                });
+                return ResponseBuilder.Success()
+                    .With("categoryId", categoryIdInt)
+                    .With("viewId", parameters["viewId"] != null ? parameters["viewId"].ToObject<int>() : (int?)null)
+                    .With("count", count)
+                    .With("filtersApplied", parameters["parameterFilters"]?.ToObject<List<JObject>>()?.Count ?? 0)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1466,38 +1211,26 @@ namespace RevitMCPBridge2026
                 // FilteredElementCollector, not stored as ParameterFilterElement
                 // This method returns a category filter specification for use with collectors
 
-                if (parameters["categories"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "categories array is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "createCategoryFilter");
+                v.Require("categories");
+                v.ThrowIfInvalid();
 
                 var categoriesInt = parameters["categories"].ToObject<List<int>>();
                 bool inverted = parameters["inverted"]?.ToObject<bool>() ?? false;
 
                 var categoryIds = categoriesInt.Select(id => new ElementId(id)).ToList();
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    categoryCount = categoryIds.Count,
-                    categories = categoriesInt,
-                    inverted = inverted,
-                    message = "Category filter specification created. Use with FilteredElementCollector.OfCategoryId() or OfCategory()",
-                    note = "ElementCategoryFilter and ElementMulticategoryFilter are used inline with collectors, not stored as filter elements"
-                });
+                return ResponseBuilder.Success()
+                    .With("categoryCount", categoryIds.Count)
+                    .With("categories", categoriesInt)
+                    .With("inverted", inverted)
+                    .With("message", "Category filter specification created. Use with FilteredElementCollector.OfCategoryId() or OfCategory()")
+                    .With("note", "ElementCategoryFilter and ElementMulticategoryFilter are used inline with collectors, not stored as filter elements")
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1512,27 +1245,18 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["filterId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "getFilterCategories");
+                v.Require("filterId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 // Get the filter
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 var categories = filter.GetCategories();
@@ -1548,23 +1272,16 @@ namespace RevitMCPBridge2026
                     });
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    filterId = filterIdInt,
-                    filterName = filter.Name,
-                    categoriesCount = categoriesList.Count,
-                    categories = categoriesList
-                });
+                return ResponseBuilder.Success()
+                    .With("filterId", filterIdInt)
+                    .With("filterName", filter.Name)
+                    .With("categoriesCount", categoriesList.Count)
+                    .With("categories", categoriesList)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1579,16 +1296,12 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["filterId"] == null || parameters["categoryIds"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterId and categoryIds are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "addCategoriesToFilter");
+                v.Require("filterId").IsType<int>();
+                v.Require("categoryIds");
+                v.ThrowIfInvalid();
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 var categoryIdsInt = parameters["categoryIds"].ToObject<List<int>>();
@@ -1597,11 +1310,7 @@ namespace RevitMCPBridge2026
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 using (var trans = new Transaction(doc, "Add Categories to Filter"))
@@ -1630,25 +1339,18 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        filterId = filterIdInt,
-                        filterName = filter.Name,
-                        categoriesAdded = categoryIdsInt.Count,
-                        totalCategories = allCategories.Count,
-                        message = $"Categories added to filter. Total categories: {allCategories.Count}"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("filterId", filterIdInt)
+                        .With("filterName", filter.Name)
+                        .With("categoriesAdded", categoryIdsInt.Count)
+                        .With("totalCategories", allCategories.Count)
+                        .With("message", $"Categories added to filter. Total categories: {allCategories.Count}")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1663,16 +1365,12 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["filterId"] == null || parameters["categoryIds"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterId and categoryIds are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "removeCategoriesFromFilter");
+                v.Require("filterId").IsType<int>();
+                v.Require("categoryIds");
+                v.ThrowIfInvalid();
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 var categoryIdsInt = parameters["categoryIds"].ToObject<List<int>>();
@@ -1681,11 +1379,7 @@ namespace RevitMCPBridge2026
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 using (var trans = new Transaction(doc, "Remove Categories from Filter"))
@@ -1711,11 +1405,7 @@ namespace RevitMCPBridge2026
                     if (remainingCategories.Count == 0)
                     {
                         trans.RollBack();
-                        return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                        {
-                            success = false,
-                            error = "Cannot remove all categories from filter. Filter must have at least one category."
-                        });
+                        return ResponseBuilder.Error("Cannot remove all categories from filter. Filter must have at least one category.").Build();
                     }
 
                     // Set the updated categories
@@ -1725,25 +1415,18 @@ namespace RevitMCPBridge2026
 
                     int removedCount = existingCategories.Count - remainingCategories.Count;
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        filterId = filterIdInt,
-                        filterName = filter.Name,
-                        categoriesRemoved = removedCount,
-                        remainingCategories = remainingCategories.Count,
-                        message = $"{removedCount} categories removed. {remainingCategories.Count} categories remaining."
-                    });
+                    return ResponseBuilder.Success()
+                        .With("filterId", filterIdInt)
+                        .With("filterName", filter.Name)
+                        .With("categoriesRemoved", removedCount)
+                        .With("remainingCategories", remainingCategories.Count)
+                        .With("message", $"{removedCount} categories removed. {remainingCategories.Count} categories remaining.")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1762,15 +1445,9 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["templateName"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "templateName is required",
-                        availableTemplates = new[] { "structural", "architectural", "mep", "walls", "doors", "windows", "rooms" }
-                    });
-                }
+                var v = new ParameterValidator(parameters, "createFilterFromTemplate");
+                v.Require("templateName");
+                v.ThrowIfInvalid();
 
                 string templateName = parameters["templateName"].ToString().ToLower();
                 string filterName = parameters["filterName"]?.ToString() ?? $"{templateName} Elements";
@@ -1816,12 +1493,9 @@ namespace RevitMCPBridge2026
                         categoryIds.Add(new ElementId((int)BuiltInCategory.OST_Rooms));
                         break;
                     default:
-                        return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                        {
-                            success = false,
-                            error = $"Unknown template: {templateName}",
-                            availableTemplates = new[] { "structural", "architectural", "mep", "walls", "doors", "windows", "rooms" }
-                        });
+                        return ResponseBuilder.Error($"Unknown template: {templateName}")
+                            .With("availableTemplates", new[] { "structural", "architectural", "mep", "walls", "doors", "windows", "rooms" })
+                            .Build();
                 }
 
                 using (var trans = new Transaction(doc, "Create Filter from Template"))
@@ -1835,25 +1509,18 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        filterId = (int)filter.Id.Value,
-                        filterName = filter.Name,
-                        template = templateName,
-                        categoriesCount = categoryIds.Count,
-                        message = $"Filter created from '{templateName}' template with {categoryIds.Count} categories"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("filterId", (int)filter.Id.Value)
+                        .With("filterName", filter.Name)
+                        .With("template", templateName)
+                        .With("categoriesCount", categoryIds.Count)
+                        .With("message", $"Filter created from '{templateName}' template with {categoryIds.Count} categories")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1868,16 +1535,12 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["filterId"] == null || parameters["newName"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterId and newName are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "duplicateFilter");
+                v.Require("filterId").IsType<int>();
+                v.Require("newName");
+                v.ThrowIfInvalid();
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
                 string newName = parameters["newName"].ToString();
 
@@ -1885,11 +1548,7 @@ namespace RevitMCPBridge2026
                 ParameterFilterElement originalFilter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (originalFilter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 using (var trans = new Transaction(doc, "Duplicate Filter"))
@@ -1914,27 +1573,20 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        originalFilterId = filterIdInt,
-                        originalFilterName = originalFilter.Name,
-                        newFilterId = (int)newFilter.Id.Value,
-                        newFilterName = newFilter.Name,
-                        categoriesCount = categories.Count,
-                        hasRules = elementFilter != null,
-                        message = $"Filter duplicated successfully as '{newName}'"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("originalFilterId", filterIdInt)
+                        .With("originalFilterName", originalFilter.Name)
+                        .With("newFilterId", (int)newFilter.Id.Value)
+                        .With("newFilterName", newFilter.Name)
+                        .With("categoriesCount", categories.Count)
+                        .With("hasRules", elementFilter != null)
+                        .With("message", $"Filter duplicated successfully as '{newName}'")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1953,27 +1605,18 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["filterId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "findViewsUsingFilter");
+                v.Require("filterId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 // Get the filter
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 // Collect all views
@@ -2006,23 +1649,16 @@ namespace RevitMCPBridge2026
                     }
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    filterId = filterIdInt,
-                    filterName = filter.Name,
-                    viewsCount = viewsUsingFilter.Count,
-                    views = viewsUsingFilter
-                });
+                return ResponseBuilder.Success()
+                    .With("filterId", filterIdInt)
+                    .With("filterName", filter.Name)
+                    .With("viewsCount", viewsUsingFilter.Count)
+                    .With("views", viewsUsingFilter)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -2037,27 +1673,18 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["filterId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "testFilter");
+                v.Require("filterId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 // Get the filter
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 var categories = filter.GetCategories();
@@ -2084,25 +1711,18 @@ namespace RevitMCPBridge2026
                     }
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    filterId = filterIdInt,
-                    filterName = filter.Name,
-                    categoriesCount = categories.Count,
-                    hasRules = elementFilter != null,
-                    matchingElementsCount = matchingElements.Count,
-                    matchingElementIds = matchingElements
-                });
+                return ResponseBuilder.Success()
+                    .With("filterId", filterIdInt)
+                    .With("filterName", filter.Name)
+                    .With("categoriesCount", categories.Count)
+                    .With("hasRules", elementFilter != null)
+                    .With("matchingElementsCount", matchingElements.Count)
+                    .With("matchingElementIds", matchingElements)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -2117,27 +1737,18 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["filterId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "analyzeFilter");
+                v.Require("filterId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 // Get the filter
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 var categories = filter.GetCategories();
@@ -2176,12 +1787,10 @@ namespace RevitMCPBridge2026
                     });
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    filterId = filterIdInt,
-                    filterName = filter.Name,
-                    analysis = new
+                return ResponseBuilder.Success()
+                    .With("filterId", filterIdInt)
+                    .With("filterName", filter.Name)
+                    .With("analysis", new
                     {
                         totalElementsMatching = totalElements,
                         categoriesCount = categories.Count,
@@ -2189,17 +1798,12 @@ namespace RevitMCPBridge2026
                         hasRules = ruleCount > 0,
                         complexity = ruleCount == 0 ? "simple" : ruleCount <= 3 ? "moderate" : "complex",
                         categoryBreakdown = categoryCounts
-                    }
-                });
+                    })
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -2218,26 +1822,17 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["categoryId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "categoryId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "getFilterableParameters");
+                v.Require("categoryId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int categoryIdInt = parameters["categoryId"].ToObject<int>();
+                int categoryIdInt = v.GetRequired<int>("categoryId");
                 ElementId categoryId = new ElementId(categoryIdInt);
 
                 Category category = Category.GetCategory(doc, categoryId);
                 if (category == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Category with ID {categoryIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Category with ID {categoryIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 // Get filterable parameters using ParameterFilterUtilities
@@ -2264,23 +1859,16 @@ namespace RevitMCPBridge2026
                     }
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    categoryId = categoryIdInt,
-                    categoryName = category.Name,
-                    filterableParametersCount = parametersList.Count,
-                    filterableParameters = parametersList
-                });
+                return ResponseBuilder.Success()
+                    .With("categoryId", categoryIdInt)
+                    .With("categoryName", category.Name)
+                    .With("filterableParametersCount", parametersList.Count)
+                    .With("filterableParameters", parametersList)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -2295,27 +1883,18 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // Parameter validation
-                if (parameters["filterId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "filterId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "validateFilterRules");
+                v.Require("filterId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int filterIdInt = parameters["filterId"].ToObject<int>();
+                int filterIdInt = v.GetRequired<int>("filterId");
                 ElementId filterId = new ElementId(filterIdInt);
 
                 // Get the filter
                 ParameterFilterElement filter = doc.GetElement(filterId) as ParameterFilterElement;
                 if (filter == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Filter with ID {filterIdInt} not found"
-                    });
+                    return ResponseBuilder.Error($"Filter with ID {filterIdInt} not found", "NOT_FOUND").Build();
                 }
 
                 var validationResults = new List<object>();
@@ -2400,23 +1979,16 @@ namespace RevitMCPBridge2026
 
                 bool hasErrors = validationResults.Any(r => ((dynamic)r).type == "error");
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    filterId = filterIdInt,
-                    filterName = filter.Name,
-                    isValid = !hasErrors,
-                    validationResults = validationResults
-                });
+                return ResponseBuilder.Success()
+                    .With("filterId", filterIdInt)
+                    .With("filterName", filter.Name)
+                    .With("isValid", !hasErrors)
+                    .With("validationResults", validationResults)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 

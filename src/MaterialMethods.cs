@@ -6,6 +6,8 @@ using Autodesk.Revit.DB.Visual;
 using Autodesk.Revit.UI;
 using Newtonsoft.Json.Linq;
 using RevitMCPBridge;
+using RevitMCPBridge.Helpers;
+using RevitMCPBridge.Validation;
 
 namespace RevitMCPBridge2026
 {
@@ -30,16 +32,11 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialName"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialName is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "createMaterial");
+                v.Require("materialName");
+                v.ThrowIfInvalid();
 
-                string materialName = parameters["materialName"].ToString();
+                string materialName = v.GetRequired<string>("materialName");
 
                 using (var trans = new Transaction(doc, "Create Material"))
                 {
@@ -75,23 +72,16 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        materialId = (int)materialId.Value,
-                        materialName = material.Name,
-                        message = "Material created successfully"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("materialId", (int)materialId.Value)
+                        .With("materialName", material.Name)
+                        .With("message", "Material created successfully")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -129,21 +119,14 @@ namespace RevitMCPBridge2026
                     });
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    count = materials.Count,
-                    materials = materials
-                });
+                return ResponseBuilder.Success()
+                    .With("count", materials.Count)
+                    .With("materials", materials)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -182,41 +165,26 @@ namespace RevitMCPBridge2026
                 }
                 else
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Either materialId or materialName is required"
-                    });
+                    return ResponseBuilder.Error("Either materialId or materialName is required").Build();
                 }
 
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Material not found"
-                    });
+                    return ResponseBuilder.Error("Material not found", "NOT_FOUND").Build();
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    materialId = (int)material.Id.Value,
-                    name = material.Name,
-                    materialClass = material.MaterialClass ?? "",
-                    color = new[] { material.Color.Red, material.Color.Green, material.Color.Blue },
-                    transparency = material.Transparency,
-                    shininess = material.Shininess
-                });
+                return ResponseBuilder.Success()
+                    .With("materialId", (int)material.Id.Value)
+                    .With("name", material.Name)
+                    .With("materialClass", material.MaterialClass ?? "")
+                    .With("color", new[] { material.Color.Red, material.Color.Green, material.Color.Blue })
+                    .With("transparency", material.Transparency)
+                    .With("shininess", material.Shininess)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -230,25 +198,16 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "modifyMaterial");
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 Material material = doc.GetElement(new ElementId(materialIdInt)) as Material;
 
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Material not found"
-                    });
+                    return ResponseBuilder.Error("Material not found", "NOT_FOUND").Build();
                 }
 
                 using (var trans = new Transaction(doc, "Modify Material"))
@@ -293,23 +252,16 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        materialId = (int)material.Id.Value,
-                        materialName = material.Name,
-                        message = "Material modified successfully"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("materialId", (int)material.Id.Value)
+                        .With("materialName", material.Name)
+                        .With("message", "Material modified successfully")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -323,28 +275,20 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null || parameters["newName"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId and newName are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "duplicateMaterial");
+                v.Require("materialId").IsType<int>();
+                v.Require("newName");
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 Material material = doc.GetElement(new ElementId(materialIdInt)) as Material;
 
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Material not found"
-                    });
+                    return ResponseBuilder.Error("Material not found", "NOT_FOUND").Build();
                 }
 
-                string newName = parameters["newName"].ToString();
+                string newName = v.GetRequired<string>("newName");
 
                 using (var trans = new Transaction(doc, "Duplicate Material"))
                 {
@@ -357,24 +301,17 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        originalMaterialId = (int)material.Id.Value,
-                        newMaterialId = (int)newMaterial.Id.Value,
-                        newMaterialName = newMaterial.Name,
-                        message = "Material duplicated successfully"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("originalMaterialId", (int)material.Id.Value)
+                        .With("newMaterialId", (int)newMaterial.Id.Value)
+                        .With("newMaterialName", newMaterial.Name)
+                        .With("message", "Material duplicated successfully")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -388,26 +325,17 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "deleteMaterial");
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 ElementId materialId = new ElementId(materialIdInt);
                 Material material = doc.GetElement(materialId) as Material;
 
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Material not found"
-                    });
+                    return ResponseBuilder.Error("Material not found", "NOT_FOUND").Build();
                 }
 
                 string materialName = material.Name;
@@ -424,24 +352,17 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        materialId = materialIdInt,
-                        materialName = materialName,
-                        deletedCount = deletedIds.Count,
-                        message = "Material deleted successfully"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("materialId", materialIdInt)
+                        .With("materialName", materialName)
+                        .With("deletedCount", deletedIds.Count)
+                        .With("message", "Material deleted successfully")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -459,25 +380,16 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "setMaterialAppearance");
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 Material material = doc.GetElement(new ElementId(materialIdInt)) as Material;
 
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Material not found"
-                    });
+                    return ResponseBuilder.Error("Material not found", "NOT_FOUND").Build();
                 }
 
                 using (var trans = new Transaction(doc, "Set Material Appearance"))
@@ -499,24 +411,17 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        materialId = materialIdInt,
-                        appearanceAssetId = appearanceAssetId != null ? (int?)appearanceAssetId.Value : null,
-                        message = "Material appearance updated successfully",
-                        note = "Advanced appearance asset editing requires additional asset manipulation"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("materialId", materialIdInt)
+                        .With("appearanceAssetId", appearanceAssetId != null ? (int?)appearanceAssetId.Value : null)
+                        .With("message", "Material appearance updated successfully")
+                        .With("note", "Advanced appearance asset editing requires additional asset manipulation")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -530,25 +435,16 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "getMaterialAppearance");
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 Material material = doc.GetElement(new ElementId(materialIdInt)) as Material;
 
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Material not found"
-                    });
+                    return ResponseBuilder.Error("Material not found", "NOT_FOUND").Build();
                 }
 
                 ElementId appearanceAssetId = material.AppearanceAssetId;
@@ -564,25 +460,18 @@ namespace RevitMCPBridge2026
                     }
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    materialId = materialIdInt,
-                    materialName = material.Name,
-                    appearanceAssetId = appearanceAssetId != null ? (int?)appearanceAssetId.Value : null,
-                    appearanceAssetName = appearanceAssetName,
-                    useRenderAppearanceForShading = material.UseRenderAppearanceForShading,
-                    hasAppearanceAsset = appearanceAsset != null
-                });
+                return ResponseBuilder.Success()
+                    .With("materialId", materialIdInt)
+                    .With("materialName", material.Name)
+                    .With("appearanceAssetId", appearanceAssetId != null ? (int?)appearanceAssetId.Value : null)
+                    .With("appearanceAssetName", appearanceAssetName)
+                    .With("useRenderAppearanceForShading", material.UseRenderAppearanceForShading)
+                    .With("hasAppearanceAsset", appearanceAsset != null)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -596,46 +485,29 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "setMaterialTexture");
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 Material material = doc.GetElement(new ElementId(materialIdInt)) as Material;
 
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Material not found"
-                    });
+                    return ResponseBuilder.Error("Material not found", "NOT_FOUND").Build();
                 }
 
                 // API LIMITATION: Direct texture setting requires AppearanceAssetElement manipulation
                 // which is complex and requires working with Asset properties
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = "SetMaterialTexture requires complex AppearanceAssetElement manipulation not fully supported in this API version",
-                    note = "Use Revit UI to set material textures, or use SetRenderAppearance to assign appearance assets",
-                    materialId = materialIdInt,
-                    materialName = material.Name
-                });
+                return ResponseBuilder.Error("SetMaterialTexture requires complex AppearanceAssetElement manipulation not fully supported in this API version", "NOT_SUPPORTED")
+                    .With("note", "Use Revit UI to set material textures, or use SetRenderAppearance to assign appearance assets")
+                    .With("materialId", materialIdInt)
+                    .With("materialName", material.Name)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -649,28 +521,20 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null || parameters["appearanceAssetId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId and appearanceAssetId are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "setRenderAppearance");
+                v.Require("materialId").IsType<int>();
+                v.Require("appearanceAssetId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 Material material = doc.GetElement(new ElementId(materialIdInt)) as Material;
 
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Material not found"
-                    });
+                    return ResponseBuilder.Error("Material not found", "NOT_FOUND").Build();
                 }
 
-                int appearanceAssetIdInt = parameters["appearanceAssetId"].ToObject<int>();
+                int appearanceAssetIdInt = v.GetRequired<int>("appearanceAssetId");
                 ElementId appearanceAssetId = new ElementId(appearanceAssetIdInt);
 
                 using (var trans = new Transaction(doc, "Set Render Appearance"))
@@ -684,24 +548,17 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        materialId = materialIdInt,
-                        materialName = material.Name,
-                        appearanceAssetId = appearanceAssetIdInt,
-                        message = "Render appearance set successfully"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("materialId", materialIdInt)
+                        .With("materialName", material.Name)
+                        .With("appearanceAssetId", appearanceAssetIdInt)
+                        .With("message", "Render appearance set successfully")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -719,47 +576,30 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "setMaterialSurfacePattern");
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 Material material = doc.GetElement(new ElementId(materialIdInt)) as Material;
 
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Material not found"
-                    });
+                    return ResponseBuilder.Error("Material not found", "NOT_FOUND").Build();
                 }
 
                 // API LIMITATION: Surface pattern properties (CutPatternId, SurfacePatternId, etc.)
                 // were removed in Revit 2026 API
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = "SetMaterialSurfacePattern not supported in Revit 2026 API",
-                    note = "Surface pattern properties (CutPatternId, SurfacePatternId) were removed from Material class in Revit 2026",
-                    workaround = "Use Revit UI to set material surface patterns",
-                    materialId = materialIdInt,
-                    materialName = material.Name
-                });
+                return ResponseBuilder.Error("SetMaterialSurfacePattern not supported in Revit 2026 API", "NOT_SUPPORTED")
+                    .With("note", "Surface pattern properties (CutPatternId, SurfacePatternId) were removed from Material class in Revit 2026")
+                    .With("workaround", "Use Revit UI to set material surface patterns")
+                    .With("materialId", materialIdInt)
+                    .With("materialName", material.Name)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -773,46 +613,29 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "getMaterialSurfacePattern");
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 Material material = doc.GetElement(new ElementId(materialIdInt)) as Material;
 
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Material not found"
-                    });
+                    return ResponseBuilder.Error("Material not found", "NOT_FOUND").Build();
                 }
 
                 // API LIMITATION: Surface pattern properties were removed in Revit 2026
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = "GetMaterialSurfacePattern not supported in Revit 2026 API",
-                    note = "Surface pattern properties (CutPatternId, SurfacePatternId, CutPatternColor, SurfacePatternColor) were removed from Material class",
-                    workaround = "Surface patterns must be accessed through UI or use pre-2026 API",
-                    materialId = materialIdInt,
-                    materialName = material.Name
-                });
+                return ResponseBuilder.Error("GetMaterialSurfacePattern not supported in Revit 2026 API", "NOT_SUPPORTED")
+                    .With("note", "Surface pattern properties (CutPatternId, SurfacePatternId, CutPatternColor, SurfacePatternColor) were removed from Material class")
+                    .With("workaround", "Surface patterns must be accessed through UI or use pre-2026 API")
+                    .With("materialId", materialIdInt)
+                    .With("materialName", material.Name)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -830,48 +653,31 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "setMaterialPhysicalProperties");
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 Material material = doc.GetElement(new ElementId(materialIdInt)) as Material;
 
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Material not found"
-                    });
+                    return ResponseBuilder.Error("Material not found", "NOT_FOUND").Build();
                 }
 
                 // API LIMITATION: Physical/thermal properties require complex PropertySetElement and Asset manipulation
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = "SetMaterialPhysicalProperties requires complex Asset manipulation not fully supported",
-                    note = "Physical properties require working with StructuralAsset and ThermalAsset classes through PropertySetElement",
-                    workaround = "Use Revit UI to set material physical/thermal properties, or use SetStructuralAssetId/SetThermalAssetId",
-                    materialId = materialIdInt,
-                    materialName = material.Name,
-                    structuralAssetId = material.StructuralAssetId != null ? (int?)material.StructuralAssetId.Value : null,
-                    thermalAssetId = material.ThermalAssetId != null ? (int?)material.ThermalAssetId.Value : null
-                });
+                return ResponseBuilder.Error("SetMaterialPhysicalProperties requires complex Asset manipulation not fully supported", "NOT_SUPPORTED")
+                    .With("note", "Physical properties require working with StructuralAsset and ThermalAsset classes through PropertySetElement")
+                    .With("workaround", "Use Revit UI to set material physical/thermal properties, or use SetStructuralAssetId/SetThermalAssetId")
+                    .With("materialId", materialIdInt)
+                    .With("materialName", material.Name)
+                    .With("structuralAssetId", material.StructuralAssetId != null ? (int?)material.StructuralAssetId.Value : null)
+                    .With("thermalAssetId", material.ThermalAssetId != null ? (int?)material.ThermalAssetId.Value : null)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -885,51 +691,35 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "getMaterialPhysicalProperties");
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 Material material = doc.GetElement(new ElementId(materialIdInt)) as Material;
 
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Material not found"
-                    });
+                    return ResponseBuilder.Error("Material not found", "NOT_FOUND").Build();
                 }
 
                 // Get basic asset IDs
                 ElementId structuralAssetId = material.StructuralAssetId;
                 ElementId thermalAssetId = material.ThermalAssetId;
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    materialId = materialIdInt,
-                    materialName = material.Name,
-                    structuralAssetId = structuralAssetId != null ? (int?)structuralAssetId.Value : null,
-                    thermalAssetId = thermalAssetId != null ? (int?)thermalAssetId.Value : null,
-                    hasStructuralAsset = structuralAssetId != null && structuralAssetId != ElementId.InvalidElementId,
-                    hasThermalAsset = thermalAssetId != null && thermalAssetId != ElementId.InvalidElementId,
-                    note = "Detailed asset properties require PropertySetElement access - use structuralAssetId/thermalAssetId to retrieve full details"
-                });
+                return ResponseBuilder.Success()
+                    .With("materialId", materialIdInt)
+                    .With("materialName", material.Name)
+                    .With("structuralAssetId", structuralAssetId != null ? (int?)structuralAssetId.Value : null)
+                    .With("thermalAssetId", thermalAssetId != null ? (int?)thermalAssetId.Value : null)
+                    .With("hasStructuralAsset", structuralAssetId != null && structuralAssetId != ElementId.InvalidElementId)
+                    .With("hasThermalAsset", thermalAssetId != null && thermalAssetId != ElementId.InvalidElementId)
+                    .With("note", "Detailed asset properties require PropertySetElement access - use structuralAssetId/thermalAssetId to retrieve full details")
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -963,22 +753,15 @@ namespace RevitMCPBridge2026
 
                 var sortedClasses = materialClasses.OrderBy(c => c).ToList();
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    count = sortedClasses.Count,
-                    materialClasses = sortedClasses,
-                    note = "Material classes are user-defined strings. Common values: Concrete, Masonry, Metal, Wood, Plastic, Glass, etc."
-                });
+                return ResponseBuilder.Success()
+                    .With("count", sortedClasses.Count)
+                    .With("materialClasses", sortedClasses)
+                    .With("note", "Material classes are user-defined strings. Common values: Concrete, Masonry, Metal, Wood, Plastic, Glass, etc.")
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -992,28 +775,20 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null || parameters["materialClass"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId and materialClass are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "setMaterialClass");
+                v.Require("materialId").IsType<int>();
+                v.Require("materialClass");
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 Material material = doc.GetElement(new ElementId(materialIdInt)) as Material;
 
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Material not found"
-                    });
+                    return ResponseBuilder.Error("Material not found", "NOT_FOUND").Build();
                 }
 
-                string materialClass = parameters["materialClass"].ToString();
+                string materialClass = v.GetRequired<string>("materialClass");
 
                 using (var trans = new Transaction(doc, "Set Material Class"))
                 {
@@ -1026,24 +801,17 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        materialId = materialIdInt,
-                        materialName = material.Name,
-                        materialClass = material.MaterialClass,
-                        message = "Material class set successfully"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("materialId", materialIdInt)
+                        .With("materialName", material.Name)
+                        .With("materialClass", material.MaterialClass)
+                        .With("message", "Material class set successfully")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1061,16 +829,11 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "findElementsWithMaterial");
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 ElementId materialId = new ElementId(materialIdInt);
 
                 var elementsWithMaterial = new List<object>();
@@ -1115,22 +878,15 @@ namespace RevitMCPBridge2026
                     }
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    materialId = materialIdInt,
-                    count = elementsWithMaterial.Count,
-                    elements = elementsWithMaterial
-                });
+                return ResponseBuilder.Success()
+                    .With("materialId", materialIdInt)
+                    .With("count", elementsWithMaterial.Count)
+                    .With("elements", elementsWithMaterial)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1144,17 +900,13 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["oldMaterialId"] == null || parameters["newMaterialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "oldMaterialId and newMaterialId are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "replaceMaterial");
+                v.Require("oldMaterialId").IsType<int>();
+                v.Require("newMaterialId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int oldMaterialIdInt = parameters["oldMaterialId"].ToObject<int>();
-                int newMaterialIdInt = parameters["newMaterialId"].ToObject<int>();
+                int oldMaterialIdInt = v.GetRequired<int>("oldMaterialId");
+                int newMaterialIdInt = v.GetRequired<int>("newMaterialId");
                 ElementId oldMaterialId = new ElementId(oldMaterialIdInt);
                 ElementId newMaterialId = new ElementId(newMaterialIdInt);
 
@@ -1194,23 +946,16 @@ namespace RevitMCPBridge2026
                     trans.Commit();
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    oldMaterialId = oldMaterialIdInt,
-                    newMaterialId = newMaterialIdInt,
-                    replacedCount = replacedCount,
-                    message = $"Replaced material in {replacedCount} parameter instances"
-                });
+                return ResponseBuilder.Success()
+                    .With("oldMaterialId", oldMaterialIdInt)
+                    .With("newMaterialId", newMaterialIdInt)
+                    .With("replacedCount", replacedCount)
+                    .With("message", $"Replaced material in {replacedCount} parameter instances")
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1224,16 +969,11 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "getMaterialUsageStats");
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 ElementId materialId = new ElementId(materialIdInt);
 
                 var categories = new Dictionary<string, int>();
@@ -1279,23 +1019,16 @@ namespace RevitMCPBridge2026
                     }
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    materialId = materialIdInt,
-                    totalElements = totalElements,
-                    categoriesUsed = categories.Count,
-                    categoryBreakdown = categories
-                });
+                return ResponseBuilder.Success()
+                    .With("materialId", materialIdInt)
+                    .With("totalElements", totalElements)
+                    .With("categoriesUsed", categories.Count)
+                    .With("categoryBreakdown", categories)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1314,22 +1047,14 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // API LIMITATION: Direct material library loading requires complex file manipulation
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = "LoadMaterialFromLibrary not fully supported in Revit 2026 API",
-                    note = "Material library loading requires complex file operations and asset manipulation",
-                    workaround = "Use Revit UI Material Browser to load materials from library, or manually import .adsklib files"
-                });
+                return ResponseBuilder.Error("LoadMaterialFromLibrary not fully supported in Revit 2026 API", "NOT_SUPPORTED")
+                    .With("note", "Material library loading requires complex file operations and asset manipulation")
+                    .With("workaround", "Use Revit UI Material Browser to load materials from library, or manually import .adsklib files")
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1344,22 +1069,14 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // API LIMITATION: Material export requires complex file operations
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = "ExportMaterial not fully supported in Revit 2026 API",
-                    note = "Material export to .adsklib files requires complex Asset serialization",
-                    workaround = "Use Revit UI Material Browser to export materials to library files"
-                });
+                return ResponseBuilder.Error("ExportMaterial not fully supported in Revit 2026 API", "NOT_SUPPORTED")
+                    .With("note", "Material export to .adsklib files requires complex Asset serialization")
+                    .With("workaround", "Use Revit UI Material Browser to export materials to library files")
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1377,16 +1094,11 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["searchTerm"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "searchTerm is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "searchMaterials");
+                v.Require("searchTerm");
+                v.ThrowIfInvalid();
 
-                string searchTerm = parameters["searchTerm"].ToString().ToLower();
+                string searchTerm = v.GetRequired<string>("searchTerm").ToLower();
                 string searchIn = parameters["searchIn"]?.ToString()?.ToLower() ?? "name";
 
                 var matchingMaterials = new List<object>();
@@ -1426,23 +1138,16 @@ namespace RevitMCPBridge2026
                     }
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    searchTerm = searchTerm,
-                    searchIn = searchIn,
-                    count = matchingMaterials.Count,
-                    materials = matchingMaterials
-                });
+                return ResponseBuilder.Success()
+                    .With("searchTerm", searchTerm)
+                    .With("searchIn", searchIn)
+                    .With("count", matchingMaterials.Count)
+                    .With("materials", matchingMaterials)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1474,21 +1179,14 @@ namespace RevitMCPBridge2026
                     });
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    count = appearanceAssets.Count,
-                    appearanceAssets = appearanceAssets
-                });
+                return ResponseBuilder.Success()
+                    .With("count", appearanceAssets.Count)
+                    .With("appearanceAssets", appearanceAssets)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1503,22 +1201,14 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 // API LIMITATION: Appearance asset creation requires complex Asset class manipulation
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = "CreateAppearanceAsset not fully supported in Revit 2026 API",
-                    note = "Appearance asset creation requires working with Asset class and complex property manipulation",
-                    workaround = "Use Revit UI Material Browser or duplicate existing appearance assets"
-                });
+                return ResponseBuilder.Error("CreateAppearanceAsset not fully supported in Revit 2026 API", "NOT_SUPPORTED")
+                    .With("note", "Appearance asset creation requires working with Asset class and complex property manipulation")
+                    .With("workaround", "Use Revit UI Material Browser or duplicate existing appearance assets")
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1532,28 +1222,20 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["assetId"] == null || parameters["newName"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "assetId and newName are required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "duplicateAppearanceAsset");
+                v.Require("assetId").IsType<int>();
+                v.Require("newName");
+                v.ThrowIfInvalid();
 
-                int assetIdInt = parameters["assetId"].ToObject<int>();
+                int assetIdInt = v.GetRequired<int>("assetId");
                 AppearanceAssetElement asset = doc.GetElement(new ElementId(assetIdInt)) as AppearanceAssetElement;
 
                 if (asset == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Appearance asset not found"
-                    });
+                    return ResponseBuilder.Error("Appearance asset not found", "NOT_FOUND").Build();
                 }
 
-                string newName = parameters["newName"].ToString();
+                string newName = v.GetRequired<string>("newName");
 
                 using (var trans = new Transaction(doc, "Duplicate Appearance Asset"))
                 {
@@ -1566,24 +1248,17 @@ namespace RevitMCPBridge2026
 
                     trans.Commit();
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        originalAssetId = assetIdInt,
-                        newAssetId = (int)newAsset.Id.Value,
-                        newAssetName = newAsset.Name,
-                        message = "Appearance asset duplicated successfully"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("originalAssetId", assetIdInt)
+                        .With("newAssetId", (int)newAsset.Id.Value)
+                        .With("newAssetName", newAsset.Name)
+                        .With("message", "Appearance asset duplicated successfully")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1595,14 +1270,11 @@ namespace RevitMCPBridge2026
         {
             // Note: AppearanceAssetEditScope is internal in Revit 2026 API
             // This method returns information about the limitation
-            return Newtonsoft.Json.JsonConvert.SerializeObject(new
-            {
-                success = false,
-                error = "ModifyAppearanceAssetColor is not fully supported in Revit 2026 API",
-                note = "AppearanceAssetEditScope is internal/protected in Revit 2026",
-                workaround = "Use CreateMaterialWithAppearance to duplicate an existing appearance asset, then manually adjust colors in Revit UI if needed",
-                recommendation = "Choose a base appearance asset that closely matches your desired color"
-            });
+            return ResponseBuilder.Error("ModifyAppearanceAssetColor is not fully supported in Revit 2026 API", "NOT_SUPPORTED")
+                .With("note", "AppearanceAssetEditScope is internal/protected in Revit 2026")
+                .With("workaround", "Use CreateMaterialWithAppearance to duplicate an existing appearance asset, then manually adjust colors in Revit UI if needed")
+                .With("recommendation", "Choose a base appearance asset that closely matches your desired color")
+                .Build();
         }
 
         /// <summary>
@@ -1615,25 +1287,16 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["assetId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "assetId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "getAppearanceAssetDetails");
+                v.Require("assetId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int assetIdInt = parameters["assetId"].ToObject<int>();
+                int assetIdInt = v.GetRequired<int>("assetId");
                 AppearanceAssetElement assetElem = doc.GetElement(new ElementId(assetIdInt)) as AppearanceAssetElement;
 
                 if (assetElem == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Appearance asset not found"
-                    });
+                    return ResponseBuilder.Error("Appearance asset not found", "NOT_FOUND").Build();
                 }
 
                 Asset renderingAsset = assetElem.GetRenderingAsset();
@@ -1687,23 +1350,16 @@ namespace RevitMCPBridge2026
                     }
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    assetId = assetIdInt,
-                    assetName = assetElem.Name,
-                    propertyCount = properties.Count,
-                    properties = properties
-                });
+                return ResponseBuilder.Success()
+                    .With("assetId", assetIdInt)
+                    .With("assetName", assetElem.Name)
+                    .With("propertyCount", properties.Count)
+                    .With("properties", properties)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1717,16 +1373,11 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialName"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialName is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "createMaterialWithAppearance");
+                v.Require("materialName");
+                v.ThrowIfInvalid();
 
-                string materialName = parameters["materialName"].ToString();
+                string materialName = v.GetRequired<string>("materialName");
 
                 // Get color
                 byte red = 128, green = 128, blue = 128;
@@ -1782,26 +1433,19 @@ namespace RevitMCPBridge2026
                     // Color modification of appearance assets must be done manually in Revit UI
                     // The duplicated appearance asset inherits the base asset's appearance
 
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        materialId = (int)materialId.Value,
-                        materialName = material.Name,
-                        appearanceAssetId = newAssetId != ElementId.InvalidElementId ? (int?)newAssetId.Value : null,
-                        graphicColor = new { r = red, g = green, b = blue },
-                        useRenderAppearanceForShading = material.UseRenderAppearanceForShading,
-                        message = "Material with appearance created successfully"
-                    });
+                    return ResponseBuilder.Success()
+                        .With("materialId", (int)materialId.Value)
+                        .With("materialName", material.Name)
+                        .With("appearanceAssetId", newAssetId != ElementId.InvalidElementId ? (int?)newAssetId.Value : null)
+                        .With("graphicColor", new { r = red, g = green, b = blue })
+                        .With("useRenderAppearanceForShading", material.UseRenderAppearanceForShading)
+                        .With("message", "Material with appearance created successfully")
+                        .Build();
                 }
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1819,16 +1463,11 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialName"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialName is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "getMaterialByName");
+                v.Require("materialName");
+                v.ThrowIfInvalid();
 
-                string materialName = parameters["materialName"].ToString();
+                string materialName = v.GetRequired<string>("materialName");
 
                 var collector = new FilteredElementCollector(doc)
                     .OfClass(typeof(Material));
@@ -1837,36 +1476,27 @@ namespace RevitMCPBridge2026
                 {
                     if (material.Name == materialName)
                     {
-                        return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                        {
-                            success = true,
-                            materialId = (int)material.Id.Value,
-                            name = material.Name,
-                            materialClass = material.MaterialClass ?? "",
-                            color = new[] { material.Color.Red, material.Color.Green, material.Color.Blue },
-                            transparency = material.Transparency,
-                            shininess = material.Shininess,
-                            found = true
-                        });
+                        return ResponseBuilder.Success()
+                            .With("materialId", (int)material.Id.Value)
+                            .With("name", material.Name)
+                            .With("materialClass", material.MaterialClass ?? "")
+                            .With("color", new[] { material.Color.Red, material.Color.Green, material.Color.Blue })
+                            .With("transparency", material.Transparency)
+                            .With("shininess", material.Shininess)
+                            .With("found", true)
+                            .Build();
                     }
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    materialName = materialName,
-                    found = false,
-                    message = "Material not found"
-                });
+                return ResponseBuilder.Success()
+                    .With("materialName", materialName)
+                    .With("found", false)
+                    .With("message", "Material not found")
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1880,16 +1510,11 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "isMaterialInUse");
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
-                int materialIdInt = parameters["materialId"].ToObject<int>();
+                int materialIdInt = v.GetRequired<int>("materialId");
                 ElementId materialId = new ElementId(materialIdInt);
 
                 int elementCount = 0;
@@ -1916,23 +1541,16 @@ namespace RevitMCPBridge2026
                     }
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    materialId = materialIdInt,
-                    isInUse = elementCount > 0,
-                    elementCount = elementCount,
-                    message = elementCount > 0 ? $"Material is used by {elementCount} elements" : "Material is not in use"
-                });
+                return ResponseBuilder.Success()
+                    .With("materialId", materialIdInt)
+                    .With("isInUse", elementCount > 0)
+                    .With("elementCount", elementCount)
+                    .With("message", elementCount > 0 ? $"Material is used by {elementCount} elements" : "Material is not in use")
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -1953,23 +1571,10 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["elementId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "elementId is required"
-                    });
-                }
-
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "PaintElementFace");
+                v.Require("elementId").IsType<int>();
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
                 var elementId = new ElementId(Convert.ToInt64(parameters["elementId"].ToString()));
                 var materialId = new ElementId(Convert.ToInt64(parameters["materialId"].ToString()));
@@ -1978,21 +1583,13 @@ namespace RevitMCPBridge2026
                 var element = doc.GetElement(elementId);
                 if (element == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Element not found: {elementId.Value}"
-                    });
+                    return ResponseBuilder.Error($"Element not found: {elementId.Value}", "NOT_FOUND").Build();
                 }
 
                 var material = doc.GetElement(materialId) as Material;
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Material not found: {materialId.Value}"
-                    });
+                    return ResponseBuilder.Error($"Material not found: {materialId.Value}", "NOT_FOUND").Build();
                 }
 
                 // Get element geometry
@@ -2002,11 +1599,7 @@ namespace RevitMCPBridge2026
 
                 if (geomElement == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "Could not get element geometry"
-                    });
+                    return ResponseBuilder.Error("Could not get element geometry", "GEOMETRY_ERROR").Build();
                 }
 
                 var paintedFaces = 0;
@@ -2055,24 +1648,17 @@ namespace RevitMCPBridge2026
                     trans.Commit();
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    elementId = elementId.Value,
-                    materialId = materialId.Value,
-                    materialName = material.Name,
-                    facesPainted = paintedFaces,
-                    totalFaces = faceCounter
-                });
+                return ResponseBuilder.Success()
+                    .With("elementId", elementId.Value)
+                    .With("materialId", materialId.Value)
+                    .With("materialName", material.Name)
+                    .With("facesPainted", paintedFaces)
+                    .With("totalFaces", faceCounter)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -2089,23 +1675,10 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["wallId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "wallId is required"
-                    });
-                }
-
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "PaintWall");
+                v.Require("wallId").IsType<int>();
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
                 var wallId = new ElementId(Convert.ToInt64(parameters["wallId"].ToString()));
                 var materialId = new ElementId(Convert.ToInt64(parameters["materialId"].ToString()));
@@ -2114,21 +1687,13 @@ namespace RevitMCPBridge2026
                 var wall = doc.GetElement(wallId) as Wall;
                 if (wall == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Wall not found: {wallId.Value}"
-                    });
+                    return ResponseBuilder.Error($"Wall not found: {wallId.Value}", "NOT_FOUND").Build();
                 }
 
                 var material = doc.GetElement(materialId) as Material;
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Material not found: {materialId.Value}"
-                    });
+                    return ResponseBuilder.Error($"Material not found: {materialId.Value}", "NOT_FOUND").Build();
                 }
 
                 // Get wall geometry
@@ -2184,25 +1749,18 @@ namespace RevitMCPBridge2026
                     trans.Commit();
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    wallId = wallId.Value,
-                    materialId = materialId.Value,
-                    materialName = material.Name,
-                    side = side,
-                    facesPainted = paintedFaces.Count,
-                    paintedSides = paintedFaces.Distinct().ToList()
-                });
+                return ResponseBuilder.Success()
+                    .With("wallId", wallId.Value)
+                    .With("materialId", materialId.Value)
+                    .With("materialName", material.Name)
+                    .With("side", side)
+                    .With("facesPainted", paintedFaces.Count)
+                    .With("paintedSides", paintedFaces.Distinct().ToList())
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -2219,23 +1777,10 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["wallIds"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "wallIds is required"
-                    });
-                }
-
-                if (parameters["materialId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "materialId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "PaintWalls");
+                v.Require("wallIds");
+                v.Require("materialId").IsType<int>();
+                v.ThrowIfInvalid();
 
                 var wallIds = parameters["wallIds"].ToObject<List<long>>();
                 var materialId = new ElementId(Convert.ToInt64(parameters["materialId"].ToString()));
@@ -2244,11 +1789,7 @@ namespace RevitMCPBridge2026
                 var material = doc.GetElement(materialId) as Material;
                 if (material == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Material not found: {materialId.Value}"
-                    });
+                    return ResponseBuilder.Error($"Material not found: {materialId.Value}", "NOT_FOUND").Build();
                 }
 
                 var results = new List<object>();
@@ -2321,26 +1862,19 @@ namespace RevitMCPBridge2026
                     trans.Commit();
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    materialId = materialId.Value,
-                    materialName = material.Name,
-                    side = side,
-                    totalWalls = wallIds.Count,
-                    successCount = successCount,
-                    failCount = failCount,
-                    results = results
-                });
+                return ResponseBuilder.Success()
+                    .With("materialId", materialId.Value)
+                    .With("materialName", material.Name)
+                    .With("side", side)
+                    .With("totalWalls", wallIds.Count)
+                    .With("successCount", successCount)
+                    .With("failCount", failCount)
+                    .With("results", results)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -2356,14 +1890,9 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["elementId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "elementId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "RemovePaint");
+                v.Require("elementId").IsType<int>();
+                v.ThrowIfInvalid();
 
                 var elementId = new ElementId(Convert.ToInt64(parameters["elementId"].ToString()));
                 var faceIndex = parameters["faceIndex"] != null ? int.Parse(parameters["faceIndex"].ToString()) : -1;
@@ -2371,11 +1900,7 @@ namespace RevitMCPBridge2026
                 var element = doc.GetElement(elementId);
                 if (element == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Element not found: {elementId.Value}"
-                    });
+                    return ResponseBuilder.Error($"Element not found: {elementId.Value}", "NOT_FOUND").Build();
                 }
 
                 var options = new Options();
@@ -2411,21 +1936,14 @@ namespace RevitMCPBridge2026
                     trans.Commit();
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    elementId = elementId.Value,
-                    facesUnpainted = removedCount
-                });
+                return ResponseBuilder.Success()
+                    .With("elementId", elementId.Value)
+                    .With("facesUnpainted", removedCount)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
@@ -2440,25 +1958,16 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                if (parameters["elementId"] == null)
-                {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "elementId is required"
-                    });
-                }
+                var v = new ParameterValidator(parameters, "IsPainted");
+                v.Require("elementId").IsType<int>();
+                v.ThrowIfInvalid();
 
                 var elementId = new ElementId(Convert.ToInt64(parameters["elementId"].ToString()));
                 var element = doc.GetElement(elementId);
 
                 if (element == null)
                 {
-                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = $"Element not found: {elementId.Value}"
-                    });
+                    return ResponseBuilder.Error($"Element not found: {elementId.Value}", "NOT_FOUND").Build();
                 }
 
                 var options = new Options();
@@ -2491,23 +2000,16 @@ namespace RevitMCPBridge2026
                     }
                 }
 
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    elementId = elementId.Value,
-                    totalFaces = faceCounter,
-                    paintedFaceCount = paintedFaces.Count,
-                    paintedFaces = paintedFaces
-                });
+                return ResponseBuilder.Success()
+                    .With("elementId", elementId.Value)
+                    .With("totalFaces", faceCounter)
+                    .With("paintedFaceCount", paintedFaces.Count)
+                    .With("paintedFaces", paintedFaces)
+                    .Build();
             }
             catch (Exception ex)
             {
-                return Newtonsoft.Json.JsonConvert.SerializeObject(new
-                {
-                    success = false,
-                    error = ex.Message,
-                    stackTrace = ex.StackTrace
-                });
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
 
