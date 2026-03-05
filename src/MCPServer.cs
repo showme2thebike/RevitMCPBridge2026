@@ -1330,6 +1330,12 @@ namespace RevitMCPBridge
                     case "createModelLine":
                         return await ExecuteInRevitContext(uiApp => ProjectSetupMethods.CreateModelLine(uiApp, parameters));
 
+                    case "createModelText":
+                        return await ExecuteInRevitContext(uiApp => ProjectSetupMethods.CreateModelText(uiApp, parameters));
+
+                    case "getModelTextTypes":
+                        return await ExecuteInRevitContext(uiApp => ProjectSetupMethods.GetModelTextTypes(uiApp, parameters));
+
                     // Element Methods - Location, Placement, Bounding Box
                     case "getElementLocation":
                         return await ExecuteInRevitContext(uiApp => ElementMethods.GetElementLocation(uiApp, parameters));

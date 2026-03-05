@@ -2073,5 +2073,167 @@ namespace RevitMCPBridge
         }
 
         #endregion
+
+        #region Model Text Methods
+
+        /// <summary>
+        /// Get available ModelTextType types in the project
+        /// </summary>
+        public static string GetModelTextTypes(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                var types = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ModelTextType))
+                    .Cast<ModelTextType>()
+                    .Select(t => new
+                    {
+                        id = (int)t.Id.Value,
+                        name = t.Name
+                    })
+                    .OrderBy(t => t.name)
+                    .ToList();
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    count = types.Count,
+                    types = types
+                });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Create 3D model text (Architecture tab > Model Text)
+        /// </summary>
+        /// <param name="uiApp">UIApplication</param>
+        /// <param name="parameters">
+        /// text (string, required) - the text to display
+        /// x, y, z (double) - position in model coordinates (feet)
+        /// normalX, normalY, normalZ (double) - normal vector for sketch plane (default: 0, 0, 1 = horizontal)
+        /// depth (double) - depth of 3D text in feet (default: 0.02 = 1/4 inch)
+        /// modelTextTypeId (int) - specific type ID (optional, uses default if omitted)
+        /// horizontalAlign (string) - "left", "center", "right" (default: "center")
+        /// </param>
+        public static string CreateModelText(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                var text = parameters?["text"]?.ToString();
+                if (string.IsNullOrEmpty(text))
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = "text parameter is required"
+                    });
+                }
+
+                var x = parameters?["x"]?.ToObject<double>() ?? 0;
+                var y = parameters?["y"]?.ToObject<double>() ?? 0;
+                var z = parameters?["z"]?.ToObject<double>() ?? 0;
+                var position = new XYZ(x, y, z);
+
+                // Normal vector for sketch plane (determines text facing direction)
+                var normalX = parameters?["normalX"]?.ToObject<double>() ?? 0;
+                var normalY = parameters?["normalY"]?.ToObject<double>() ?? 0;
+                var normalZ = parameters?["normalZ"]?.ToObject<double>() ?? 1;
+                var normal = new XYZ(normalX, normalY, normalZ).Normalize();
+
+                // Depth of 3D text
+                var depth = parameters?["depth"]?.ToObject<double>() ?? 0.02;
+
+                // Horizontal alignment
+                var alignStr = parameters?["horizontalAlign"]?.ToString()?.ToLower() ?? "center";
+                HorizontalAlign horizontalAlign;
+                switch (alignStr)
+                {
+                    case "left": horizontalAlign = HorizontalAlign.Left; break;
+                    case "right": horizontalAlign = HorizontalAlign.Right; break;
+                    default: horizontalAlign = HorizontalAlign.Center; break;
+                }
+
+                // Get or find ModelTextType
+                ModelTextType modelTextType = null;
+                var typeIdStr = parameters?["modelTextTypeId"]?.ToString();
+                if (!string.IsNullOrEmpty(typeIdStr))
+                {
+                    var typeId = new ElementId(int.Parse(typeIdStr));
+                    modelTextType = doc.GetElement(typeId) as ModelTextType;
+                }
+
+                if (modelTextType == null)
+                {
+                    // Get first available ModelTextType
+                    modelTextType = new FilteredElementCollector(doc)
+                        .OfClass(typeof(ModelTextType))
+                        .Cast<ModelTextType>()
+                        .FirstOrDefault();
+                }
+
+                if (modelTextType == null)
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = "No ModelTextType found in project. Model Text may need to be enabled."
+                    });
+                }
+
+                using (var trans = new Transaction(doc, "MCP Create Model Text"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    // Create sketch plane at the position with the specified normal
+                    var plane = Plane.CreateByNormalAndOrigin(normal, position);
+                    var sketchPlane = SketchPlane.Create(doc, plane);
+
+                    // NewModelText is only available on FamilyItemFactory (family documents)
+                    // For project documents, check if IsFamilyDocument
+                    if (!doc.IsFamilyDocument)
+                    {
+                        trans.RollBack();
+                        return JsonConvert.SerializeObject(new
+                        {
+                            success = false,
+                            error = "ModelText can only be created via API in family documents. In project documents, use Architecture tab > Model Text manually, or use createTextNote for annotation text on views."
+                        });
+                    }
+                    var modelText = doc.FamilyCreate.NewModelText(text, modelTextType, sketchPlane, position, horizontalAlign, depth);
+
+                    trans.Commit();
+
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        modelTextId = (int)modelText.Id.Value,
+                        text = text,
+                        position = new { x, y, z },
+                        normal = new { x = normalX, y = normalY, z = normalZ },
+                        depth = depth,
+                        typeName = modelTextType.Name,
+                        typeId = (int)modelTextType.Id.Value,
+                        message = "Model text created successfully"
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        #endregion
     }
 }
