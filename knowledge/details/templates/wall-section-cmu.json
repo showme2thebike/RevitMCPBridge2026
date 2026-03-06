@@ -1,0 +1,86 @@
+{
+  "templateId": "wall-section-cmu",
+  "name": "Wall Section - CMU (Concrete Masonry)",
+  "description": "Vertical section through CMU exterior wall. Common in Florida and commercial construction. Use drawLayerStack for wall layers.",
+  "category": "wall",
+  "scale": "1 1/2\" = 1'-0\"",
+  "version": "1.0",
+
+  "parameters": {
+    "cmuSize": { "default": "8\"", "options": ["6\"", "8\"", "12\""], "thicknessFeet": { "6\"": 0.5, "8\"": 0.667, "12\"": 1.0 } },
+    "cmuType": { "default": "standard", "options": ["standard", "lightweight", "split_face"] },
+    "groutFill": { "default": "partial", "options": ["partial", "solid"], "note": "Solid grout at rebar cells" },
+    "rebarVertical": { "default": "#5 @ 48\" OC", "options": ["#4 @ 48\"", "#5 @ 48\"", "#5 @ 32\"", "#5 @ 24\""] },
+    "rebarHorizontal": { "default": "#5 @ 48\" OC (bond beam)", "options": ["#4 @ 48\"", "#5 @ 48\"", "#5 @ 32\""] },
+    "exteriorFinish": { "default": "stucco", "options": ["stucco", "paint", "split_face_exposed"] },
+    "interiorFinish": { "default": "furring_gwb", "options": ["furring_gwb", "direct_apply_gwb", "paint_direct"] },
+    "insulation": { "default": "rigid_exterior", "options": ["rigid_exterior", "foam_fill", "furring_cavity", "none"] }
+  },
+
+  "layerStack": {
+    "method": "drawLayerStack",
+    "height": 4.0,
+    "direction": "left-to-right",
+    "addLabels": true,
+    "layers": {
+      "stucco_exterior": [
+        { "name": "3/4\" Stucco (3 Coat)", "thickness": 0.063, "hatch": "Solid", "lineWeight": "Wide Lines" },
+        { "name": "8\" CMU (Grouted @ Rebar)", "thickness": 0.667, "hatch": "Concrete Block", "lineWeight": "Wide Lines" },
+        { "name": "Waterproofing (Interior Face)", "thickness": 0, "linePattern": "Dash" },
+        { "name": "1\" Rigid Insulation (CI)", "thickness": 0.083, "hatch": "Insulation", "lineWeight": "Thin Lines" },
+        { "name": "1x3 Furring @ 16\" OC", "thickness": 0.063, "hatch": null, "lineWeight": "Thin Lines" },
+        { "name": "5/8\" GWB", "thickness": 0.052, "hatch": "Gypsum Board", "lineWeight": "Thin Lines" }
+      ],
+      "paint_direct": [
+        { "name": "Exterior Paint", "thickness": 0, "lineWeight": "Wide Lines" },
+        { "name": "8\" CMU (Grouted @ Rebar)", "thickness": 0.667, "hatch": "Concrete Block", "lineWeight": "Wide Lines" },
+        { "name": "Interior Paint", "thickness": 0, "lineWeight": "Thin Lines" }
+      ]
+    }
+  },
+
+  "detailComponents": {
+    "typical": [
+      { "familyName": "04-CMU-2 Core-Section", "typeName": "8\" CMU", "description": "Show 2-3 courses in section" },
+      { "familyName": "Reinf Bar Section", "typeName": "#5", "description": "Vertical rebar in grouted cells" },
+      { "familyName": "Reinf Bar Section", "typeName": "#5", "description": "Horizontal bond beam rebar" }
+    ],
+    "bondBeam": {
+      "note": "Bond beams at top of wall, at floor lines, and at 4' OC max. Show as solid grouted course with horizontal rebar.",
+      "components": [
+        { "familyName": "Reinf Bar Section", "typeName": "#5", "description": "Bond beam rebar - (2) bars" }
+      ]
+    }
+  },
+
+  "annotations": [
+    "3/4\" STUCCO - 3 COAT OVER METAL LATH",
+    "8\" CMU - f'm = 1500 PSI",
+    "#5 VERT. REBAR @ 48\" O.C. IN GROUTED CELLS",
+    "BOND BEAM W/ (2) #5 CONT. @ 4'-0\" O.C.",
+    "1\" RIGID INSULATION (CONTINUOUS)",
+    "1x3 P.T. FURRING @ 16\" O.C.",
+    "5/8\" GWB TYPE X",
+    "SOLID GROUT ALL CELLS W/ REBAR"
+  ],
+
+  "connections": {
+    "top": ["bond-beam-detail", "roof-eave", "parapet-cmu"],
+    "bottom": ["foundation-spread-footing", "foundation-slab-on-grade"],
+    "openings": ["window-head-cmu", "window-sill-cmu", "lintel-detail-cmu"]
+  },
+
+  "codeRequirements": {
+    "Florida": {
+      "HVHZ": "Enhanced reinforcement per FBC Table 2113.1 for HVHZ areas",
+      "windDesign": "Wall reinforcement per engineer, min #5 @ 48\" each way",
+      "termite": "CMU does not require termite treatment but sill plate does"
+    },
+    "general": [
+      "ACI 530/MSJC - Masonry design standard",
+      "Min 3/4\" grout space around rebar",
+      "Lintels over openings per structural",
+      "Control joints at 20' OC max and at openings"
+    ]
+  }
+}

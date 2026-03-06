@@ -1515,5 +1515,490 @@ namespace RevitMCPBridge
                 return ResponseBuilder.FromException(ex).Build();
             }
         }
+
+        #region Precision Wall Methods
+
+        /// <summary>
+        /// Get precision geometry for a placed wall: centerline, both face positions,
+        /// corner points, and wall type thickness data.
+        /// This is the "measure" step for precision wall placement.
+        /// </summary>
+        [MCPMethod("getWallPrecisionGeometry", Category = "Wall", Description = "Get exact wall face positions, centerline, and corner geometry for precision placement")]
+        public static string GetWallPrecisionGeometry(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                if (parameters["wallId"] == null)
+                    return ResponseBuilder.Error("wallId is required").Build();
+
+                var wallId = new ElementId(parameters["wallId"].ToObject<int>());
+                var wall = doc.GetElement(wallId) as Wall;
+
+                if (wall == null)
+                    return ResponseBuilder.Error("Wall not found", "ELEMENT_NOT_FOUND").Build();
+
+                var locationCurve = wall.Location as LocationCurve;
+                if (locationCurve == null)
+                    return ResponseBuilder.Error("Wall has no location curve").Build();
+
+                var curve = locationCurve.Curve as Line;
+                if (curve == null)
+                    return ResponseBuilder.Error("Wall is not a straight line").Build();
+
+                var startPt = curve.GetEndPoint(0);
+                var endPt = curve.GetEndPoint(1);
+                double wallWidth = wall.Width;
+                double halfWidth = wallWidth / 2.0;
+
+                // Wall direction and perpendicular (for face offset)
+                XYZ wallDir = (endPt - startPt).Normalize();
+                // Perpendicular: rotate 90 degrees CCW in plan
+                XYZ perpDir = new XYZ(-wallDir.Y, wallDir.X, 0);
+
+                // Determine which side is exterior vs interior
+                // In Revit, the "exterior" face is on the positive perpendicular side
+                // when wall is not flipped. If flipped, it's reversed.
+                bool isFlipped = wall.Flipped;
+                XYZ exteriorDir = isFlipped ? -perpDir : perpDir;
+                XYZ interiorDir = isFlipped ? perpDir : -perpDir;
+
+                // Centerline points
+                var centerStart = new double[] { Math.Round(startPt.X, 6), Math.Round(startPt.Y, 6), Math.Round(startPt.Z, 6) };
+                var centerEnd = new double[] { Math.Round(endPt.X, 6), Math.Round(endPt.Y, 6), Math.Round(endPt.Z, 6) };
+
+                // Exterior face points (offset from centerline by halfWidth)
+                XYZ extStart = startPt + exteriorDir * halfWidth;
+                XYZ extEnd = endPt + exteriorDir * halfWidth;
+                var exteriorStart = new double[] { Math.Round(extStart.X, 6), Math.Round(extStart.Y, 6), Math.Round(extStart.Z, 6) };
+                var exteriorEnd = new double[] { Math.Round(extEnd.X, 6), Math.Round(extEnd.Y, 6), Math.Round(extEnd.Z, 6) };
+
+                // Interior face points
+                XYZ intStart = startPt + interiorDir * halfWidth;
+                XYZ intEnd = endPt + interiorDir * halfWidth;
+                var interiorStart = new double[] { Math.Round(intStart.X, 6), Math.Round(intStart.Y, 6), Math.Round(intStart.Z, 6) };
+                var interiorEnd = new double[] { Math.Round(intEnd.X, 6), Math.Round(intEnd.Y, 6), Math.Round(intEnd.Z, 6) };
+
+                // Wall type info
+                var wallType = wall.WallType;
+                string function = "Unknown";
+                try { function = wallType.Function.ToString(); } catch { }
+
+                // Get layer info if compound
+                var layers = new List<object>();
+                var structure = wallType.GetCompoundStructure();
+                if (structure != null)
+                {
+                    double cumOffset = 0;
+                    for (int i = 0; i < structure.LayerCount; i++)
+                    {
+                        var layer = structure.GetLayers()[i];
+                        var material = doc.GetElement(layer.MaterialId) as Material;
+                        layers.Add(new
+                        {
+                            index = i,
+                            function = layer.Function.ToString(),
+                            thickness = Math.Round(layer.Width, 6),
+                            thicknessInches = Math.Round(layer.Width * 12, 4),
+                            materialName = material?.Name ?? "None",
+                            offsetFromExterior = Math.Round(cumOffset, 6)
+                        });
+                        cumOffset += layer.Width;
+                    }
+                }
+
+                // Height and level
+                double height = wall.get_Parameter(BuiltInParameter.WALL_USER_HEIGHT_PARAM)?.AsDouble() ?? 0;
+                var level = doc.GetElement(wall.LevelId) as Level;
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    wallId = (int)wall.Id.Value,
+                    wallTypeName = wallType.Name,
+                    wallTypeId = (int)wallType.Id.Value,
+                    function = function,
+                    isFlipped = isFlipped,
+                    width = Math.Round(wallWidth, 6),
+                    widthInches = Math.Round(wallWidth * 12, 4),
+                    halfWidth = Math.Round(halfWidth, 6),
+                    height = Math.Round(height, 6),
+                    length = Math.Round(curve.Length, 6),
+                    level = level?.Name,
+                    centerline = new { start = centerStart, end = centerEnd },
+                    exteriorFace = new { start = exteriorStart, end = exteriorEnd },
+                    interiorFace = new { start = interiorStart, end = interiorEnd },
+                    direction = new double[] { Math.Round(wallDir.X, 6), Math.Round(wallDir.Y, 6), 0 },
+                    perpendicularToExterior = new double[] { Math.Round(exteriorDir.X, 6), Math.Round(exteriorDir.Y, 6), 0 },
+                    layers = layers
+                });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Get precision geometry for ALL walls in the document or a specific view.
+        /// Returns face positions for every wall so AI can compute exact connection points.
+        /// </summary>
+        [MCPMethod("getWallsPrecisionGeometry", Category = "Wall", Description = "Get precision geometry for all walls (faces, corners, thickness)")]
+        public static string GetWallsPrecisionGeometry(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                // Optional view filter
+                FilteredElementCollector collector;
+                if (parameters["viewId"] != null)
+                {
+                    var viewId = new ElementId(parameters["viewId"].ToObject<int>());
+                    collector = new FilteredElementCollector(doc, viewId);
+                }
+                else
+                {
+                    collector = new FilteredElementCollector(doc);
+                }
+
+                var walls = collector
+                    .OfCategory(BuiltInCategory.OST_Walls)
+                    .WhereElementIsNotElementType()
+                    .Cast<Wall>()
+                    .ToList();
+
+                var results = new List<object>();
+
+                foreach (var wall in walls)
+                {
+                    try
+                    {
+                        var locationCurve = wall.Location as LocationCurve;
+                        if (locationCurve == null) continue;
+
+                        var curve = locationCurve.Curve as Line;
+                        if (curve == null) continue;
+
+                        var startPt = curve.GetEndPoint(0);
+                        var endPt = curve.GetEndPoint(1);
+                        double wallWidth = wall.Width;
+                        double halfWidth = wallWidth / 2.0;
+
+                        XYZ wallDir = (endPt - startPt).Normalize();
+                        XYZ perpDir = new XYZ(-wallDir.Y, wallDir.X, 0);
+
+                        bool isFlipped = wall.Flipped;
+                        XYZ exteriorDir = isFlipped ? -perpDir : perpDir;
+                        XYZ interiorDir = isFlipped ? perpDir : -perpDir;
+
+                        XYZ extStart = startPt + exteriorDir * halfWidth;
+                        XYZ extEnd = endPt + exteriorDir * halfWidth;
+                        XYZ intStart = startPt + interiorDir * halfWidth;
+                        XYZ intEnd = endPt + interiorDir * halfWidth;
+
+                        var level = doc.GetElement(wall.LevelId) as Level;
+
+                        results.Add(new
+                        {
+                            wallId = (int)wall.Id.Value,
+                            wallTypeName = wall.WallType.Name,
+                            width = Math.Round(wallWidth, 6),
+                            halfWidth = Math.Round(halfWidth, 6),
+                            length = Math.Round(curve.Length, 6),
+                            level = level?.Name,
+                            isFlipped = isFlipped,
+                            centerline = new
+                            {
+                                startX = Math.Round(startPt.X, 6), startY = Math.Round(startPt.Y, 6),
+                                endX = Math.Round(endPt.X, 6), endY = Math.Round(endPt.Y, 6)
+                            },
+                            exteriorFace = new
+                            {
+                                startX = Math.Round(extStart.X, 6), startY = Math.Round(extStart.Y, 6),
+                                endX = Math.Round(extEnd.X, 6), endY = Math.Round(extEnd.Y, 6)
+                            },
+                            interiorFace = new
+                            {
+                                startX = Math.Round(intStart.X, 6), startY = Math.Round(intStart.Y, 6),
+                                endX = Math.Round(intEnd.X, 6), endY = Math.Round(intEnd.Y, 6)
+                            }
+                        });
+                    }
+                    catch { /* skip problematic walls */ }
+                }
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    wallCount = results.Count,
+                    walls = results
+                });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Create a wall by specifying where a FACE goes, not the centerline.
+        /// Automatically computes the centerline offset based on wall type thickness.
+        /// This eliminates the guesswork of "where will the face actually be?"
+        /// </summary>
+        [MCPMethod("createWallByFace", Category = "Wall", Description = "Create a wall by specifying face position (exterior or interior) instead of centerline")]
+        public static string CreateWallByFace(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                // Required params
+                if (parameters["faceStartPoint"] == null || parameters["faceEndPoint"] == null ||
+                    parameters["levelId"] == null)
+                    return ResponseBuilder.Error("faceStartPoint, faceEndPoint, and levelId are required").Build();
+
+                var faceStart = parameters["faceStartPoint"].ToObject<double[]>();
+                var faceEnd = parameters["faceEndPoint"].ToObject<double[]>();
+                var levelIdInt = parameters["levelId"].ToObject<int>();
+                var level = doc.GetElement(new ElementId(levelIdInt)) as Level;
+                if (level == null)
+                    return ResponseBuilder.Error("Level not found").Build();
+
+                // Which face are we specifying? "exterior" (default) or "interior"
+                string faceType = parameters["faceType"]?.ToString()?.ToLower() ?? "exterior";
+                double height = parameters["height"]?.ToObject<double>() ?? 10.0;
+
+                // Resolve wall type
+                WallType wallType = null;
+                if (parameters["wallTypeId"] != null)
+                    wallType = doc.GetElement(new ElementId(parameters["wallTypeId"].ToObject<int>())) as WallType;
+                else if (parameters["wallTypeName"] != null)
+                {
+                    string name = parameters["wallTypeName"].ToString();
+                    wallType = new FilteredElementCollector(doc)
+                        .OfClass(typeof(WallType))
+                        .Cast<WallType>()
+                        .FirstOrDefault(wt => wt.Name == name);
+                }
+
+                if (wallType == null)
+                    wallType = new FilteredElementCollector(doc)
+                        .OfClass(typeof(WallType))
+                        .Cast<WallType>()
+                        .FirstOrDefault();
+
+                if (wallType == null)
+                    return ResponseBuilder.Error("No wall type available").Build();
+
+                double wallWidth = wallType.Width;
+                double halfWidth = wallWidth / 2.0;
+
+                // Compute centerline from face position
+                // Wall direction: from faceStart to faceEnd
+                XYZ faceStartPt = new XYZ(faceStart[0], faceStart[1], faceStart.Length > 2 ? faceStart[2] : 0);
+                XYZ faceEndPt = new XYZ(faceEnd[0], faceEnd[1], faceEnd.Length > 2 ? faceEnd[2] : 0);
+                XYZ wallDir = (faceEndPt - faceStartPt).Normalize();
+
+                // Perpendicular direction (CCW rotation for exterior offset)
+                XYZ perpDir = new XYZ(-wallDir.Y, wallDir.X, 0);
+
+                // Offset from face to centerline
+                XYZ offset;
+                if (faceType == "exterior")
+                {
+                    // Exterior face is at the specified position
+                    // Centerline is halfWidth INWARD (opposite to exterior normal)
+                    // In Revit, exterior is on the positive perpendicular side (unflipped)
+                    // So centerline = face - perpDir * halfWidth
+                    offset = -perpDir * halfWidth;
+                }
+                else // interior
+                {
+                    // Interior face specified, centerline is halfWidth toward exterior
+                    offset = perpDir * halfWidth;
+                }
+
+                XYZ centerStart = faceStartPt + offset;
+                XYZ centerEnd = faceEndPt + offset;
+
+                using (var trans = new Transaction(doc, "Create Wall By Face"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    var line = Line.CreateBound(centerStart, centerEnd);
+                    var wall = Wall.Create(doc, line, wallType.Id, level.Id, height, 0, false, false);
+
+                    // Verify: compute actual face positions
+                    var actualCurve = (wall.Location as LocationCurve)?.Curve as Line;
+                    var actStart = actualCurve?.GetEndPoint(0) ?? centerStart;
+                    var actEnd = actualCurve?.GetEndPoint(1) ?? centerEnd;
+
+                    XYZ actExtStart = actStart + perpDir * halfWidth;
+                    XYZ actExtEnd = actEnd + perpDir * halfWidth;
+                    XYZ actIntStart = actStart - perpDir * halfWidth;
+                    XYZ actIntEnd = actEnd - perpDir * halfWidth;
+
+                    trans.Commit();
+
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        wallId = (int)wall.Id.Value,
+                        wallTypeName = wallType.Name,
+                        width = Math.Round(wallWidth, 6),
+                        widthInches = Math.Round(wallWidth * 12, 4),
+                        halfWidth = Math.Round(halfWidth, 6),
+                        height = height,
+                        level = level.Name,
+                        faceTypeSpecified = faceType,
+                        centerline = new
+                        {
+                            start = new double[] { Math.Round(actStart.X, 6), Math.Round(actStart.Y, 6), Math.Round(actStart.Z, 6) },
+                            end = new double[] { Math.Round(actEnd.X, 6), Math.Round(actEnd.Y, 6), Math.Round(actEnd.Z, 6) }
+                        },
+                        exteriorFace = new
+                        {
+                            start = new double[] { Math.Round(actExtStart.X, 6), Math.Round(actExtStart.Y, 6), Math.Round(actExtStart.Z, 6) },
+                            end = new double[] { Math.Round(actExtEnd.X, 6), Math.Round(actExtEnd.Y, 6), Math.Round(actExtEnd.Z, 6) }
+                        },
+                        interiorFace = new
+                        {
+                            start = new double[] { Math.Round(actIntStart.X, 6), Math.Round(actIntStart.Y, 6), Math.Round(actIntStart.Z, 6) },
+                            end = new double[] { Math.Round(actIntEnd.X, 6), Math.Round(actIntEnd.Y, 6), Math.Round(actIntEnd.Z, 6) }
+                        }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Get wall type thickness and face offset data WITHOUT placing any walls.
+        /// Use this to pre-compute wall positions before placement.
+        /// </summary>
+        [MCPMethod("getWallTypeThickness", Category = "Wall", Description = "Get wall type thickness and centerline-to-face offset for precision placement")]
+        public static string GetWallTypeThickness(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                // Accept single type or batch
+                var results = new List<object>();
+
+                if (parameters["wallTypeId"] != null || parameters["wallTypeName"] != null)
+                {
+                    // Single type lookup
+                    WallType wt = null;
+                    if (parameters["wallTypeId"] != null)
+                        wt = doc.GetElement(new ElementId(parameters["wallTypeId"].ToObject<int>())) as WallType;
+                    else
+                    {
+                        string name = parameters["wallTypeName"].ToString();
+                        wt = new FilteredElementCollector(doc)
+                            .OfClass(typeof(WallType))
+                            .Cast<WallType>()
+                            .FirstOrDefault(w => w.Name == name);
+                    }
+
+                    if (wt == null)
+                        return ResponseBuilder.Error("Wall type not found").Build();
+
+                    results.Add(BuildWallTypeThicknessInfo(doc, wt));
+                }
+                else if (parameters["wallTypeIds"] != null)
+                {
+                    // Batch lookup
+                    var ids = parameters["wallTypeIds"].ToObject<List<int>>();
+                    foreach (int id in ids)
+                    {
+                        var wt = doc.GetElement(new ElementId(id)) as WallType;
+                        if (wt != null)
+                            results.Add(BuildWallTypeThicknessInfo(doc, wt));
+                    }
+                }
+                else
+                {
+                    // Return all wall types
+                    var allTypes = new FilteredElementCollector(doc)
+                        .OfClass(typeof(WallType))
+                        .Cast<WallType>()
+                        .ToList();
+
+                    foreach (var wt in allTypes)
+                    {
+                        results.Add(BuildWallTypeThicknessInfo(doc, wt));
+                    }
+                }
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    count = results.Count,
+                    wallTypes = results
+                });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        private static object BuildWallTypeThicknessInfo(Document doc, WallType wt)
+        {
+            double width = wt.Width;
+            double halfWidth = width / 2.0;
+
+            var layers = new List<object>();
+            var structure = wt.GetCompoundStructure();
+            if (structure != null)
+            {
+                double cumOffset = 0;
+                for (int i = 0; i < structure.LayerCount; i++)
+                {
+                    var layer = structure.GetLayers()[i];
+                    var material = doc.GetElement(layer.MaterialId) as Material;
+                    layers.Add(new
+                    {
+                        index = i,
+                        function = layer.Function.ToString(),
+                        thickness = Math.Round(layer.Width, 6),
+                        thicknessInches = Math.Round(layer.Width * 12, 4),
+                        materialName = material?.Name ?? "None",
+                        offsetFromExterior = Math.Round(cumOffset, 6)
+                    });
+                    cumOffset += layer.Width;
+                }
+            }
+
+            string function = "Unknown";
+            try { function = wt.Function.ToString(); } catch { }
+
+            return new
+            {
+                wallTypeId = (int)wt.Id.Value,
+                wallTypeName = wt.Name,
+                function = function,
+                kind = wt.Kind.ToString(),
+                totalWidth = Math.Round(width, 6),
+                totalWidthInches = Math.Round(width * 12, 4),
+                halfWidth = Math.Round(halfWidth, 6),
+                halfWidthInches = Math.Round(halfWidth * 12, 4),
+                centerlineToExteriorFace = Math.Round(halfWidth, 6),
+                centerlineToInteriorFace = Math.Round(halfWidth, 6),
+                layerCount = layers.Count,
+                layers = layers
+            };
+        }
+
+        #endregion
     }
 }

@@ -1,0 +1,120 @@
+{
+  "templateId": "foundation-spread-footing",
+  "name": "Foundation - Spread Footing",
+  "description": "Section through continuous spread footing with stem wall. Connects to wall-section templates at the top. Use batchDrawDetail to draw rectangles + hatches.",
+  "category": "foundation",
+  "scale": "1 1/2\" = 1'-0\"",
+  "version": "1.0",
+
+  "parameters": {
+    "footingWidth": { "default": 2.0, "unit": "feet", "code": "Per engineer, min 16\" for 1-story, 24\" for 2-story" },
+    "footingDepth": { "default": 1.0, "unit": "feet", "code": "Per engineer, min 8\" residential" },
+    "stemWallWidth": { "default": 0.667, "unit": "feet", "note": "8\" nominal" },
+    "stemWallHeight": { "default": 2.5, "unit": "feet", "note": "Varies by grade, min 6\" above grade" },
+    "slabThickness": { "default": 0.333, "unit": "feet", "note": "4\" typical" },
+    "gravelBase": { "default": 0.333, "unit": "feet", "note": "4\" compacted gravel" },
+    "rebarSize": { "default": "#5", "options": ["#4", "#5", "#6"] },
+    "rebarSpacing": { "default": 12, "unit": "inches OC" },
+    "anchorBoltSize": { "default": "1/2\"x10\"", "spacing": "6'-0\" OC, 12\" from corners" },
+    "waterproofing": { "default": true },
+    "termiteShield": { "default": false, "note": "Required in Florida" }
+  },
+
+  "drawInstructions": {
+    "method": "batchDrawDetail",
+    "note": "All coordinates relative to origin. Origin = top of stem wall, centerline. Y+ is up.",
+    "steps": [
+      {
+        "step": 1,
+        "description": "Draw footing rectangle",
+        "operations": [
+          { "op": "filledRegion", "typeName": "Concrete", "description": "Footing",
+            "points_formula": "centered on stem wall, width=footingWidth, depth=footingDepth, bottom at -(stemWallHeight + footingDepth)" }
+        ]
+      },
+      {
+        "step": 2,
+        "description": "Draw stem wall rectangle",
+        "operations": [
+          { "op": "filledRegion", "typeName": "Concrete", "description": "Stem wall",
+            "points_formula": "centered on origin, width=stemWallWidth, height=stemWallHeight, top at Y=0" }
+        ]
+      },
+      {
+        "step": 3,
+        "description": "Draw slab (if slab-on-grade)",
+        "operations": [
+          { "op": "filledRegion", "typeName": "Concrete", "description": "Slab on grade",
+            "points_formula": "top at -(stemWallHeight - slabThickness), extends interior from stem wall" }
+        ]
+      },
+      {
+        "step": 4,
+        "description": "Draw gravel base",
+        "operations": [
+          { "op": "filledRegion", "typeName": "Earth", "description": "Compacted gravel",
+            "points_formula": "below slab, thickness=gravelBase" }
+        ]
+      },
+      {
+        "step": 5,
+        "description": "Draw earth fill / grade line",
+        "operations": [
+          { "op": "line", "lineStyle": "Wide Lines", "description": "Grade line - exterior" },
+          { "op": "filledRegion", "typeName": "Earth", "description": "Earth fill around footing" }
+        ]
+      },
+      {
+        "step": 6,
+        "description": "Detail components - rebar, anchor bolts",
+        "operations": [
+          { "op": "detailComponent", "familyName": "Reinf Bar Section", "typeName": "#5", "description": "Continuous rebar in footing", "count": 3 },
+          { "op": "detailComponent", "familyName": "Reinf Bar Section", "typeName": "#5", "description": "Vertical dowels in stem wall", "count": 2 }
+        ]
+      },
+      {
+        "step": 7,
+        "description": "Waterproofing membrane and sill plate",
+        "operations": [
+          { "op": "line", "lineStyle": "Medium Lines", "description": "Waterproofing on exterior of stem wall" },
+          { "op": "detailComponent", "familyName": "Nominal Cut Lumber-Section", "typeName": "2x6", "description": "Pressure-treated sill plate at top of stem wall" }
+        ]
+      }
+    ],
+
+    "annotations": [
+      "CONT. SPREAD FOOTING - SEE STRUCT.",
+      "CONCRETE STEM WALL",
+      "#5 REBAR CONT. (3) - TOP & BOT.",
+      "#5 DOWELS @ 12\" O.C. - MIN 24\" LAP",
+      "1/2\"x10\" ANCHOR BOLTS @ 6'-0\" O.C.",
+      "P.T. SILL PLATE - BOLT TO STEM WALL",
+      "WATERPROOFING MEMBRANE",
+      "4\" COMPACTED GRAVEL BASE",
+      "4\" CONCRETE SLAB W/ 6x6 W.W.M.",
+      "FINISH GRADE - SLOPE AWAY FROM BLDG."
+    ],
+
+    "dimensions": [
+      { "what": "Footing width", "value_formula": "footingWidth" },
+      { "what": "Footing depth", "value_formula": "footingDepth" },
+      { "what": "Stem wall height", "value_formula": "stemWallHeight" },
+      { "what": "Slab thickness", "value_formula": "slabThickness" }
+    ]
+  },
+
+  "connections": {
+    "top": { "connectsTo": "wall-section-wood-frame OR wall-section-cmu", "anchor": "top of stem wall" },
+    "note": "The wall assembly sits on top of the sill plate. Align the bottom of the wall layer stack with Y=0 (top of stem wall) + sill plate thickness."
+  },
+
+  "codeRequirements": {
+    "IBC": "Table 1809.7 - Min footing width by stories, Table 1907.1 - Concrete strength",
+    "Florida": "FBC R403.1 - Min footing depth 12\" below undisturbed ground, R317.1 - termite protection required",
+    "general": [
+      "Footing below frost line (varies by climate zone, N/A in Florida)",
+      "Min 3\" clear cover on rebar in footing",
+      "Anchor bolts: 1/2\" min dia, 7\" min embedment, 6' OC max, 12\" from ends/corners"
+    ]
+  }
+}

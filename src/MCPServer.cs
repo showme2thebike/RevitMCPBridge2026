@@ -2529,6 +2529,16 @@ namespace RevitMCPBridge
                         return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.DetailMethods.ImportDetailToDocument(uiApp, parameters));
                     case "searchDetailLibrary":
                         return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.DetailMethods.SearchDetailLibrary(uiApp, parameters));
+                    case "batchDrawDetail":
+                        return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.DetailMethods.BatchDrawDetail(uiApp, parameters));
+                    case "drawLayerStack":
+                        return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.DetailMethods.DrawLayerStack(uiApp, parameters));
+                    case "getTypeAssembly":
+                        return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.DetailMethods.GetTypeAssembly(uiApp, parameters));
+                    case "importSvgToDetail":
+                        return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.DetailMethods.ImportSvgToDetail(uiApp, parameters));
+                    case "drawAssemblyDetail":
+                        return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.DetailMethods.DrawAssemblyDetail(uiApp, parameters));
                     case "addRoomDimensions":
                         return await ExecuteInRevitContext(uiApp => DimensionMethods.AddRoomDimensions(uiApp, parameters));
                     case "getDimensionPattern":

@@ -1,0 +1,248 @@
+{
+  "name": "CMU WALL SECTION",
+  "description": "Typical 8\" CMU wall section with bond beam, rebar, and continuous footing",
+  "scale": 4,
+  "scaleLabel": "3\" = 1'-0\"",
+  "requiredFamilies": [
+    {
+      "familyName": "04-CMU-2 Core-Section",
+      "typeName": "8\" x 8\" x 16\"",
+      "source": "D:\\BDArchitect-DetailLibrary-2025\\family_exports\\Detail Items\\04-CMU-2 Core-Section.rfa",
+      "bounds": {
+        "width": 0.635417,
+        "height": 0.666667,
+        "widthInches": 7.625,
+        "heightInches": 8.0,
+        "origin": "bottom-left",
+        "verticalStep": 0.666667
+      }
+    },
+    {
+      "familyName": "Bond Beams-Single-Section",
+      "typeName": "8\" x 8\" x 16\"",
+      "source": "D:\\BDArchitect-DetailLibrary-2025\\family_exports\\Detail Items\\Bond Beams-Single-Section.rfa",
+      "bounds": {
+        "width": 0.635417,
+        "height": 0.666667,
+        "widthInches": 7.625,
+        "heightInches": 8.0,
+        "origin": "bottom-left",
+        "verticalStep": 0.666667
+      }
+    },
+    {
+      "familyName": "Reinf Bar Section",
+      "typeName": "#_5",
+      "source": "D:\\BDArchitect-DetailLibrary-2025\\family_exports\\Detail Items\\Reinf Bar Section.rfa",
+      "bounds": {
+        "width": 0.052083,
+        "height": 0.052083,
+        "widthInches": 0.625,
+        "heightInches": 0.625,
+        "origin": "center",
+        "verticalStep": 0.052083
+      }
+    }
+  ],
+  "parameters": {
+    "wallCourses": {
+      "description": "Number of standard CMU courses (not counting bond beam)",
+      "default": 4,
+      "min": 1,
+      "max": 20
+    },
+    "hasBondBeam": {
+      "description": "Whether to include bond beam at top",
+      "default": true
+    },
+    "footingWidth": {
+      "description": "Footing width in feet (should be wider than wall)",
+      "default": 2.0
+    },
+    "footingDepth": {
+      "description": "Footing depth in feet",
+      "default": 0.667
+    },
+    "rebarInFooting": {
+      "description": "Number of rebar in footing (placed evenly)",
+      "default": 2
+    },
+    "verticalRebarSpacing": {
+      "description": "Place vertical rebar every N courses (0 = none)",
+      "default": 2
+    },
+    "gradeLineExtension": {
+      "description": "How far grade line extends past wall edges (feet)",
+      "default": 1.0
+    }
+  },
+  "layout": {
+    "origin": "bottom-left of first CMU course at (0,0)",
+    "coordinateSystem": "Y-up, X-right",
+    "notes": [
+      "blockWidth = bounds.width (0.635417 ft = 7.625\")",
+      "courseHeight = bounds.verticalStep (0.666667 ft = 8.0\")",
+      "CMU origin is bottom-left, so stacking is Y += courseHeight",
+      "Rebar origin is center, place at center of cell",
+      "Rebar X position: blockWidth / 2 = 0.3177 ft",
+      "Bond beam goes on top of last standard course",
+      "Footing top aligns with bottom of first CMU course (Y=0)",
+      "Grade line at Y=0 (top of footing / bottom of first course)"
+    ]
+  },
+  "steps": [
+    {
+      "step": 1,
+      "action": "loadFamilies",
+      "description": "Load all required families if not already loaded"
+    },
+    {
+      "step": 2,
+      "action": "placeComponents",
+      "description": "Place CMU courses from bottom to top",
+      "components": [
+        {
+          "type": "loop",
+          "family": "04-CMU-2 Core-Section",
+          "count": "{{wallCourses}}",
+          "position": {
+            "x": 0,
+            "y": "i * 0.666667"
+          }
+        }
+      ]
+    },
+    {
+      "step": 3,
+      "action": "placeComponents",
+      "description": "Place bond beam on top",
+      "condition": "{{hasBondBeam}}",
+      "components": [
+        {
+          "family": "Bond Beams-Single-Section",
+          "position": {
+            "x": 0,
+            "y": "{{wallCourses}} * 0.666667"
+          }
+        }
+      ]
+    },
+    {
+      "step": 4,
+      "action": "placeComponents",
+      "description": "Place rebar in bond beam (centered in cell)",
+      "condition": "{{hasBondBeam}}",
+      "components": [
+        {
+          "family": "Reinf Bar Section",
+          "position": {
+            "x": 0.317708,
+            "y": "({{wallCourses}} * 0.666667) + 0.333333"
+          },
+          "note": "Center of bond beam = top of last course + half course height"
+        }
+      ]
+    },
+    {
+      "step": 5,
+      "action": "placeComponents",
+      "description": "Place vertical rebar in CMU cells",
+      "condition": "{{verticalRebarSpacing}} > 0",
+      "components": [
+        {
+          "type": "loop",
+          "family": "Reinf Bar Section",
+          "interval": "{{verticalRebarSpacing}}",
+          "startCourse": 1,
+          "position": {
+            "x": 0.317708,
+            "y": "(courseIndex * 0.666667) + 0.333333"
+          },
+          "note": "Center of each Nth cell"
+        }
+      ]
+    },
+    {
+      "step": 6,
+      "action": "createFilledRegion",
+      "description": "Concrete footing below grade",
+      "filledRegionType": "Diagonal Crosshatch",
+      "boundary": {
+        "x1": "-({{footingWidth}} / 2)",
+        "y1": "-{{footingDepth}}",
+        "x2": "{{footingWidth}} / 2",
+        "y2": 0
+      }
+    },
+    {
+      "step": 7,
+      "action": "placeComponents",
+      "description": "Rebar in footing",
+      "components": [
+        {
+          "type": "distribute",
+          "family": "Reinf Bar Section",
+          "count": "{{rebarInFooting}}",
+          "region": {
+            "xMin": "-({{footingWidth}} / 2) + 0.25",
+            "xMax": "({{footingWidth}} / 2) - 0.25",
+            "y": "-({{footingDepth}} / 2)"
+          }
+        }
+      ]
+    },
+    {
+      "step": 8,
+      "action": "createDetailLines",
+      "description": "Grade line and footing outline",
+      "lines": [
+        {
+          "name": "Grade Line",
+          "style": "Wide Lines",
+          "start": {"x": "-({{footingWidth}} / 2) - {{gradeLineExtension}}", "y": 0},
+          "end": {"x": "({{footingWidth}} / 2) + {{gradeLineExtension}}", "y": 0}
+        },
+        {
+          "name": "Footing Left",
+          "start": {"x": "-({{footingWidth}} / 2)", "y": "-{{footingDepth}}"},
+          "end": {"x": "-({{footingWidth}} / 2)", "y": 0}
+        },
+        {
+          "name": "Footing Right",
+          "start": {"x": "{{footingWidth}} / 2", "y": "-{{footingDepth}}"},
+          "end": {"x": "{{footingWidth}} / 2", "y": 0}
+        },
+        {
+          "name": "Footing Bottom",
+          "start": {"x": "-({{footingWidth}} / 2)", "y": "-{{footingDepth}}"},
+          "end": {"x": "{{footingWidth}} / 2", "y": "-{{footingDepth}}"}
+        }
+      ]
+    }
+  ],
+  "annotations": [
+    {
+      "text": "8\" CMU WALL",
+      "position": "right of wall, centered vertically",
+      "offsetX": 0.5
+    },
+    {
+      "text": "(2) #5 CONT.",
+      "position": "leader to footing rebar"
+    },
+    {
+      "text": "#5 @ 48\" O.C. VERT.",
+      "position": "leader to vertical rebar"
+    },
+    {
+      "text": "BOND BEAM W/ (2) #5 CONT.",
+      "position": "leader to bond beam"
+    },
+    {
+      "text": "8\" CONC. FTG.",
+      "position": "leader to footing"
+    }
+  ],
+  "verified": "2026-03-05",
+  "boundsSource": "getDetailComponentTypeBounds API - measured from actual families"
+}

@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Xml.Linq;
+using SysRegex = System.Text.RegularExpressions;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Mechanical;
 using Autodesk.Revit.DB.Plumbing;
@@ -8,6 +11,7 @@ using Autodesk.Revit.UI;
 using Newtonsoft.Json.Linq;
 using RevitMCPBridge;
 using RevitMCPBridge.Helpers;
+using RevitMCPBridge.Validation;
 
 namespace RevitMCPBridge2026
 {
@@ -6628,6 +6632,2596 @@ namespace RevitMCPBridge2026
                 return DuplicateTypeAction.UseDestinationTypes;
             }
         }
+
+        #endregion
+
+        #region Batch Drawing & Layer Stack
+
+        /// <summary>
+        /// Executes multiple drawing operations in a single transaction.
+        /// Supported ops: line, arc, filledRegion, text, detailComponent, dimension
+        /// </summary>
+        [MCPMethod("batchDrawDetail", Category = "Detail", Description = "Executes multiple drawing operations in a single transaction for efficient detail creation")]
+        public static string BatchDrawDetail(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                var v = new ParameterValidator(parameters, "batchDrawDetail");
+                v.Require("viewId");
+                v.Require("operations");
+                v.ThrowIfInvalid();
+
+                int viewIdInt = parameters["viewId"].ToObject<int>();
+                View view = doc.GetElement(new ElementId(viewIdInt)) as View;
+                if (view == null)
+                    return ResponseBuilder.Error("batchDrawDetail", $"View with ID {viewIdInt} not found").Build();
+
+                var operations = parameters["operations"] as JArray;
+                if (operations == null || operations.Count == 0)
+                    return ResponseBuilder.Error("batchDrawDetail", "operations array is empty").Build();
+
+                // Cache line styles and filled region types for lookups by name
+                var lineStyleCache = new Dictionary<string, GraphicsStyle>(StringComparer.OrdinalIgnoreCase);
+                foreach (var gs in new FilteredElementCollector(doc)
+                    .OfClass(typeof(GraphicsStyle))
+                    .Cast<GraphicsStyle>())
+                {
+                    if (!lineStyleCache.ContainsKey(gs.Name))
+                        lineStyleCache[gs.Name] = gs;
+                }
+
+                var filledRegionTypeCache = new Dictionary<string, FilledRegionType>(StringComparer.OrdinalIgnoreCase);
+                foreach (var frt in new FilteredElementCollector(doc)
+                    .OfClass(typeof(FilledRegionType))
+                    .Cast<FilledRegionType>())
+                {
+                    if (!filledRegionTypeCache.ContainsKey(frt.Name))
+                        filledRegionTypeCache[frt.Name] = frt;
+                }
+
+                var results = new List<object>();
+                int successCount = 0;
+                int errorCount = 0;
+
+                using (var trans = new Transaction(doc, "MCP Batch Draw Detail"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    for (int i = 0; i < operations.Count; i++)
+                    {
+                        var op = operations[i] as JObject;
+                        string opType = op?["op"]?.ToString()?.ToLower();
+
+                        try
+                        {
+                            switch (opType)
+                            {
+                                case "line":
+                                {
+                                    var start = ParsePoint(op["start"]);
+                                    var end = ParsePoint(op["end"]);
+                                    var line = Line.CreateBound(start, end);
+                                    var detailLine = doc.Create.NewDetailCurve(view, line);
+                                    ApplyLineStyle(detailLine, op, lineStyleCache, doc);
+                                    results.Add(new { index = i, op = opType, id = (long)detailLine.Id.Value, success = true });
+                                    successCount++;
+                                    break;
+                                }
+
+                                case "arc":
+                                {
+                                    var center = ParsePoint(op["center"]);
+                                    double radius = op["radius"].ToObject<double>();
+                                    double startAngle = op["startAngle"]?.ToObject<double>() ?? 0;
+                                    double endAngle = op["endAngle"]?.ToObject<double>() ?? Math.PI * 2;
+                                    var arc = Arc.Create(center, radius, startAngle, endAngle, XYZ.BasisX, XYZ.BasisY);
+                                    var detailArc = doc.Create.NewDetailCurve(view, arc);
+                                    ApplyLineStyle(detailArc, op, lineStyleCache, doc);
+                                    results.Add(new { index = i, op = opType, id = (long)detailArc.Id.Value, success = true });
+                                    successCount++;
+                                    break;
+                                }
+
+                                case "filledregion":
+                                {
+                                    ElementId typeId = ResolveFilledRegionType(op, filledRegionTypeCache, doc);
+                                    if (typeId == null)
+                                    {
+                                        results.Add(new { index = i, op = opType, success = false, error = "Filled region type not found" });
+                                        errorCount++;
+                                        break;
+                                    }
+
+                                    var points = op["points"] as JArray;
+                                    if (points == null || points.Count < 3)
+                                    {
+                                        results.Add(new { index = i, op = opType, success = false, error = "Need at least 3 points" });
+                                        errorCount++;
+                                        break;
+                                    }
+
+                                    var xyzPoints = points.Select(p => ParsePoint(p)).ToList();
+                                    var curveLoop = new CurveLoop();
+                                    for (int j = 0; j < xyzPoints.Count; j++)
+                                    {
+                                        curveLoop.Append(Line.CreateBound(xyzPoints[j], xyzPoints[(j + 1) % xyzPoints.Count]));
+                                    }
+
+                                    var region = FilledRegion.Create(doc, typeId, view.Id, new List<CurveLoop> { curveLoop });
+                                    results.Add(new { index = i, op = opType, id = (long)region.Id.Value, success = true });
+                                    successCount++;
+                                    break;
+                                }
+
+                                case "text":
+                                {
+                                    var location = ParsePoint(op["location"]);
+                                    string text = op["text"]?.ToString() ?? "";
+
+                                    // Resolve text note type
+                                    ElementId textTypeId = null;
+                                    if (op["typeId"] != null)
+                                    {
+                                        textTypeId = new ElementId(op["typeId"].ToObject<int>());
+                                    }
+                                    else if (op["typeName"] != null)
+                                    {
+                                        var textType = new FilteredElementCollector(doc)
+                                            .OfClass(typeof(TextNoteType))
+                                            .Cast<TextNoteType>()
+                                            .FirstOrDefault(t => t.Name.Equals(op["typeName"].ToString(), StringComparison.OrdinalIgnoreCase));
+                                        textTypeId = textType?.Id;
+                                    }
+
+                                    if (textTypeId == null)
+                                    {
+                                        // Use default text note type
+                                        textTypeId = doc.GetDefaultElementTypeId(ElementTypeGroup.TextNoteType);
+                                    }
+
+                                    var textNote = TextNote.Create(doc, view.Id, location, text, textTypeId);
+                                    results.Add(new { index = i, op = opType, id = (long)textNote.Id.Value, success = true });
+                                    successCount++;
+                                    break;
+                                }
+
+                                case "detailcomponent":
+                                {
+                                    var location = ParsePoint(op["location"]);
+                                    FamilySymbol symbol = null;
+
+                                    if (op["typeId"] != null)
+                                    {
+                                        symbol = doc.GetElement(new ElementId(op["typeId"].ToObject<int>())) as FamilySymbol;
+                                    }
+                                    else if (op["familyName"] != null)
+                                    {
+                                        string famName = op["familyName"].ToString();
+                                        string typeName = op["typeName"]?.ToString();
+                                        symbol = new FilteredElementCollector(doc)
+                                            .OfClass(typeof(FamilySymbol))
+                                            .OfCategory(BuiltInCategory.OST_DetailComponents)
+                                            .Cast<FamilySymbol>()
+                                            .FirstOrDefault(fs =>
+                                                fs.Family.Name.Equals(famName, StringComparison.OrdinalIgnoreCase) &&
+                                                (typeName == null || fs.Name.Equals(typeName, StringComparison.OrdinalIgnoreCase)));
+                                    }
+
+                                    if (symbol == null)
+                                    {
+                                        results.Add(new { index = i, op = opType, success = false, error = "Detail component type not found" });
+                                        errorCount++;
+                                        break;
+                                    }
+
+                                    if (!symbol.IsActive) symbol.Activate();
+                                    var instance = doc.Create.NewFamilyInstance(location, symbol, view);
+
+                                    // Apply rotation if specified
+                                    if (op["rotation"] != null)
+                                    {
+                                        double angle = op["rotation"].ToObject<double>() * Math.PI / 180.0;
+                                        var axis = Line.CreateBound(location, location + XYZ.BasisZ);
+                                        ElementTransformUtils.RotateElement(doc, instance.Id, axis, angle);
+                                    }
+
+                                    results.Add(new { index = i, op = opType, id = (long)instance.Id.Value, success = true });
+                                    successCount++;
+                                    break;
+                                }
+
+                                default:
+                                    results.Add(new { index = i, op = opType ?? "null", success = false, error = $"Unknown operation type: {opType}" });
+                                    errorCount++;
+                                    break;
+                            }
+                        }
+                        catch (Exception opEx)
+                        {
+                            results.Add(new { index = i, op = opType ?? "null", success = false, error = opEx.Message });
+                            errorCount++;
+                        }
+                    }
+
+                    trans.Commit();
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = errorCount == 0,
+                    totalOperations = operations.Count,
+                    successCount,
+                    errorCount,
+                    results,
+                    viewId = viewIdInt
+                });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Draws a layer stack (wall/floor/roof section) in a drafting view.
+        /// Automatically creates lines, filled regions, and labels for each layer.
+        /// </summary>
+        [MCPMethod("drawLayerStack", Category = "Detail", Description = "Draws a construction assembly layer stack with automatic lines, hatches, and labels")]
+        public static string DrawLayerStack(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                var v = new ParameterValidator(parameters, "drawLayerStack");
+                v.Require("viewId");
+                v.Require("layers");
+                v.ThrowIfInvalid();
+
+                int viewIdInt = parameters["viewId"].ToObject<int>();
+                View view = doc.GetElement(new ElementId(viewIdInt)) as View;
+                if (view == null)
+                    return ResponseBuilder.Error("drawLayerStack", $"View with ID {viewIdInt} not found").Build();
+
+                var layers = parameters["layers"] as JArray;
+                if (layers == null || layers.Count == 0)
+                    return ResponseBuilder.Error("drawLayerStack", "layers array is empty").Build();
+
+                // Origin and dimensions
+                double originX = parameters["originX"]?.ToObject<double>() ?? 0;
+                double originY = parameters["originY"]?.ToObject<double>() ?? 0;
+                double height = parameters["height"]?.ToObject<double>() ?? 8.0; // default 8 feet
+                string direction = parameters["direction"]?.ToString() ?? "left-to-right"; // or right-to-left
+                bool addLabels = parameters["addLabels"]?.ToObject<bool>() ?? true;
+                double labelOffset = parameters["labelOffset"]?.ToObject<double>() ?? 0.5; // feet from stack
+                bool addDimensions = parameters["addDimensions"]?.ToObject<bool>() ?? true;
+
+                // Cache lookups
+                var lineStyleCache = new Dictionary<string, GraphicsStyle>(StringComparer.OrdinalIgnoreCase);
+                foreach (var gs in new FilteredElementCollector(doc)
+                    .OfClass(typeof(GraphicsStyle))
+                    .Cast<GraphicsStyle>())
+                {
+                    if (!lineStyleCache.ContainsKey(gs.Name))
+                        lineStyleCache[gs.Name] = gs;
+                }
+
+                var filledRegionTypeCache = new Dictionary<string, FilledRegionType>(StringComparer.OrdinalIgnoreCase);
+                foreach (var frt in new FilteredElementCollector(doc)
+                    .OfClass(typeof(FilledRegionType))
+                    .Cast<FilledRegionType>())
+                {
+                    if (!filledRegionTypeCache.ContainsKey(frt.Name))
+                        filledRegionTypeCache[frt.Name] = frt;
+                }
+
+                var createdElements = new List<object>();
+                double currentX = originX;
+                int dirMultiplier = direction == "right-to-left" ? -1 : 1;
+                var layerPositions = new List<object>(); // Track for dimension output
+
+                using (var trans = new Transaction(doc, "MCP Draw Layer Stack"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    // Default text type for labels
+                    ElementId defaultTextTypeId = doc.GetDefaultElementTypeId(ElementTypeGroup.TextNoteType);
+                    int labelIndex = 0;
+
+                    foreach (JObject layer in layers)
+                    {
+                        string layerName = layer["name"]?.ToString() ?? "Unknown";
+                        double thickness = layer["thickness"]?.ToObject<double>() ?? 0;
+                        string hatch = layer["hatch"]?.ToString(); // filled region type name
+                        string lineWeight = layer["lineWeight"]?.ToString() ?? "Thin Lines";
+                        bool isOverlay = layer["overlay"]?.ToObject<bool>() ?? false; // insulation overlaps framing
+
+                        if (thickness <= 0 && !isOverlay)
+                        {
+                            // Zero-thickness layers (membranes) - draw a single dashed line
+                            string membraneStyle = layer["linePattern"]?.ToString();
+                            GraphicsStyle dashStyle = null;
+                            if (!string.IsNullOrEmpty(membraneStyle))
+                            {
+                                lineStyleCache.TryGetValue(membraneStyle, out dashStyle);
+                            }
+
+                            var membraneLine = Line.CreateBound(
+                                new XYZ(currentX, originY, 0),
+                                new XYZ(currentX, originY + height, 0));
+                            var membraneCurve = doc.Create.NewDetailCurve(view, membraneLine);
+                            if (dashStyle != null) membraneCurve.LineStyle = dashStyle;
+
+                            createdElements.Add(new { type = "membrane", name = layerName, id = (long)membraneCurve.Id.Value });
+                            continue;
+                        }
+
+                        double layerStartX = isOverlay ? (currentX - thickness * dirMultiplier) : currentX;
+                        double layerEndX = isOverlay ? currentX : currentX + thickness * dirMultiplier;
+
+                        // Ensure start < end for geometry
+                        double leftX = Math.Min(layerStartX, layerEndX);
+                        double rightX = Math.Max(layerStartX, layerEndX);
+
+                        // Draw boundary lines (left and right edges)
+                        GraphicsStyle edgeStyle = null;
+                        lineStyleCache.TryGetValue(lineWeight, out edgeStyle);
+
+                        if (!isOverlay)
+                        {
+                            // Left edge
+                            var leftLine = Line.CreateBound(new XYZ(leftX, originY, 0), new XYZ(leftX, originY + height, 0));
+                            var leftCurve = doc.Create.NewDetailCurve(view, leftLine);
+                            if (edgeStyle != null) leftCurve.LineStyle = edgeStyle;
+
+                            // Right edge
+                            var rightLine = Line.CreateBound(new XYZ(rightX, originY, 0), new XYZ(rightX, originY + height, 0));
+                            var rightCurve = doc.Create.NewDetailCurve(view, rightLine);
+                            if (edgeStyle != null) rightCurve.LineStyle = edgeStyle;
+                        }
+
+                        // Top line
+                        var topLine = Line.CreateBound(new XYZ(leftX, originY + height, 0), new XYZ(rightX, originY + height, 0));
+                        var topCurve = doc.Create.NewDetailCurve(view, topLine);
+                        if (edgeStyle != null) topCurve.LineStyle = edgeStyle;
+
+                        // Bottom line
+                        var bottomLine = Line.CreateBound(new XYZ(leftX, originY, 0), new XYZ(rightX, originY, 0));
+                        var bottomCurve = doc.Create.NewDetailCurve(view, bottomLine);
+                        if (edgeStyle != null) bottomCurve.LineStyle = edgeStyle;
+
+                        // Create filled region if hatch pattern specified
+                        long? regionId = null;
+                        if (!string.IsNullOrEmpty(hatch))
+                        {
+                            FilledRegionType frt = null;
+                            filledRegionTypeCache.TryGetValue(hatch, out frt);
+
+                            if (frt != null)
+                            {
+                                var curveLoop = new CurveLoop();
+                                curveLoop.Append(Line.CreateBound(new XYZ(leftX, originY, 0), new XYZ(rightX, originY, 0)));
+                                curveLoop.Append(Line.CreateBound(new XYZ(rightX, originY, 0), new XYZ(rightX, originY + height, 0)));
+                                curveLoop.Append(Line.CreateBound(new XYZ(rightX, originY + height, 0), new XYZ(leftX, originY + height, 0)));
+                                curveLoop.Append(Line.CreateBound(new XYZ(leftX, originY + height, 0), new XYZ(leftX, originY, 0)));
+
+                                var region = FilledRegion.Create(doc, frt.Id, view.Id, new List<CurveLoop> { curveLoop });
+                                regionId = (long)region.Id.Value;
+                            }
+                        }
+
+                        // Add label
+                        long? textId = null;
+                        if (addLabels && !isOverlay)
+                        {
+                            // Stagger labels vertically - distribute evenly across the height
+                            double labelX = dirMultiplier > 0 ? Math.Max(originX, currentX) + labelOffset + 1.0 : Math.Min(originX, currentX) - labelOffset - 1.0;
+                            double labelSpacing = height / (layers.Count + 1);
+                            double labelY = originY + height - (labelSpacing * (labelIndex + 1));
+                            labelIndex++;
+
+                            string thicknessStr = FormatFractionalInches(thickness * 12);
+                            string labelText = $"{layerName} ({thicknessStr})";
+                            var textNote = TextNote.Create(doc, view.Id, new XYZ(labelX, labelY, 0), labelText, defaultTextTypeId);
+                            textId = (long)textNote.Id.Value;
+
+                            // Draw leader line from text to layer midpoint
+                            double layerMidX = (leftX + rightX) / 2;
+                            double layerMidY = originY + height / 2;
+                            var leaderStart = new XYZ(labelX - 0.05, labelY, 0);
+                            var leaderEnd = new XYZ(layerMidX, layerMidY, 0);
+                            if (!leaderStart.IsAlmostEqualTo(leaderEnd))
+                            {
+                                var leaderLine = doc.Create.NewDetailCurve(view, Line.CreateBound(leaderStart, leaderEnd));
+                                GraphicsStyle thinStyle = null;
+                                lineStyleCache.TryGetValue("Thin Lines", out thinStyle);
+                                if (thinStyle != null) leaderLine.LineStyle = thinStyle;
+                            }
+                        }
+
+                        layerPositions.Add(new
+                        {
+                            name = layerName,
+                            leftX,
+                            rightX,
+                            thickness,
+                            thicknessInches = Math.Round(thickness * 12, 3)
+                        });
+
+                        createdElements.Add(new
+                        {
+                            type = isOverlay ? "overlay" : "layer",
+                            name = layerName,
+                            regionId,
+                            textId,
+                            leftX,
+                            rightX,
+                            thickness
+                        });
+
+                        if (!isOverlay)
+                            currentX += thickness * dirMultiplier;
+                    }
+
+                    trans.Commit();
+                }
+
+                double totalThickness = Math.Abs(currentX - originX);
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    viewId = viewIdInt,
+                    layerCount = layers.Count,
+                    totalThicknessFeet = Math.Round(totalThickness, 4),
+                    totalThicknessInches = Math.Round(totalThickness * 12, 3),
+                    stackBounds = new
+                    {
+                        left = Math.Min(originX, currentX),
+                        right = Math.Max(originX, currentX),
+                        bottom = originY,
+                        top = originY + height
+                    },
+                    layerPositions,
+                    createdElements
+                });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Reads the compound structure (layer assembly) from a wall, floor, or roof type.
+        /// Returns layers with materials, thicknesses, and functions for detail generation.
+        /// </summary>
+        [MCPMethod("getTypeAssembly", Category = "Detail", Description = "Gets the compound structure layers from a wall, floor, or roof type for detail generation")]
+        public static string GetTypeAssembly(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                var v = new ParameterValidator(parameters, "getTypeAssembly");
+                v.Require("typeId");
+                v.ThrowIfInvalid();
+
+                int typeIdInt = parameters["typeId"].ToObject<int>();
+                var element = doc.GetElement(new ElementId(typeIdInt));
+
+                if (element == null)
+                    return ResponseBuilder.Error("getTypeAssembly", $"Element with ID {typeIdInt} not found").Build();
+
+                CompoundStructure cs = null;
+                string typeName = "";
+                string category = "";
+                double totalThickness = 0;
+
+                if (element is WallType wt)
+                {
+                    cs = wt.GetCompoundStructure();
+                    typeName = wt.Name;
+                    category = "Wall";
+                    totalThickness = wt.Width;
+                }
+                else if (element is FloorType ft)
+                {
+                    cs = ft.GetCompoundStructure();
+                    typeName = ft.Name;
+                    category = "Floor";
+                }
+                else if (element is RoofType rt)
+                {
+                    cs = rt.GetCompoundStructure();
+                    typeName = rt.Name;
+                    category = "Roof";
+                }
+                else
+                {
+                    return ResponseBuilder.Error("getTypeAssembly", $"Element {typeIdInt} is not a Wall, Floor, or Roof type (got {element.GetType().Name})").Build();
+                }
+
+                if (cs == null)
+                    return ResponseBuilder.Error("getTypeAssembly", $"Type '{typeName}' has no compound structure (may be a curtain wall or basic type)").Build();
+
+                var layers = new List<object>();
+                for (int i = 0; i < cs.LayerCount; i++)
+                {
+                    var layer = cs.GetLayers()[i];
+                    string materialName = "None";
+                    string fillPatternName = null;
+
+                    if (layer.MaterialId != ElementId.InvalidElementId)
+                    {
+                        var material = doc.GetElement(layer.MaterialId) as Material;
+                        if (material != null)
+                        {
+                            materialName = material.Name;
+
+                            // Try to get the cut fill pattern for detail hatching
+                            var cutPatternId = material.CutForegroundPatternId;
+                            if (cutPatternId != ElementId.InvalidElementId)
+                            {
+                                var pattern = doc.GetElement(cutPatternId) as FillPatternElement;
+                                fillPatternName = pattern?.Name;
+                            }
+                        }
+                    }
+
+                    string function;
+                    switch (layer.Function)
+                    {
+                        case MaterialFunctionAssignment.Structure: function = "Structure"; break;
+                        case MaterialFunctionAssignment.Substrate: function = "Substrate"; break;
+                        case MaterialFunctionAssignment.Insulation: function = "ThermalAir"; break;
+                        case MaterialFunctionAssignment.Finish1: function = "Finish1 (Exterior)"; break;
+                        case MaterialFunctionAssignment.Finish2: function = "Finish2 (Interior)"; break;
+                        case MaterialFunctionAssignment.Membrane: function = "Membrane"; break;
+                        case MaterialFunctionAssignment.StructuralDeck: function = "StructuralDeck"; break;
+                        default: function = layer.Function.ToString(); break;
+                    }
+
+                    layers.Add(new
+                    {
+                        index = i,
+                        function,
+                        material = materialName,
+                        thicknessFeet = Math.Round(layer.Width, 6),
+                        thicknessInches = Math.Round(layer.Width * 12, 4),
+                        fillPattern = fillPatternName,
+                        isStructural = layer.Function == MaterialFunctionAssignment.Structure,
+                        isVariable = false
+                    });
+                }
+
+                // Calculate total if not already set
+                if (totalThickness == 0)
+                    totalThickness = cs.GetLayers().Sum(l => l.Width);
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    typeId = typeIdInt,
+                    typeName,
+                    category,
+                    totalThicknessFeet = Math.Round(totalThickness, 6),
+                    totalThicknessInches = Math.Round(totalThickness * 12, 4),
+                    layerCount = cs.LayerCount,
+                    layers,
+                    hint = "Use drawLayerStack with these layers to auto-generate a section detail. Map 'fillPattern' to 'hatch' parameter, 'thicknessFeet' to 'thickness'."
+                });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Imports SVG markup into a drafting view as Revit detail elements.
+        /// Maps: line→DetailLine, rect/polygon/path(closed)→FilledRegion, polyline/path(open)→DetailLines,
+        /// circle→DetailArc, text→TextNote. Handles viewBox, transform="translate()", stroke-width→lineStyle.
+        /// </summary>
+        [MCPMethod("importSvgToDetail", Category = "Detail", Description = "Imports SVG markup into a drafting view as Revit detail elements")]
+        public static string ImportSvgToDetail(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                var v = new ParameterValidator(parameters, "importSvgToDetail");
+                v.Require("viewId");
+                v.Require("svg");
+                v.ThrowIfInvalid();
+
+                int viewIdInt = parameters["viewId"].ToObject<int>();
+                View view = doc.GetElement(new ElementId(viewIdInt)) as View;
+                if (view == null)
+                    return ResponseBuilder.Error("importSvgToDetail", $"View with ID {viewIdInt} not found").Build();
+
+                string svgContent = parameters["svg"].ToString();
+                double originX = parameters["originX"]?.ToObject<double>() ?? 0;
+                double originY = parameters["originY"]?.ToObject<double>() ?? 0;
+                double scaleFactor = parameters["scaleFactor"]?.ToObject<double>() ?? (1.0 / 12.0); // default: SVG units = inches → feet
+                bool flipY = parameters["flipY"]?.ToObject<bool>() ?? true; // SVG Y is down, Revit Y is up
+
+                // Stroke-width to line style mapping (user can override)
+                var strokeWidthMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    { "thin", "Thin Lines" },
+                    { "medium", "Medium Lines" },
+                    { "wide", "Wide Lines" }
+                };
+                if (parameters["lineStyleMap"] is JObject customMap)
+                {
+                    foreach (var prop in customMap.Properties())
+                        strokeWidthMap[prop.Name] = prop.Value.ToString();
+                }
+
+                // Default filled region type name for SVG fills
+                string defaultFillType = parameters["defaultFillType"]?.ToString() ?? "Solid Black";
+
+                // Parse SVG
+                XDocument svgDoc;
+                try
+                {
+                    svgDoc = XDocument.Parse(svgContent);
+                }
+                catch (Exception parseEx)
+                {
+                    return ResponseBuilder.Error("importSvgToDetail", $"Failed to parse SVG: {parseEx.Message}").Build();
+                }
+
+                XNamespace ns = "http://www.w3.org/2000/svg";
+                var root = svgDoc.Root;
+
+                // Handle viewBox for coordinate mapping
+                double svgViewBoxX = 0, svgViewBoxY = 0, svgViewBoxW = 100, svgViewBoxH = 100;
+                string viewBox = root.Attribute("viewBox")?.Value;
+                if (!string.IsNullOrEmpty(viewBox))
+                {
+                    var parts = viewBox.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 4)
+                    {
+                        double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out svgViewBoxX);
+                        double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out svgViewBoxY);
+                        double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out svgViewBoxW);
+                        double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out svgViewBoxH);
+                    }
+                }
+
+                // If user specifies targetWidth, auto-calculate scaleFactor
+                if (parameters["targetWidthFeet"] != null)
+                {
+                    double targetW = parameters["targetWidthFeet"].ToObject<double>();
+                    scaleFactor = targetW / svgViewBoxW;
+                }
+                else if (parameters["targetHeightFeet"] != null)
+                {
+                    double targetH = parameters["targetHeightFeet"].ToObject<double>();
+                    scaleFactor = targetH / svgViewBoxH;
+                }
+
+                // Cache line styles
+                var lineStyleCache = new Dictionary<string, GraphicsStyle>(StringComparer.OrdinalIgnoreCase);
+                foreach (var gs in new FilteredElementCollector(doc)
+                    .OfClass(typeof(GraphicsStyle))
+                    .Cast<GraphicsStyle>())
+                {
+                    if (!lineStyleCache.ContainsKey(gs.Name))
+                        lineStyleCache[gs.Name] = gs;
+                }
+
+                // Cache filled region types
+                var filledRegionTypeCache = new Dictionary<string, FilledRegionType>(StringComparer.OrdinalIgnoreCase);
+                foreach (var frt in new FilteredElementCollector(doc)
+                    .OfClass(typeof(FilledRegionType))
+                    .Cast<FilledRegionType>())
+                {
+                    if (!filledRegionTypeCache.ContainsKey(frt.Name))
+                        filledRegionTypeCache[frt.Name] = frt;
+                }
+
+                ElementId defaultTextTypeId = doc.GetDefaultElementTypeId(ElementTypeGroup.TextNoteType);
+
+                var results = new List<object>();
+                int successCount = 0, errorCount = 0;
+
+                // Transform helper: SVG coords → Revit coords
+                Func<double, double, XYZ> toRevit = (sx, sy) =>
+                {
+                    double rx = originX + (sx - svgViewBoxX) * scaleFactor;
+                    double ry = flipY
+                        ? originY + (svgViewBoxH - (sy - svgViewBoxY)) * scaleFactor
+                        : originY + (sy - svgViewBoxY) * scaleFactor;
+                    return new XYZ(rx, ry, 0);
+                };
+
+                using (var trans = new Transaction(doc, "MCP Import SVG to Detail"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    ProcessSvgElements(doc, view, root, ns, toRevit, 0, 0,
+                        lineStyleCache, filledRegionTypeCache, strokeWidthMap, defaultFillType,
+                        defaultTextTypeId, scaleFactor, flipY, results, ref successCount, ref errorCount);
+
+                    trans.Commit();
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = errorCount == 0,
+                    viewId = viewIdInt,
+                    totalElements = successCount + errorCount,
+                    successCount,
+                    errorCount,
+                    scaleFactor,
+                    svgViewBox = new { x = svgViewBoxX, y = svgViewBoxY, w = svgViewBoxW, h = svgViewBoxH },
+                    results
+                });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Recursively processes SVG elements, handling groups and transforms
+        /// </summary>
+        private static void ProcessSvgElements(
+            Document doc, View view, XElement parent, XNamespace ns,
+            Func<double, double, XYZ> toRevit, double txOffset, double tyOffset,
+            Dictionary<string, GraphicsStyle> lineStyleCache,
+            Dictionary<string, FilledRegionType> filledRegionTypeCache,
+            Dictionary<string, string> strokeWidthMap,
+            string defaultFillType, ElementId defaultTextTypeId,
+            double scaleFactor, bool flipY,
+            List<object> results, ref int successCount, ref int errorCount)
+        {
+            foreach (var elem in parent.Elements())
+            {
+                string localName = elem.Name.LocalName.ToLower();
+
+                // Handle group transforms
+                double gx = txOffset, gy = tyOffset;
+                string transform = elem.Attribute("transform")?.Value;
+                if (!string.IsNullOrEmpty(transform))
+                {
+                    var m = SysRegex.Regex.Match(transform, @"translate\(\s*([\d.\-e]+)[\s,]+([\d.\-e]+)\s*\)");
+                    if (m.Success)
+                    {
+                        double.TryParse(m.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double tdx);
+                        double.TryParse(m.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double tdy);
+                        gx += tdx;
+                        gy += tdy;
+                    }
+                }
+
+                // Adjusted transform that includes group offsets
+                Func<double, double, XYZ> adjToRevit = (sx, sy) => toRevit(sx + gx, sy + gy);
+
+                try
+                {
+                    switch (localName)
+                    {
+                        case "g":
+                        case "svg":
+                            ProcessSvgElements(doc, view, elem, ns, toRevit, gx, gy,
+                                lineStyleCache, filledRegionTypeCache, strokeWidthMap, defaultFillType,
+                                defaultTextTypeId, scaleFactor, flipY, results, ref successCount, ref errorCount);
+                            break;
+
+                        case "line":
+                        {
+                            double x1 = SvgAttrDouble(elem, "x1"), y1 = SvgAttrDouble(elem, "y1");
+                            double x2 = SvgAttrDouble(elem, "x2"), y2 = SvgAttrDouble(elem, "y2");
+                            var p1 = adjToRevit(x1, y1);
+                            var p2 = adjToRevit(x2, y2);
+                            if (!p1.IsAlmostEqualTo(p2))
+                            {
+                                var curve = doc.Create.NewDetailCurve(view, Line.CreateBound(p1, p2));
+                                ApplySvgLineStyle(curve, elem, lineStyleCache, strokeWidthMap);
+                                results.Add(new { type = "line", id = (long)curve.Id.Value });
+                                successCount++;
+                            }
+                            break;
+                        }
+
+                        case "rect":
+                        {
+                            double rx = SvgAttrDouble(elem, "x"), ry = SvgAttrDouble(elem, "y");
+                            double rw = SvgAttrDouble(elem, "width"), rh = SvgAttrDouble(elem, "height");
+                            if (rw > 0 && rh > 0)
+                            {
+                                var bl = adjToRevit(rx, ry + rh);
+                                var br = adjToRevit(rx + rw, ry + rh);
+                                var tr = adjToRevit(rx + rw, ry);
+                                var tl = adjToRevit(rx, ry);
+
+                                string fill = elem.Attribute("fill")?.Value;
+                                bool hasFill = !string.IsNullOrEmpty(fill) && fill != "none" && fill != "transparent";
+
+                                if (hasFill)
+                                {
+                                    // Create filled region
+                                    string fillTypeName = elem.Attribute("data-revit-fill")?.Value ?? defaultFillType;
+                                    FilledRegionType frt;
+                                    if (filledRegionTypeCache.TryGetValue(fillTypeName, out frt))
+                                    {
+                                        var loop = new CurveLoop();
+                                        loop.Append(Line.CreateBound(bl, br));
+                                        loop.Append(Line.CreateBound(br, tr));
+                                        loop.Append(Line.CreateBound(tr, tl));
+                                        loop.Append(Line.CreateBound(tl, bl));
+                                        var region = FilledRegion.Create(doc, frt.Id, view.Id, new List<CurveLoop> { loop });
+                                        results.Add(new { type = "rect-fill", id = (long)region.Id.Value });
+                                        successCount++;
+                                    }
+                                }
+
+                                string stroke = elem.Attribute("stroke")?.Value;
+                                bool hasStroke = string.IsNullOrEmpty(stroke) || stroke != "none";
+                                if (hasStroke)
+                                {
+                                    // Draw rectangle outline
+                                    var lines = new[] {
+                                        Line.CreateBound(bl, br), Line.CreateBound(br, tr),
+                                        Line.CreateBound(tr, tl), Line.CreateBound(tl, bl)
+                                    };
+                                    foreach (var line in lines)
+                                    {
+                                        if (line.Length > 0.001)
+                                        {
+                                            var curve = doc.Create.NewDetailCurve(view, line);
+                                            ApplySvgLineStyle(curve, elem, lineStyleCache, strokeWidthMap);
+                                        }
+                                    }
+                                    results.Add(new { type = "rect-stroke", lines = 4 });
+                                    successCount++;
+                                }
+                            }
+                            break;
+                        }
+
+                        case "circle":
+                        {
+                            double cx = SvgAttrDouble(elem, "cx"), cy = SvgAttrDouble(elem, "cy");
+                            double r = SvgAttrDouble(elem, "r");
+                            if (r > 0)
+                            {
+                                var center = adjToRevit(cx, cy);
+                                double rFeet = r * scaleFactor;
+                                // Create two semicircles (Revit can't do full circle as single arc)
+                                var arc1 = Arc.Create(center, rFeet, 0, Math.PI, XYZ.BasisX, XYZ.BasisY);
+                                var arc2 = Arc.Create(center, rFeet, Math.PI, Math.PI * 2, XYZ.BasisX, XYZ.BasisY);
+                                var c1 = doc.Create.NewDetailCurve(view, arc1);
+                                var c2 = doc.Create.NewDetailCurve(view, arc2);
+                                ApplySvgLineStyle(c1, elem, lineStyleCache, strokeWidthMap);
+                                ApplySvgLineStyle(c2, elem, lineStyleCache, strokeWidthMap);
+                                results.Add(new { type = "circle", id1 = (long)c1.Id.Value, id2 = (long)c2.Id.Value });
+                                successCount++;
+                            }
+                            break;
+                        }
+
+                        case "polyline":
+                        case "polygon":
+                        {
+                            string pointsStr = elem.Attribute("points")?.Value;
+                            if (!string.IsNullOrEmpty(pointsStr))
+                            {
+                                var pts = ParseSvgPointList(pointsStr, adjToRevit);
+                                if (pts.Count >= 2)
+                                {
+                                    string fill = elem.Attribute("fill")?.Value;
+                                    bool hasFill = localName == "polygon" && !string.IsNullOrEmpty(fill) && fill != "none";
+
+                                    if (hasFill && pts.Count >= 3)
+                                    {
+                                        string fillTypeName = elem.Attribute("data-revit-fill")?.Value ?? defaultFillType;
+                                        FilledRegionType frt;
+                                        if (filledRegionTypeCache.TryGetValue(fillTypeName, out frt))
+                                        {
+                                            var loop = new CurveLoop();
+                                            for (int i = 0; i < pts.Count; i++)
+                                                loop.Append(Line.CreateBound(pts[i], pts[(i + 1) % pts.Count]));
+                                            var region = FilledRegion.Create(doc, frt.Id, view.Id, new List<CurveLoop> { loop });
+                                            results.Add(new { type = localName + "-fill", id = (long)region.Id.Value });
+                                            successCount++;
+                                        }
+                                    }
+
+                                    // Draw lines
+                                    int lineCount = localName == "polygon" ? pts.Count : pts.Count - 1;
+                                    for (int i = 0; i < lineCount; i++)
+                                    {
+                                        var p1 = pts[i];
+                                        var p2 = pts[(i + 1) % pts.Count];
+                                        if (!p1.IsAlmostEqualTo(p2))
+                                        {
+                                            var curve = doc.Create.NewDetailCurve(view, Line.CreateBound(p1, p2));
+                                            ApplySvgLineStyle(curve, elem, lineStyleCache, strokeWidthMap);
+                                        }
+                                    }
+                                    results.Add(new { type = localName + "-stroke", lineCount });
+                                    successCount++;
+                                }
+                            }
+                            break;
+                        }
+
+                        case "path":
+                        {
+                            string d = elem.Attribute("d")?.Value;
+                            if (!string.IsNullOrEmpty(d))
+                            {
+                                var pathSegments = ParseSvgPath(d, adjToRevit);
+                                string fill = elem.Attribute("fill")?.Value;
+                                bool isClosed = pathSegments.isClosed;
+                                bool hasFill = isClosed && !string.IsNullOrEmpty(fill) && fill != "none";
+
+                                if (hasFill && pathSegments.points.Count >= 3)
+                                {
+                                    string fillTypeName = elem.Attribute("data-revit-fill")?.Value ?? defaultFillType;
+                                    FilledRegionType frt;
+                                    if (filledRegionTypeCache.TryGetValue(fillTypeName, out frt))
+                                    {
+                                        try
+                                        {
+                                            var loop = new CurveLoop();
+                                            var fPts = pathSegments.points;
+                                            for (int i = 0; i < fPts.Count; i++)
+                                                loop.Append(Line.CreateBound(fPts[i], fPts[(i + 1) % fPts.Count]));
+                                            var region = FilledRegion.Create(doc, frt.Id, view.Id, new List<CurveLoop> { loop });
+                                            results.Add(new { type = "path-fill", id = (long)region.Id.Value });
+                                            successCount++;
+                                        }
+                                        catch { /* filled region from path failed, continue with lines */ }
+                                    }
+                                }
+
+                                // Draw line segments
+                                int drawnLines = 0;
+                                var allPts = pathSegments.points;
+                                int segCount = isClosed ? allPts.Count : allPts.Count - 1;
+                                for (int i = 0; i < segCount && i < allPts.Count - 1; i++)
+                                {
+                                    if (!allPts[i].IsAlmostEqualTo(allPts[i + 1]))
+                                    {
+                                        var curve = doc.Create.NewDetailCurve(view, Line.CreateBound(allPts[i], allPts[i + 1]));
+                                        ApplySvgLineStyle(curve, elem, lineStyleCache, strokeWidthMap);
+                                        drawnLines++;
+                                    }
+                                }
+                                if (isClosed && allPts.Count >= 2 && !allPts.Last().IsAlmostEqualTo(allPts.First()))
+                                {
+                                    var curve = doc.Create.NewDetailCurve(view, Line.CreateBound(allPts.Last(), allPts.First()));
+                                    ApplySvgLineStyle(curve, elem, lineStyleCache, strokeWidthMap);
+                                    drawnLines++;
+                                }
+                                results.Add(new { type = "path-stroke", lines = drawnLines, closed = isClosed });
+                                successCount++;
+                            }
+                            break;
+                        }
+
+                        case "text":
+                        {
+                            double tx = SvgAttrDouble(elem, "x"), ty = SvgAttrDouble(elem, "y");
+                            string textContent = elem.Value?.Trim();
+                            if (!string.IsNullOrEmpty(textContent))
+                            {
+                                var pos = adjToRevit(tx, ty);
+                                var textNote = TextNote.Create(doc, view.Id, pos, textContent, defaultTextTypeId);
+                                results.Add(new { type = "text", id = (long)textNote.Id.Value, text = textContent });
+                                successCount++;
+                            }
+                            break;
+                        }
+                    }
+                }
+                catch (Exception elemEx)
+                {
+                    results.Add(new { type = localName, error = elemEx.Message });
+                    errorCount++;
+                }
+            }
+        }
+
+        #region SVG Parsing Helpers
+
+        private static double SvgAttrDouble(XElement elem, string attr)
+        {
+            string val = elem.Attribute(attr)?.Value;
+            if (string.IsNullOrEmpty(val)) return 0;
+            // Strip units like "px", "pt", etc.
+            val = SysRegex.Regex.Replace(val, @"[a-zA-Z%]+$", "").Trim();
+            double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out double result);
+            return result;
+        }
+
+        private static List<XYZ> ParseSvgPointList(string pointsStr, Func<double, double, XYZ> toRevit)
+        {
+            var result = new List<XYZ>();
+            var nums = SysRegex.Regex.Matches(pointsStr, @"[\-+]?[\d]*\.?[\d]+(?:[eE][\-+]?\d+)?");
+            for (int i = 0; i + 1 < nums.Count; i += 2)
+            {
+                double.TryParse(nums[i].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double x);
+                double.TryParse(nums[i + 1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double y);
+                result.Add(toRevit(x, y));
+            }
+            return result;
+        }
+
+        private static (List<XYZ> points, bool isClosed) ParseSvgPath(string d, Func<double, double, XYZ> toRevit)
+        {
+            var points = new List<XYZ>();
+            bool isClosed = false;
+            double cx = 0, cy = 0; // current point
+            double mx = 0, my = 0; // move-to point (for Z command)
+
+            // Tokenize: split into commands and numbers
+            var tokens = SysRegex.Regex.Matches(d, @"[MmLlHhVvZzCcSsQqTtAa]|[\-+]?[\d]*\.?[\d]+(?:[eE][\-+]?\d+)?");
+
+            char cmd = 'M';
+            var nums = new List<double>();
+
+            Action processCommand = () =>
+            {
+                switch (cmd)
+                {
+                    case 'M':
+                        if (nums.Count >= 2) { cx = nums[0]; cy = nums[1]; mx = cx; my = cy; points.Add(toRevit(cx, cy)); }
+                        // Additional pairs are implicit LineTo
+                        for (int i = 2; i + 1 < nums.Count; i += 2) { cx = nums[i]; cy = nums[i + 1]; points.Add(toRevit(cx, cy)); }
+                        break;
+                    case 'm':
+                        if (nums.Count >= 2) { cx += nums[0]; cy += nums[1]; mx = cx; my = cy; points.Add(toRevit(cx, cy)); }
+                        for (int i = 2; i + 1 < nums.Count; i += 2) { cx += nums[i]; cy += nums[i + 1]; points.Add(toRevit(cx, cy)); }
+                        break;
+                    case 'L':
+                        for (int i = 0; i + 1 < nums.Count; i += 2) { cx = nums[i]; cy = nums[i + 1]; points.Add(toRevit(cx, cy)); }
+                        break;
+                    case 'l':
+                        for (int i = 0; i + 1 < nums.Count; i += 2) { cx += nums[i]; cy += nums[i + 1]; points.Add(toRevit(cx, cy)); }
+                        break;
+                    case 'H':
+                        foreach (var n in nums) { cx = n; points.Add(toRevit(cx, cy)); }
+                        break;
+                    case 'h':
+                        foreach (var n in nums) { cx += n; points.Add(toRevit(cx, cy)); }
+                        break;
+                    case 'V':
+                        foreach (var n in nums) { cy = n; points.Add(toRevit(cx, cy)); }
+                        break;
+                    case 'v':
+                        foreach (var n in nums) { cy += n; points.Add(toRevit(cx, cy)); }
+                        break;
+                    case 'Z':
+                    case 'z':
+                        isClosed = true;
+                        cx = mx; cy = my;
+                        break;
+                    case 'C': // Cubic bezier - approximate with endpoint (skip control points)
+                        for (int i = 0; i + 5 < nums.Count; i += 6) { cx = nums[i + 4]; cy = nums[i + 5]; points.Add(toRevit(cx, cy)); }
+                        break;
+                    case 'c':
+                        for (int i = 0; i + 5 < nums.Count; i += 6) { cx += nums[i + 4]; cy += nums[i + 5]; points.Add(toRevit(cx, cy)); }
+                        break;
+                    case 'Q': // Quadratic bezier - approximate with endpoint
+                        for (int i = 0; i + 3 < nums.Count; i += 4) { cx = nums[i + 2]; cy = nums[i + 3]; points.Add(toRevit(cx, cy)); }
+                        break;
+                    case 'q':
+                        for (int i = 0; i + 3 < nums.Count; i += 4) { cx += nums[i + 2]; cy += nums[i + 3]; points.Add(toRevit(cx, cy)); }
+                        break;
+                    case 'A': // Arc - approximate with endpoint
+                        for (int i = 0; i + 6 < nums.Count; i += 7) { cx = nums[i + 5]; cy = nums[i + 6]; points.Add(toRevit(cx, cy)); }
+                        break;
+                    case 'a':
+                        for (int i = 0; i + 6 < nums.Count; i += 7) { cx += nums[i + 5]; cy += nums[i + 6]; points.Add(toRevit(cx, cy)); }
+                        break;
+                }
+                nums.Clear();
+            };
+
+            foreach (SysRegex.Match token in tokens)
+            {
+                string val = token.Value;
+                if (val.Length == 1 && char.IsLetter(val[0]))
+                {
+                    processCommand();
+                    cmd = val[0];
+                }
+                else
+                {
+                    double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out double num);
+                    nums.Add(num);
+                }
+            }
+            processCommand(); // Process last command
+
+            return (points, isClosed);
+        }
+
+        private static void ApplySvgLineStyle(DetailCurve curve, XElement elem,
+            Dictionary<string, GraphicsStyle> lineStyleCache, Dictionary<string, string> strokeWidthMap)
+        {
+            // Check for explicit Revit line style attribute
+            string revitStyle = elem.Attribute("data-revit-linestyle")?.Value;
+            if (!string.IsNullOrEmpty(revitStyle))
+            {
+                GraphicsStyle gs;
+                if (lineStyleCache.TryGetValue(revitStyle, out gs))
+                {
+                    curve.LineStyle = gs;
+                    return;
+                }
+            }
+
+            // Map stroke-width to line style
+            string strokeWidth = elem.Attribute("stroke-width")?.Value;
+            if (!string.IsNullOrEmpty(strokeWidth))
+            {
+                // Check custom mapping first
+                GraphicsStyle gs;
+                if (strokeWidthMap.ContainsKey(strokeWidth) && lineStyleCache.TryGetValue(strokeWidthMap[strokeWidth], out gs))
+                {
+                    curve.LineStyle = gs;
+                    return;
+                }
+
+                // Numeric mapping: <1 = thin, 1-2 = medium, >2 = wide
+                double.TryParse(strokeWidth.Replace("px", ""), NumberStyles.Float, CultureInfo.InvariantCulture, out double sw);
+                string targetStyle = sw <= 1 ? "Thin Lines" : sw <= 2 ? "Medium Lines" : "Wide Lines";
+                if (lineStyleCache.TryGetValue(targetStyle, out gs))
+                    curve.LineStyle = gs;
+            }
+        }
+
+        #endregion
+
+        #region Private Helpers for Batch Drawing
+
+        private static string FormatFractionalInches(double inches)
+        {
+            inches = Math.Round(inches, 4);
+            int wholeInches = (int)Math.Floor(inches);
+            double fraction = inches - wholeInches;
+
+            string fracStr = "";
+            if (fraction > 0.001)
+            {
+                double sixteenths = Math.Round(fraction * 16);
+                if (sixteenths >= 16) { wholeInches++; fracStr = ""; }
+                else if (Math.Abs(sixteenths - 8) < 0.1) fracStr = "1/2";
+                else if (Math.Abs(sixteenths - 4) < 0.1) fracStr = "1/4";
+                else if (Math.Abs(sixteenths - 12) < 0.1) fracStr = "3/4";
+                else if (Math.Abs(sixteenths - 2) < 0.1) fracStr = "1/8";
+                else if (Math.Abs(sixteenths - 6) < 0.1) fracStr = "3/8";
+                else if (Math.Abs(sixteenths - 10) < 0.1) fracStr = "5/8";
+                else if (Math.Abs(sixteenths - 14) < 0.1) fracStr = "7/8";
+                else if (Math.Abs(sixteenths - 1) < 0.1) fracStr = "1/16";
+                else if (Math.Abs(sixteenths - 3) < 0.1) fracStr = "3/16";
+                else if (Math.Abs(sixteenths - 5) < 0.1) fracStr = "5/16";
+                else if (Math.Abs(sixteenths - 7) < 0.1) fracStr = "7/16";
+                else if (Math.Abs(sixteenths - 9) < 0.1) fracStr = "9/16";
+                else if (Math.Abs(sixteenths - 11) < 0.1) fracStr = "11/16";
+                else if (Math.Abs(sixteenths - 13) < 0.1) fracStr = "13/16";
+                else if (Math.Abs(sixteenths - 15) < 0.1) fracStr = "15/16";
+                else fracStr = $"{(int)sixteenths}/16";
+            }
+
+            if (wholeInches > 0 && !string.IsNullOrEmpty(fracStr)) return $"{wholeInches}-{fracStr}\"";
+            if (wholeInches > 0) return $"{wholeInches}\"";
+            if (!string.IsNullOrEmpty(fracStr)) return $"{fracStr}\"";
+            return "0\"";
+        }
+
+        /// <summary>
+        /// Parses a point from either [x, y] array or {x, y} object format
+        /// </summary>
+        private static XYZ ParsePoint(JToken token)
+        {
+            if (token is JArray arr)
+            {
+                return new XYZ(
+                    arr[0].ToObject<double>(),
+                    arr[1].ToObject<double>(),
+                    arr.Count > 2 ? arr[2].ToObject<double>() : 0);
+            }
+            else if (token is JObject obj)
+            {
+                return new XYZ(
+                    obj["x"].ToObject<double>(),
+                    obj["y"].ToObject<double>(),
+                    obj["z"]?.ToObject<double>() ?? 0);
+            }
+            throw new ArgumentException("Point must be [x,y] array or {x,y} object");
+        }
+
+        /// <summary>
+        /// Applies line style to a detail curve by name or ID
+        /// </summary>
+        private static void ApplyLineStyle(DetailCurve curve, JObject op, Dictionary<string, GraphicsStyle> cache, Document doc)
+        {
+            if (op["lineStyleId"] != null)
+            {
+                var style = doc.GetElement(new ElementId(op["lineStyleId"].ToObject<int>())) as GraphicsStyle;
+                if (style != null) curve.LineStyle = style;
+            }
+            else if (op["lineStyle"] != null)
+            {
+                GraphicsStyle style;
+                if (cache.TryGetValue(op["lineStyle"].ToString(), out style))
+                    curve.LineStyle = style;
+            }
+        }
+
+        /// <summary>
+        /// Resolves filled region type by ID or name
+        /// </summary>
+        private static ElementId ResolveFilledRegionType(JObject op, Dictionary<string, FilledRegionType> cache, Document doc)
+        {
+            if (op["typeId"] != null)
+            {
+                return new ElementId(op["typeId"].ToObject<int>());
+            }
+            else if (op["typeName"] != null)
+            {
+                FilledRegionType frt;
+                if (cache.TryGetValue(op["typeName"].ToString(), out frt))
+                    return frt.Id;
+            }
+            return null;
+        }
+
+        #endregion
+
+        #region Architect-Quality Detail Rendering
+
+        /// <summary>
+        /// Draws an architect-quality wall/floor/roof section detail with proper material representations.
+        /// </summary>
+        [MCPMethod("drawAssemblyDetail", Category = "Detail", Description = "Draws architect-quality section detail from a wall/floor/roof type with proper material graphic conventions")]
+        public static string DrawAssemblyDetail(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                var v = new ParameterValidator(parameters, "drawAssemblyDetail");
+                v.Require("viewId");
+                v.Require("typeId");
+                v.ThrowIfInvalid();
+
+                int viewIdInt = parameters["viewId"].ToObject<int>();
+                View view = doc.GetElement(new ElementId(viewIdInt)) as View;
+                if (view == null)
+                    return ResponseBuilder.Error("drawAssemblyDetail", $"View {viewIdInt} not found").Build();
+
+                int typeIdInt = parameters["typeId"].ToObject<int>();
+                var element = doc.GetElement(new ElementId(typeIdInt));
+                if (element == null)
+                    return ResponseBuilder.Error("drawAssemblyDetail", $"Type {typeIdInt} not found").Build();
+
+                CompoundStructure cs = null;
+                string typeName = "";
+                if (element is WallType wt) { cs = wt.GetCompoundStructure(); typeName = wt.Name; }
+                else if (element is FloorType ft) { cs = ft.GetCompoundStructure(); typeName = ft.Name; }
+                else if (element is RoofType rt) { cs = rt.GetCompoundStructure(); typeName = rt.Name; }
+                else return ResponseBuilder.Error("drawAssemblyDetail", "Element is not a Wall, Floor, or Roof type").Build();
+
+                if (cs == null)
+                    return ResponseBuilder.Error("drawAssemblyDetail", $"Type '{typeName}' has no compound structure").Build();
+
+                double originX = parameters["originX"]?.ToObject<double>() ?? 0;
+                double originY = parameters["originY"]?.ToObject<double>() ?? 0;
+                double height = parameters["height"]?.ToObject<double>() ?? 2.5;
+                double studSpacing = parameters["studSpacing"]?.ToObject<double>() ?? (16.0 / 12.0);
+                double brickCourseHeight = parameters["brickCourseHeight"]?.ToObject<double>() ?? (2.667 / 12.0);
+                double mortarJointWidth = parameters["mortarJointWidth"]?.ToObject<double>() ?? (0.375 / 12.0);
+                bool addDimensions = parameters["addDimensions"]?.ToObject<bool>() ?? true;
+                bool addLabels = parameters["addLabels"]?.ToObject<bool>() ?? true;
+                bool addBreakLines = parameters["addBreakLines"]?.ToObject<bool>() ?? true;
+                string direction = parameters["direction"]?.ToString() ?? "left-to-right";
+                double dirMult = direction.Contains("right-to-left") ? -1 : 1;
+
+                var lineStyleCache = new Dictionary<string, GraphicsStyle>(StringComparer.OrdinalIgnoreCase);
+                foreach (var gs in new FilteredElementCollector(doc).OfClass(typeof(GraphicsStyle)).Cast<GraphicsStyle>())
+                    if (!lineStyleCache.ContainsKey(gs.Name)) lineStyleCache[gs.Name] = gs;
+
+                var filledRegionTypeCache = new Dictionary<string, FilledRegionType>(StringComparer.OrdinalIgnoreCase);
+                foreach (var frt in new FilteredElementCollector(doc).OfClass(typeof(FilledRegionType)).Cast<FilledRegionType>())
+                    if (!filledRegionTypeCache.ContainsKey(frt.Name)) filledRegionTypeCache[frt.Name] = frt;
+
+                GraphicsStyle thinStyle = null, mediumStyle = null, heavyStyle = null;
+                lineStyleCache.TryGetValue("Thin Lines", out thinStyle);
+                lineStyleCache.TryGetValue("Medium Lines", out mediumStyle);
+                lineStyleCache.TryGetValue("Wide Lines", out heavyStyle);
+                if (heavyStyle == null) heavyStyle = mediumStyle;
+
+                GraphicsStyle hiddenStyle = null;
+                lineStyleCache.TryGetValue("Hidden", out hiddenStyle);
+                if (hiddenStyle == null) lineStyleCache.TryGetValue("<Hidden>", out hiddenStyle);
+
+                ElementId defaultTextTypeId = doc.GetDefaultElementTypeId(ElementTypeGroup.TextNoteType);
+
+                var layers = cs.GetLayers();
+                double currentX = originX;
+                var createdIds = new List<long>();
+                var layerInfos = new List<object>();
+
+                using (var trans = new Transaction(doc, "MCP Draw Assembly Detail"))
+                {
+                    trans.Start();
+                    var failOpts = trans.GetFailureHandlingOptions();
+                    failOpts.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failOpts);
+
+                    foreach (var layer in layers)
+                    {
+                        double thick = layer.Width;
+                        string matName = "Unknown";
+                        string fillPatName = null;
+                        MaterialFunctionAssignment func = layer.Function;
+
+                        if (layer.MaterialId != ElementId.InvalidElementId)
+                        {
+                            var mat = doc.GetElement(layer.MaterialId) as Material;
+                            if (mat != null)
+                            {
+                                matName = mat.Name;
+                                var cutPat = mat.CutForegroundPatternId;
+                                if (cutPat != ElementId.InvalidElementId)
+                                {
+                                    var patEl = doc.GetElement(cutPat) as FillPatternElement;
+                                    fillPatName = patEl?.Name;
+                                }
+                            }
+                        }
+
+                        string matClass = ClassifyMaterial(matName, func);
+
+                        if (thick <= 0)
+                        {
+                            if (func == MaterialFunctionAssignment.Membrane)
+                            {
+                                var memLine = Line.CreateBound(new XYZ(currentX, originY, 0), new XYZ(currentX, originY + height, 0));
+                                var memCurve = doc.Create.NewDetailCurve(view, memLine);
+                                if (hiddenStyle != null) memCurve.LineStyle = hiddenStyle;
+                                else if (thinStyle != null) memCurve.LineStyle = thinStyle;
+                                createdIds.Add((long)memCurve.Id.Value);
+                                layerInfos.Add(new { name = matName, function = func.ToString(), matClass, thickness = 0.0, rendering = "membrane_line" });
+                            }
+                            continue;
+                        }
+
+                        double layerLeft = dirMult > 0 ? currentX : currentX - thick;
+                        double layerRight = dirMult > 0 ? currentX + thick : currentX;
+
+                        switch (matClass)
+                        {
+                            case "brick":
+                                DrawBrickCoursing(doc, view, layerLeft, layerRight, originY, height, brickCourseHeight, mortarJointWidth, heavyStyle, thinStyle, createdIds);
+                                break;
+                            case "cmu":
+                                DrawCMUCoursing(doc, view, layerLeft, layerRight, originY, height, heavyStyle, thinStyle, filledRegionTypeCache, createdIds);
+                                break;
+                            case "wood_stud":
+                                DrawWoodStuds(doc, view, layerLeft, layerRight, originY, height, thick, studSpacing, mediumStyle, thinStyle, createdIds);
+                                break;
+                            case "insulation":
+                                DrawBattInsulation(doc, view, layerLeft, layerRight, originY, height, thinStyle, createdIds);
+                                break;
+                            case "gypsum":
+                                DrawSolidLayer(doc, view, layerLeft, layerRight, originY, height, thinStyle, filledRegionTypeCache, "Sand", createdIds);
+                                break;
+                            case "plywood": case "sheathing":
+                                DrawSolidLayer(doc, view, layerLeft, layerRight, originY, height, thinStyle, filledRegionTypeCache, fillPatName, createdIds);
+                                break;
+                            case "concrete":
+                                DrawSolidLayer(doc, view, layerLeft, layerRight, originY, height, heavyStyle, filledRegionTypeCache, "Concrete", createdIds);
+                                break;
+                            case "air":
+                                DrawAirGap(doc, view, layerLeft, layerRight, originY, height, hiddenStyle ?? thinStyle, createdIds);
+                                break;
+                            default:
+                                DrawSolidLayer(doc, view, layerLeft, layerRight, originY, height, thinStyle, filledRegionTypeCache, fillPatName, createdIds);
+                                break;
+                        }
+
+                        layerInfos.Add(new { name = matName, function = func.ToString(), matClass, thickness = Math.Round(thick, 6),
+                            thicknessInches = Math.Round(thick * 12, 3), leftX = layerLeft, rightX = layerRight, rendering = matClass });
+                        currentX += thick * dirMult;
+                    }
+
+                    if (addBreakLines)
+                    {
+                        double stackLeft = Math.Min(originX, currentX) - 0.02;
+                        double stackRight = Math.Max(originX, currentX) + 0.02;
+                        DrawBreakLine(doc, view, stackLeft, stackRight, originY + height, thinStyle, createdIds);
+                        DrawBreakLine(doc, view, stackLeft, stackRight, originY, thinStyle, createdIds);
+                    }
+
+                    if (addDimensions)
+                    {
+                        double dimY = originY - 0.3;
+                        double stackLeft = Math.Min(originX, currentX);
+                        double stackRight = Math.Max(originX, currentX);
+                        var dimLine = Line.CreateBound(new XYZ(stackLeft, dimY, 0), new XYZ(stackRight, dimY, 0));
+                        var overallDimCurve = doc.Create.NewDetailCurve(view, dimLine);
+                        if (thinStyle != null) overallDimCurve.LineStyle = thinStyle;
+                        createdIds.Add((long)overallDimCurve.Id.Value);
+
+                        double tickLen = 0.08;
+                        var tickL = doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(stackLeft, dimY - tickLen, 0), new XYZ(stackLeft, dimY + tickLen, 0)));
+                        var tickR = doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(stackRight, dimY - tickLen, 0), new XYZ(stackRight, dimY + tickLen, 0)));
+                        if (thinStyle != null) { tickL.LineStyle = thinStyle; tickR.LineStyle = thinStyle; }
+                        createdIds.Add((long)tickL.Id.Value); createdIds.Add((long)tickR.Id.Value);
+
+                        var extL = doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(stackLeft, originY, 0), new XYZ(stackLeft, dimY - tickLen, 0)));
+                        var extR = doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(stackRight, originY, 0), new XYZ(stackRight, dimY - tickLen, 0)));
+                        if (thinStyle != null) { extL.LineStyle = thinStyle; extR.LineStyle = thinStyle; }
+                        createdIds.Add((long)extL.Id.Value); createdIds.Add((long)extR.Id.Value);
+
+                        double totalInches = Math.Abs(currentX - originX) * 12;
+                        string dimText = FormatFractionalInches(totalInches);
+                        var dimTextNote = TextNote.Create(doc, view.Id, new XYZ((stackLeft + stackRight) / 2, dimY - 0.15, 0), dimText, defaultTextTypeId);
+                        createdIds.Add((long)dimTextNote.Id.Value);
+                    }
+
+                    if (addLabels)
+                    {
+                        double labelBaseX = dirMult > 0 ? Math.Max(originX, currentX) + 1.5 : Math.Min(originX, currentX) - 1.5;
+                        int visibleLabelCount = layers.Count(l => l.Width > 0 || l.Function == MaterialFunctionAssignment.Membrane);
+                        double labelSpacing = height / (visibleLabelCount + 1);
+                        int li = 0;
+                        double trackX = originX;
+
+                        foreach (var layer in layers)
+                        {
+                            double thick = layer.Width;
+                            string matN = "Unknown";
+                            if (layer.MaterialId != ElementId.InvalidElementId)
+                            {
+                                var mat = doc.GetElement(layer.MaterialId) as Material;
+                                if (mat != null) matN = mat.Name;
+                            }
+
+                            bool isMembrane = (thick <= 0 && layer.Function == MaterialFunctionAssignment.Membrane);
+                            if (thick <= 0 && !isMembrane) continue;
+
+                            double labelY = originY + height - (labelSpacing * (li + 1));
+                            li++;
+
+                            string thickStr = thick > 0 ? $" ({FormatFractionalInches(thick * 12)})" : "";
+                            string labelText = $"{matN}{thickStr}";
+                            var tn = TextNote.Create(doc, view.Id, new XYZ(labelBaseX, labelY, 0), labelText, defaultTextTypeId);
+                            createdIds.Add((long)tn.Id.Value);
+
+                            double layerMidX, layerMidY = originY + height / 2;
+                            if (isMembrane) { layerMidX = trackX; }
+                            else
+                            {
+                                double lLeft = dirMult > 0 ? trackX : trackX - thick;
+                                double lRight = dirMult > 0 ? trackX + thick : trackX;
+                                layerMidX = (lLeft + lRight) / 2;
+                                trackX += thick * dirMult;
+                            }
+
+                            double leaderStartX = dirMult > 0 ? labelBaseX - 0.1 : labelBaseX + 0.1;
+                            double elbowX = dirMult > 0 ? labelBaseX - 0.5 : labelBaseX + 0.5;
+                            var seg1Start = new XYZ(leaderStartX, labelY, 0);
+                            var seg1End = new XYZ(elbowX, labelY, 0);
+                            var seg2End = new XYZ(layerMidX, layerMidY, 0);
+
+                            if (!seg1Start.IsAlmostEqualTo(seg1End))
+                            {
+                                var l1 = doc.Create.NewDetailCurve(view, Line.CreateBound(seg1Start, seg1End));
+                                if (thinStyle != null) l1.LineStyle = thinStyle;
+                                createdIds.Add((long)l1.Id.Value);
+                            }
+                            if (!seg1End.IsAlmostEqualTo(seg2End))
+                            {
+                                var l2 = doc.Create.NewDetailCurve(view, Line.CreateBound(seg1End, seg2End));
+                                if (thinStyle != null) l2.LineStyle = thinStyle;
+                                createdIds.Add((long)l2.Id.Value);
+                            }
+                        }
+                    }
+
+                    trans.Commit();
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = true, viewId = viewIdInt, typeName,
+                    layerCount = layers.Count, totalThicknessInches = Math.Round(Math.Abs(currentX - originX) * 12, 3),
+                    layers = layerInfos, elementCount = createdIds.Count,
+                    bounds = new { left = Math.Min(originX, currentX), right = Math.Max(originX, currentX), bottom = originY, top = originY + height }
+                });
+            }
+            catch (Exception ex)
+            {
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = ex.Message, stackTrace = ex.StackTrace });
+            }
+        }
+
+        private static string ClassifyMaterial(string materialName, MaterialFunctionAssignment function)
+        {
+            string lower = materialName.ToLower();
+            if (lower.Contains("brick")) return "brick";
+            if (lower.Contains("cmu") || lower.Contains("concrete masonry") || lower.Contains("block")) return "cmu";
+            if (lower.Contains("softwood") || lower.Contains("lumber") || lower.Contains("wood stud") || lower.Contains("framing"))
+            {
+                if (function == MaterialFunctionAssignment.Structure) return "wood_stud";
+                return "wood";
+            }
+            if (lower.Contains("insulation") || lower.Contains("batt") || lower.Contains("fiberglass") || lower.Contains("mineral wool"))
+                return "insulation";
+            if (lower.Contains("gypsum") || lower.Contains("gyp") || lower.Contains("drywall") || lower.Contains("gwb"))
+                return "gypsum";
+            if (lower.Contains("plywood") || lower.Contains("osb") || lower.Contains("sheathing"))
+                return "plywood";
+            if (lower.Contains("concrete") || lower.Contains("cast")) return "concrete";
+            if (lower.Contains("air") && !lower.Contains("barrier")) return "air";
+            if (function == MaterialFunctionAssignment.Membrane) return "membrane";
+            if (function == MaterialFunctionAssignment.Insulation) return "air";
+            return "generic";
+        }
+
+        private static void DrawBrickCoursing(Document doc, View view,
+            double left, double right, double bottom, double height,
+            double courseHeight, double mortarWidth, GraphicsStyle heavyStyle, GraphicsStyle thinStyle,
+            List<long> ids)
+        {
+            var outline = new[] {
+                Line.CreateBound(new XYZ(left, bottom, 0), new XYZ(left, bottom + height, 0)),
+                Line.CreateBound(new XYZ(right, bottom, 0), new XYZ(right, bottom + height, 0)),
+                Line.CreateBound(new XYZ(left, bottom + height, 0), new XYZ(right, bottom + height, 0)),
+                Line.CreateBound(new XYZ(left, bottom, 0), new XYZ(right, bottom, 0))
+            };
+            foreach (var ln in outline) { var c = doc.Create.NewDetailCurve(view, ln); if (heavyStyle != null) c.LineStyle = heavyStyle; ids.Add((long)c.Id.Value); }
+
+            double brickWidth = right - left;
+            int courseNum = 0;
+            double y = bottom + courseHeight;
+            while (y < bottom + height - 0.001)
+            {
+                var jc = doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(left, y, 0), new XYZ(right, y, 0)));
+                if (thinStyle != null) jc.LineStyle = thinStyle;
+                ids.Add((long)jc.Id.Value);
+                courseNum++;
+
+                double brickLen = brickWidth / 2;
+                if (brickLen < 0.01) brickLen = 0.3;
+                bool offset = (courseNum % 2) == 1;
+                double vx = offset ? left + brickLen / 2 : left + brickLen;
+                double courseBottom = y - courseHeight;
+                if (courseBottom < bottom) courseBottom = bottom;
+                while (vx < right - 0.01)
+                {
+                    if (vx > left + 0.01)
+                    {
+                        var vc = doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(vx, courseBottom, 0), new XYZ(vx, y, 0)));
+                        if (thinStyle != null) vc.LineStyle = thinStyle;
+                        ids.Add((long)vc.Id.Value);
+                    }
+                    vx += brickLen;
+                }
+                y += courseHeight;
+            }
+        }
+
+        private static void DrawCMUCoursing(Document doc, View view,
+            double left, double right, double bottom, double height,
+            GraphicsStyle heavyStyle, GraphicsStyle thinStyle,
+            Dictionary<string, FilledRegionType> frtCache, List<long> ids)
+        {
+            double courseH = 8.0 / 12.0;
+            double shellThick = 1.25 / 12.0;
+            double blockWidth = right - left;
+
+            var outline = new[] {
+                Line.CreateBound(new XYZ(left, bottom, 0), new XYZ(left, bottom + height, 0)),
+                Line.CreateBound(new XYZ(right, bottom, 0), new XYZ(right, bottom + height, 0)),
+                Line.CreateBound(new XYZ(left, bottom + height, 0), new XYZ(right, bottom + height, 0)),
+                Line.CreateBound(new XYZ(left, bottom, 0), new XYZ(right, bottom, 0))
+            };
+            foreach (var ln in outline) { var c = doc.Create.NewDetailCurve(view, ln); if (heavyStyle != null) c.LineStyle = heavyStyle; ids.Add((long)c.Id.Value); }
+
+            double y = bottom + courseH;
+            while (y < bottom + height - 0.001)
+            {
+                var jc = doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(left, y, 0), new XYZ(right, y, 0)));
+                if (thinStyle != null) jc.LineStyle = thinStyle;
+                ids.Add((long)jc.Id.Value);
+                y += courseH;
+            }
+
+            if (blockWidth > 3 * shellThick)
+            {
+                double cellLeft = left + shellThick;
+                double cellRight = right - shellThick;
+                var ilc = doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(cellLeft, bottom, 0), new XYZ(cellLeft, bottom + height, 0)));
+                var irc = doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(cellRight, bottom, 0), new XYZ(cellRight, bottom + height, 0)));
+                if (thinStyle != null) { ilc.LineStyle = thinStyle; irc.LineStyle = thinStyle; }
+                ids.Add((long)ilc.Id.Value); ids.Add((long)irc.Id.Value);
+
+                double midX = (left + right) / 2;
+                double webY = bottom;
+                while (webY < bottom + height - 0.001)
+                {
+                    double webTop = Math.Min(webY + courseH, bottom + height);
+                    var wc = doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(midX, webY, 0), new XYZ(midX, webTop, 0)));
+                    if (thinStyle != null) wc.LineStyle = thinStyle;
+                    ids.Add((long)wc.Id.Value);
+                    webY += courseH;
+                }
+            }
+        }
+
+        private static void DrawWoodStuds(Document doc, View view,
+            double left, double right, double bottom, double height,
+            double studThickness, double spacing, GraphicsStyle mediumStyle, GraphicsStyle thinStyle,
+            List<long> ids)
+        {
+            var outline = new[] {
+                Line.CreateBound(new XYZ(left, bottom, 0), new XYZ(left, bottom + height, 0)),
+                Line.CreateBound(new XYZ(right, bottom, 0), new XYZ(right, bottom + height, 0)),
+                Line.CreateBound(new XYZ(left, bottom + height, 0), new XYZ(right, bottom + height, 0)),
+                Line.CreateBound(new XYZ(left, bottom, 0), new XYZ(right, bottom, 0))
+            };
+            foreach (var ln in outline) { var c = doc.Create.NewDetailCurve(view, ln); if (mediumStyle != null) c.LineStyle = mediumStyle; ids.Add((long)c.Id.Value); }
+
+            double studDepth = 1.5 / 12.0;
+            double studCenterX = (left + right) / 2;
+            double studLeft = studCenterX - studDepth / 2;
+            double studRight = studCenterX + studDepth / 2;
+
+            var studOutline = new[] {
+                Line.CreateBound(new XYZ(studLeft, bottom, 0), new XYZ(studLeft, bottom + height, 0)),
+                Line.CreateBound(new XYZ(studRight, bottom, 0), new XYZ(studRight, bottom + height, 0)),
+                Line.CreateBound(new XYZ(studLeft, bottom + height, 0), new XYZ(studRight, bottom + height, 0)),
+                Line.CreateBound(new XYZ(studLeft, bottom, 0), new XYZ(studRight, bottom, 0))
+            };
+            foreach (var ln in studOutline) { var c = doc.Create.NewDetailCurve(view, ln); if (mediumStyle != null) c.LineStyle = mediumStyle; ids.Add((long)c.Id.Value); }
+
+            var d1c = doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(studLeft, bottom, 0), new XYZ(studRight, bottom + height, 0)));
+            var d2c = doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(studRight, bottom, 0), new XYZ(studLeft, bottom + height, 0)));
+            if (thinStyle != null) { d1c.LineStyle = thinStyle; d2c.LineStyle = thinStyle; }
+            ids.Add((long)d1c.Id.Value); ids.Add((long)d2c.Id.Value);
+        }
+
+        private static void DrawBattInsulation(Document doc, View view,
+            double left, double right, double bottom, double height,
+            GraphicsStyle thinStyle, List<long> ids)
+        {
+            double width = right - left;
+            if (width < 0.01) return;
+
+            double zigHeight = 0.15;
+            bool goRight = true;
+            var leftPoints = new List<XYZ>();
+            double y = bottom;
+            while (y < bottom + height)
+            {
+                double nextY = Math.Min(y + zigHeight, bottom + height);
+                double x1 = goRight ? left : left + width * 0.15;
+                double x2 = goRight ? left + width * 0.15 : left;
+                leftPoints.Add(new XYZ(x1, y, 0));
+                leftPoints.Add(new XYZ(x2, nextY, 0));
+                goRight = !goRight;
+                y = nextY;
+            }
+            for (int i = 0; i < leftPoints.Count - 1; i++)
+            {
+                if (!leftPoints[i].IsAlmostEqualTo(leftPoints[i + 1]))
+                {
+                    var zl = doc.Create.NewDetailCurve(view, Line.CreateBound(leftPoints[i], leftPoints[i + 1]));
+                    if (thinStyle != null) zl.LineStyle = thinStyle;
+                    ids.Add((long)zl.Id.Value);
+                }
+            }
+
+            goRight = false;
+            var rightPoints = new List<XYZ>();
+            y = bottom;
+            while (y < bottom + height)
+            {
+                double nextY = Math.Min(y + zigHeight, bottom + height);
+                double x1 = goRight ? right : right - width * 0.15;
+                double x2 = goRight ? right - width * 0.15 : right;
+                rightPoints.Add(new XYZ(x1, y, 0));
+                rightPoints.Add(new XYZ(x2, nextY, 0));
+                goRight = !goRight;
+                y = nextY;
+            }
+            for (int i = 0; i < rightPoints.Count - 1; i++)
+            {
+                if (!rightPoints[i].IsAlmostEqualTo(rightPoints[i + 1]))
+                {
+                    var zl = doc.Create.NewDetailCurve(view, Line.CreateBound(rightPoints[i], rightPoints[i + 1]));
+                    if (thinStyle != null) zl.LineStyle = thinStyle;
+                    ids.Add((long)zl.Id.Value);
+                }
+            }
+        }
+
+        private static void DrawSolidLayer(Document doc, View view,
+            double left, double right, double bottom, double height,
+            GraphicsStyle edgeStyle, Dictionary<string, FilledRegionType> frtCache,
+            string hatchName, List<long> ids)
+        {
+            if (right - left < 0.001) return;
+            var outline = new[] {
+                Line.CreateBound(new XYZ(left, bottom, 0), new XYZ(left, bottom + height, 0)),
+                Line.CreateBound(new XYZ(right, bottom, 0), new XYZ(right, bottom + height, 0)),
+                Line.CreateBound(new XYZ(left, bottom + height, 0), new XYZ(right, bottom + height, 0)),
+                Line.CreateBound(new XYZ(left, bottom, 0), new XYZ(right, bottom, 0))
+            };
+            foreach (var ln in outline) { var c = doc.Create.NewDetailCurve(view, ln); if (edgeStyle != null) c.LineStyle = edgeStyle; ids.Add((long)c.Id.Value); }
+
+            if (!string.IsNullOrEmpty(hatchName))
+            {
+                FilledRegionType frt = null;
+                frtCache.TryGetValue(hatchName, out frt);
+                if (frt != null)
+                {
+                    var loop = new CurveLoop();
+                    loop.Append(Line.CreateBound(new XYZ(left, bottom, 0), new XYZ(right, bottom, 0)));
+                    loop.Append(Line.CreateBound(new XYZ(right, bottom, 0), new XYZ(right, bottom + height, 0)));
+                    loop.Append(Line.CreateBound(new XYZ(right, bottom + height, 0), new XYZ(left, bottom + height, 0)));
+                    loop.Append(Line.CreateBound(new XYZ(left, bottom + height, 0), new XYZ(left, bottom, 0)));
+                    var fr = FilledRegion.Create(doc, frt.Id, view.Id, new List<CurveLoop> { loop });
+                    ids.Add((long)fr.Id.Value);
+                }
+            }
+        }
+
+        private static void DrawAirGap(Document doc, View view,
+            double left, double right, double bottom, double height,
+            GraphicsStyle dashStyle, List<long> ids)
+        {
+            var lc = doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(left, bottom, 0), new XYZ(left, bottom + height, 0)));
+            var rc = doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(right, bottom, 0), new XYZ(right, bottom + height, 0)));
+            if (dashStyle != null) { lc.LineStyle = dashStyle; rc.LineStyle = dashStyle; }
+            ids.Add((long)lc.Id.Value); ids.Add((long)rc.Id.Value);
+        }
+
+        private static void DrawBreakLine(Document doc, View view,
+            double left, double right, double y, GraphicsStyle style, List<long> ids)
+        {
+            double totalWidth = right - left;
+            double jagHeight = 0.04;
+            double segWidth = totalWidth / 8;
+            var points = new List<XYZ> {
+                new XYZ(left, y, 0), new XYZ(left + segWidth * 3, y, 0),
+                new XYZ(left + segWidth * 3.5, y + jagHeight, 0), new XYZ(left + segWidth * 4, y - jagHeight, 0),
+                new XYZ(left + segWidth * 4.5, y + jagHeight, 0), new XYZ(left + segWidth * 5, y, 0),
+                new XYZ(right, y, 0)
+            };
+            for (int i = 0; i < points.Count - 1; i++)
+            {
+                if (!points[i].IsAlmostEqualTo(points[i + 1]))
+                {
+                    var bl = doc.Create.NewDetailCurve(view, Line.CreateBound(points[i], points[i + 1]));
+                    if (style != null) bl.LineStyle = style;
+                    ids.Add((long)bl.Id.Value);
+                }
+            }
+        }
+
+        #endregion
+
+        #region Detail Component Bounds
+
+        /// <summary>
+        /// Gets the bounding box dimensions and origin offset for a detail component type.
+        /// Places a temporary instance, measures it, then deletes it.
+        /// Returns width, height, origin position relative to bounds, and stacking offsets.
+        /// </summary>
+        [MCPMethod("getDetailComponentTypeBounds", Category = "Detail", Description = "Gets bounding box and origin info for a detail component family type")]
+        public static string GetDetailComponentTypeBounds(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                // Find the family symbol by name or ID
+                FamilySymbol symbol = null;
+
+                if (parameters["typeId"] != null)
+                {
+                    int typeIdInt = parameters["typeId"].ToObject<int>();
+                    symbol = doc.GetElement(new ElementId(typeIdInt)) as FamilySymbol;
+                }
+                else if (parameters["familyName"] != null && parameters["typeName"] != null)
+                {
+                    string familyName = parameters["familyName"].ToString();
+                    string typeName = parameters["typeName"].ToString();
+
+                    var collector = new FilteredElementCollector(doc)
+                        .OfClass(typeof(FamilySymbol))
+                        .OfCategory(BuiltInCategory.OST_DetailComponents);
+
+                    foreach (FamilySymbol fs in collector)
+                    {
+                        if (fs.Family.Name == familyName && fs.Name == typeName)
+                        {
+                            symbol = fs;
+                            break;
+                        }
+                    }
+                }
+
+                if (symbol == null)
+                {
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = "Detail component type not found. Provide typeId or familyName+typeName."
+                    });
+                }
+
+                // Find or create a drafting view to place the temp component
+                View draftingView = null;
+                if (parameters["viewId"] != null)
+                {
+                    int viewIdInt = parameters["viewId"].ToObject<int>();
+                    draftingView = doc.GetElement(new ElementId(viewIdInt)) as View;
+                }
+                else
+                {
+                    // Find any existing drafting view
+                    var viewCollector = new FilteredElementCollector(doc)
+                        .OfClass(typeof(ViewDrafting));
+                    draftingView = viewCollector.FirstElement() as View;
+                }
+
+                if (draftingView == null)
+                {
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = "No drafting view available. Provide viewId or create a drafting view first."
+                    });
+                }
+
+                // Place temp component, measure, delete - all in one transaction group
+                double width = 0, height = 0;
+                double originOffsetX = 0, originOffsetY = 0;
+                double stackOffsetY = 0; // how far to offset for stacking vertically
+                object boundingBox = null;
+
+                using (var transGroup = new TransactionGroup(doc, "Measure Detail Component"))
+                {
+                    transGroup.Start();
+
+                    using (var trans = new Transaction(doc, "Place Temp Component"))
+                    {
+                        trans.Start();
+
+                        // Activate symbol if needed
+                        if (!symbol.IsActive)
+                            symbol.Activate();
+
+                        // Place at origin
+                        XYZ origin = XYZ.Zero;
+                        FamilyInstance tempInstance = doc.Create.NewFamilyInstance(
+                            origin, symbol, draftingView);
+
+                        doc.Regenerate();
+
+                        // Get bounding box
+                        BoundingBoxXYZ bbox = tempInstance.get_BoundingBox(draftingView);
+
+                        if (bbox != null)
+                        {
+                            width = bbox.Max.X - bbox.Min.X;
+                            height = bbox.Max.Y - bbox.Min.Y;
+
+                            // Origin offset: how far the origin is from the bottom-left of the bbox
+                            originOffsetX = 0.0 - bbox.Min.X;
+                            originOffsetY = 0.0 - bbox.Min.Y;
+
+                            // Stack offset: to stack vertically with no gap, next component Y = current Y + height
+                            stackOffsetY = height;
+
+                            boundingBox = new
+                            {
+                                min = new { x = Math.Round(bbox.Min.X, 6), y = Math.Round(bbox.Min.Y, 6), z = Math.Round(bbox.Min.Z, 6) },
+                                max = new { x = Math.Round(bbox.Max.X, 6), y = Math.Round(bbox.Max.Y, 6), z = Math.Round(bbox.Max.Z, 6) }
+                            };
+                        }
+
+                        trans.Commit();
+                    }
+
+                    // Roll back - removes the temp component
+                    transGroup.RollBack();
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    familyName = symbol.Family.Name,
+                    typeName = symbol.Name,
+                    typeId = (int)symbol.Id.Value,
+                    dimensions = new
+                    {
+                        width = Math.Round(width, 6),
+                        height = Math.Round(height, 6),
+                        widthInches = Math.Round(width * 12, 4),
+                        heightInches = Math.Round(height * 12, 4)
+                    },
+                    originPosition = new
+                    {
+                        description = originOffsetX < 0.001 && originOffsetY < 0.001 ? "bottom-left" :
+                                      originOffsetX > width * 0.4 && originOffsetY < 0.001 ? "bottom-center" :
+                                      originOffsetX > width * 0.4 && originOffsetY > height * 0.4 ? "center" :
+                                      "custom",
+                        offsetFromBottomLeft = new { x = Math.Round(originOffsetX, 6), y = Math.Round(originOffsetY, 6) },
+                        offsetFromCenter = new
+                        {
+                            x = Math.Round(originOffsetX - width / 2, 6),
+                            y = Math.Round(originOffsetY - height / 2, 6)
+                        }
+                    },
+                    stacking = new
+                    {
+                        verticalStep = Math.Round(stackOffsetY, 6),
+                        verticalStepInches = Math.Round(stackOffsetY * 12, 4),
+                        hint = "To stack vertically: nextY = currentY + verticalStep"
+                    },
+                    boundingBox
+                });
+            }
+            catch (Exception ex)
+            {
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    error = ex.Message,
+                    stackTrace = ex.StackTrace
+                });
+            }
+        }
+
+        /// <summary>
+        /// Batch version: gets bounds for multiple detail component types at once.
+        /// </summary>
+        [MCPMethod("getDetailComponentTypeBoundsBatch", Category = "Detail", Description = "Gets bounding box info for multiple detail component types")]
+        public static string GetDetailComponentTypeBoundsBatch(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var types = parameters["types"]?.ToObject<List<JObject>>();
+
+                if (types == null || types.Count == 0)
+                {
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = "Provide 'types' array with objects containing familyName+typeName or typeId"
+                    });
+                }
+
+                // Find a drafting view
+                View draftingView = null;
+                if (parameters["viewId"] != null)
+                {
+                    int viewIdInt = parameters["viewId"].ToObject<int>();
+                    draftingView = doc.GetElement(new ElementId(viewIdInt)) as View;
+                }
+                else
+                {
+                    var viewCollector = new FilteredElementCollector(doc)
+                        .OfClass(typeof(ViewDrafting));
+                    draftingView = viewCollector.FirstElement() as View;
+                }
+
+                if (draftingView == null)
+                {
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = "No drafting view available."
+                    });
+                }
+
+                var results = new List<object>();
+
+                using (var transGroup = new TransactionGroup(doc, "Measure Detail Components Batch"))
+                {
+                    transGroup.Start();
+
+                    using (var trans = new Transaction(doc, "Place Temp Components"))
+                    {
+                        trans.Start();
+
+                        foreach (var typeSpec in types)
+                        {
+                            FamilySymbol symbol = null;
+
+                            if (typeSpec["typeId"] != null)
+                            {
+                                int typeIdInt = typeSpec["typeId"].ToObject<int>();
+                                symbol = doc.GetElement(new ElementId(typeIdInt)) as FamilySymbol;
+                            }
+                            else if (typeSpec["familyName"] != null && typeSpec["typeName"] != null)
+                            {
+                                string familyName = typeSpec["familyName"].ToString();
+                                string typeName = typeSpec["typeName"].ToString();
+
+                                var collector = new FilteredElementCollector(doc)
+                                    .OfClass(typeof(FamilySymbol))
+                                    .OfCategory(BuiltInCategory.OST_DetailComponents);
+
+                                foreach (FamilySymbol fs in collector)
+                                {
+                                    if (fs.Family.Name == familyName && fs.Name == typeName)
+                                    {
+                                        symbol = fs;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if (symbol == null)
+                            {
+                                results.Add(new
+                                {
+                                    familyName = typeSpec["familyName"]?.ToString(),
+                                    typeName = typeSpec["typeName"]?.ToString(),
+                                    success = false,
+                                    error = "Type not found"
+                                });
+                                continue;
+                            }
+
+                            try
+                            {
+                                if (!symbol.IsActive)
+                                    symbol.Activate();
+
+                                FamilyInstance tempInstance = doc.Create.NewFamilyInstance(
+                                    XYZ.Zero, symbol, draftingView);
+
+                                doc.Regenerate();
+
+                                BoundingBoxXYZ bbox = tempInstance.get_BoundingBox(draftingView);
+
+                                if (bbox != null)
+                                {
+                                    double w = bbox.Max.X - bbox.Min.X;
+                                    double h = bbox.Max.Y - bbox.Min.Y;
+                                    double offX = 0.0 - bbox.Min.X;
+                                    double offY = 0.0 - bbox.Min.Y;
+
+                                    results.Add(new
+                                    {
+                                        familyName = symbol.Family.Name,
+                                        typeName = symbol.Name,
+                                        typeId = (int)symbol.Id.Value,
+                                        success = true,
+                                        width = Math.Round(w, 6),
+                                        height = Math.Round(h, 6),
+                                        widthInches = Math.Round(w * 12, 4),
+                                        heightInches = Math.Round(h * 12, 4),
+                                        originOffset = new { x = Math.Round(offX, 6), y = Math.Round(offY, 6) },
+                                        verticalStep = Math.Round(h, 6)
+                                    });
+                                }
+                                else
+                                {
+                                    results.Add(new
+                                    {
+                                        familyName = symbol.Family.Name,
+                                        typeName = symbol.Name,
+                                        typeId = (int)symbol.Id.Value,
+                                        success = true,
+                                        width = 0.0,
+                                        height = 0.0,
+                                        widthInches = 0.0,
+                                        heightInches = 0.0,
+                                        originOffset = new { x = 0.0, y = 0.0 },
+                                        verticalStep = 0.0
+                                    });
+                                }
+                            }
+                            catch (Exception placeEx)
+                            {
+                                results.Add(new
+                                {
+                                    familyName = symbol.Family.Name,
+                                    typeName = symbol.Name,
+                                    typeId = (int)symbol.Id.Value,
+                                    success = false,
+                                    error = placeEx.Message,
+                                    width = 0.0,
+                                    height = 0.0,
+                                    widthInches = 0.0,
+                                    heightInches = 0.0,
+                                    originOffset = new { x = 0.0, y = 0.0 },
+                                    verticalStep = 0.0
+                                });
+                            }
+                        }
+
+                        trans.Commit();
+                    }
+
+                    transGroup.RollBack();
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    count = results.Count,
+                    components = results
+                });
+            }
+            catch (Exception ex)
+            {
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    error = ex.Message,
+                    stackTrace = ex.StackTrace
+                });
+            }
+        }
+
+        #endregion
+
+        #region Precision Dimensioning
+
+        /// <summary>
+        /// Creates a dimension between two detail lines at an EXACT absolute position.
+        /// Unlike dimensionDetailLines which uses a relative offset, this places the dimension line
+        /// at a precise coordinate you specify.
+        /// </summary>
+        [MCPMethod("createDetailDimensionAtPosition", Category = "Detail", Description = "Creates a dimension between detail lines at an exact absolute position")]
+        public static string CreateDetailDimensionAtPosition(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                if (parameters["viewId"] == null)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = "viewId is required" });
+
+                int viewIdInt = parameters["viewId"].ToObject<int>();
+                var view = doc.GetElement(new ElementId(viewIdInt)) as View;
+                if (view == null)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = $"View {viewIdInt} not found" });
+
+                // Accept either lineId1/lineId2 (detail lines) or refLineIds (array)
+                var refLineIds = new List<int>();
+                if (parameters["refLineIds"] != null)
+                {
+                    refLineIds = parameters["refLineIds"].ToObject<List<int>>();
+                }
+                else if (parameters["lineId1"] != null && parameters["lineId2"] != null)
+                {
+                    refLineIds.Add(parameters["lineId1"].ToObject<int>());
+                    refLineIds.Add(parameters["lineId2"].ToObject<int>());
+                }
+
+                if (refLineIds.Count < 2)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = "Need at least 2 reference lines (lineId1+lineId2 or refLineIds array)" });
+
+                // Direction: "horizontal" = dim line runs left-right measuring horizontal distance
+                //            "vertical" = dim line runs up-down measuring vertical distance
+                string direction = parameters["direction"]?.ToString()?.ToLower() ?? "auto";
+
+                // ABSOLUTE position of the dimension line
+                // For horizontal dims: dimLineY = Y coordinate where the dim line sits
+                // For vertical dims: dimLineX = X coordinate where the dim line sits
+                double? dimLineX = parameters["dimLineX"]?.ToObject<double>();
+                double? dimLineY = parameters["dimLineY"]?.ToObject<double>();
+
+                // Gather references from detail curves
+                var refArray = new ReferenceArray();
+                var curveList = new List<(DetailCurve dc, Line line)>();
+
+                foreach (int lineId in refLineIds)
+                {
+                    var detailCurve = doc.GetElement(new ElementId(lineId)) as DetailCurve;
+                    if (detailCurve == null)
+                        return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = $"Element {lineId} is not a detail line" });
+
+                    var geomCurve = detailCurve.GeometryCurve as Line;
+                    if (geomCurve == null)
+                        return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = $"Element {lineId} is not a straight line" });
+
+                    refArray.Append(detailCurve.GeometryCurve.Reference);
+                    curveList.Add((detailCurve, geomCurve));
+                }
+
+                // Auto-detect direction if not specified
+                if (direction == "auto")
+                {
+                    var mid1 = curveList[0].line.Evaluate(0.5, true);
+                    var mid2 = curveList[1].line.Evaluate(0.5, true);
+                    double dx = Math.Abs(mid2.X - mid1.X);
+                    double dy = Math.Abs(mid2.Y - mid1.Y);
+                    direction = dx > dy ? "horizontal" : "vertical";
+                }
+
+                using (var trans = new Transaction(doc, "MCP Precision Dimension"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    Line dimLine;
+
+                    if (direction == "horizontal")
+                    {
+                        // Horizontal dimension: measures X distance, dim line runs horizontally at Y = dimLineY
+                        double y = dimLineY ?? (dimLineX.HasValue ? 0 : 0); // fallback
+                        if (!dimLineY.HasValue)
+                        {
+                            // Default: 0.5 ft above the highest reference line midpoint
+                            double maxY = curveList.Max(c => c.line.Evaluate(0.5, true).Y);
+                            y = maxY + 0.5;
+                        }
+
+                        // Get X range from reference lines
+                        double minX = curveList.Min(c => Math.Min(c.line.GetEndPoint(0).X, c.line.GetEndPoint(1).X));
+                        double maxX = curveList.Max(c => Math.Max(c.line.GetEndPoint(0).X, c.line.GetEndPoint(1).X));
+
+                        dimLine = Line.CreateBound(
+                            new XYZ(minX - 1, y, 0),
+                            new XYZ(maxX + 1, y, 0)
+                        );
+                    }
+                    else
+                    {
+                        // Vertical dimension: measures Y distance, dim line runs vertically at X = dimLineX
+                        double x = dimLineX ?? 0;
+                        if (!dimLineX.HasValue)
+                        {
+                            // Default: 0.5 ft to the right of the rightmost reference line
+                            double maxX = curveList.Max(c => Math.Max(c.line.GetEndPoint(0).X, c.line.GetEndPoint(1).X));
+                            x = maxX + 0.5;
+                        }
+
+                        double minY = curveList.Min(c => Math.Min(c.line.GetEndPoint(0).Y, c.line.GetEndPoint(1).Y));
+                        double maxY = curveList.Max(c => Math.Max(c.line.GetEndPoint(0).Y, c.line.GetEndPoint(1).Y));
+
+                        dimLine = Line.CreateBound(
+                            new XYZ(x, minY - 1, 0),
+                            new XYZ(x, maxY + 1, 0)
+                        );
+                    }
+
+                    var dimension = doc.Create.NewDimension(view, dimLine, refArray);
+
+                    if (dimension == null)
+                    {
+                        trans.RollBack();
+                        return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                        {
+                            success = false,
+                            error = "Failed to create dimension - lines may not be suitable"
+                        });
+                    }
+
+                    trans.Commit();
+
+                    // Return precise position info so caller knows exactly where it landed
+                    var dimBBox = dimension.get_BoundingBox(view);
+
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        dimensionId = dimension.Id.Value,
+                        value = dimension.Value.HasValue ? dimension.Value.Value : 0,
+                        valueString = dimension.ValueString,
+                        direction = direction,
+                        dimLinePosition = direction == "horizontal"
+                            ? new { axis = "Y", value = dimLineY ?? 0 }
+                            : (object)new { axis = "X", value = dimLineX ?? 0 },
+                        boundingBox = dimBBox != null ? new
+                        {
+                            minX = Math.Round(dimBBox.Min.X, 6),
+                            minY = Math.Round(dimBBox.Min.Y, 6),
+                            maxX = Math.Round(dimBBox.Max.X, 6),
+                            maxY = Math.Round(dimBBox.Max.Y, 6)
+                        } : null
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    error = ex.Message,
+                    stackTrace = ex.StackTrace
+                });
+            }
+        }
+
+        /// <summary>
+        /// Gets bounding boxes and edge positions of placed detail elements in a view.
+        /// Returns precise coordinates for dimensioning and annotation placement.
+        /// </summary>
+        [MCPMethod("getDetailElementPositions", Category = "Detail", Description = "Gets precise bounding boxes of placed detail elements for dimensioning")]
+        public static string GetDetailElementPositions(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                if (parameters["viewId"] == null)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = "viewId is required" });
+
+                int viewIdInt = parameters["viewId"].ToObject<int>();
+                var view = doc.GetElement(new ElementId(viewIdInt)) as View;
+                if (view == null)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = $"View {viewIdInt} not found" });
+
+                // Optional: filter by element IDs
+                List<int> elementIds = null;
+                if (parameters["elementIds"] != null)
+                {
+                    elementIds = parameters["elementIds"].ToObject<List<int>>();
+                }
+
+                // Collect elements
+                var elements = new List<Element>();
+                if (elementIds != null)
+                {
+                    foreach (int eid in elementIds)
+                    {
+                        var el = doc.GetElement(new ElementId(eid));
+                        if (el != null) elements.Add(el);
+                    }
+                }
+                else
+                {
+                    // Get all detail components and detail lines in the view
+                    var detailComponents = new FilteredElementCollector(doc, view.Id)
+                        .OfCategory(BuiltInCategory.OST_DetailComponents)
+                        .WhereElementIsNotElementType()
+                        .ToList();
+                    var detailLines = new FilteredElementCollector(doc, view.Id)
+                        .OfCategory(BuiltInCategory.OST_Lines)
+                        .WhereElementIsNotElementType()
+                        .ToList();
+                    var filledRegions = new FilteredElementCollector(doc, view.Id)
+                        .OfClass(typeof(FilledRegion))
+                        .ToList();
+
+                    elements.AddRange(detailComponents);
+                    elements.AddRange(detailLines);
+                    elements.AddRange(filledRegions);
+                }
+
+                var results = new List<object>();
+                double globalMinX = double.MaxValue, globalMinY = double.MaxValue;
+                double globalMaxX = double.MinValue, globalMaxY = double.MinValue;
+
+                foreach (var el in elements)
+                {
+                    var bbox = el.get_BoundingBox(view);
+                    if (bbox == null) continue;
+
+                    string category = el.Category?.Name ?? "Unknown";
+                    string familyName = null;
+                    string typeName = null;
+
+                    if (el is FamilyInstance fi)
+                    {
+                        familyName = fi.Symbol?.Family?.Name;
+                        typeName = fi.Symbol?.Name;
+                    }
+
+                    // For detail curves, get endpoints
+                    object lineInfo = null;
+                    if (el is DetailCurve dc)
+                    {
+                        var geomCurve = dc.GeometryCurve;
+                        if (geomCurve != null)
+                        {
+                            lineInfo = new
+                            {
+                                startX = Math.Round(geomCurve.GetEndPoint(0).X, 6),
+                                startY = Math.Round(geomCurve.GetEndPoint(0).Y, 6),
+                                endX = Math.Round(geomCurve.GetEndPoint(1).X, 6),
+                                endY = Math.Round(geomCurve.GetEndPoint(1).Y, 6),
+                                length = Math.Round(geomCurve.Length, 6)
+                            };
+                        }
+                    }
+
+                    double minX = bbox.Min.X, minY = bbox.Min.Y;
+                    double maxX = bbox.Max.X, maxY = bbox.Max.Y;
+
+                    if (minX < globalMinX) globalMinX = minX;
+                    if (minY < globalMinY) globalMinY = minY;
+                    if (maxX > globalMaxX) globalMaxX = maxX;
+                    if (maxY > globalMaxY) globalMaxY = maxY;
+
+                    results.Add(new
+                    {
+                        elementId = el.Id.Value,
+                        category = category,
+                        familyName = familyName,
+                        typeName = typeName,
+                        bounds = new
+                        {
+                            minX = Math.Round(minX, 6),
+                            minY = Math.Round(minY, 6),
+                            maxX = Math.Round(maxX, 6),
+                            maxY = Math.Round(maxY, 6),
+                            width = Math.Round(maxX - minX, 6),
+                            height = Math.Round(maxY - minY, 6),
+                            centerX = Math.Round((minX + maxX) / 2, 6),
+                            centerY = Math.Round((minY + maxY) / 2, 6)
+                        },
+                        lineInfo = lineInfo
+                    });
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    elementCount = results.Count,
+                    globalBounds = new
+                    {
+                        minX = globalMinX < double.MaxValue ? Math.Round(globalMinX, 6) : 0.0,
+                        minY = globalMinY < double.MaxValue ? Math.Round(globalMinY, 6) : 0.0,
+                        maxX = globalMaxX > double.MinValue ? Math.Round(globalMaxX, 6) : 0.0,
+                        maxY = globalMaxY > double.MinValue ? Math.Round(globalMaxY, 6) : 0.0
+                    },
+                    elements = results
+                });
+            }
+            catch (Exception ex)
+            {
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    error = ex.Message,
+                    stackTrace = ex.StackTrace
+                });
+            }
+        }
+
+        /// <summary>
+        /// Creates reference detail lines at specified positions for use as dimension references.
+        /// These are thin/hidden lines placed specifically to serve as dimension witness points.
+        /// Returns line IDs that can be passed to createDetailDimensionAtPosition.
+        /// </summary>
+        [MCPMethod("createDimensionReferenceLines", Category = "Detail", Description = "Creates reference lines at exact positions for precision dimensioning")]
+        public static string CreateDimensionReferenceLines(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                if (parameters["viewId"] == null || parameters["lines"] == null)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = "viewId and lines array required" });
+
+                int viewIdInt = parameters["viewId"].ToObject<int>();
+                var view = doc.GetElement(new ElementId(viewIdInt)) as View;
+                if (view == null)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = $"View {viewIdInt} not found" });
+
+                var lines = parameters["lines"].ToObject<List<JObject>>();
+                if (lines == null || lines.Count == 0)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = "lines array is empty" });
+
+                // Optional: use a specific line style (default: <Invisible lines> if available, else Thin Lines)
+                string lineStyleName = parameters["lineStyle"]?.ToString();
+
+                using (var trans = new Transaction(doc, "MCP Create Dimension Reference Lines"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    // Find line style
+                    GraphicsStyle lineStyle = null;
+                    if (!string.IsNullOrEmpty(lineStyleName))
+                    {
+                        var lineStyles = new FilteredElementCollector(doc)
+                            .OfClass(typeof(GraphicsStyle))
+                            .Cast<GraphicsStyle>()
+                            .Where(gs => gs.GraphicsStyleCategory?.Parent?.Id == new ElementId(BuiltInCategory.OST_Lines));
+
+                        lineStyle = lineStyles.FirstOrDefault(gs =>
+                            gs.Name.Equals(lineStyleName, StringComparison.OrdinalIgnoreCase) ||
+                            gs.GraphicsStyleCategory?.Name?.Equals(lineStyleName, StringComparison.OrdinalIgnoreCase) == true);
+                    }
+
+                    var createdLines = new List<object>();
+
+                    foreach (var lineSpec in lines)
+                    {
+                        double x1 = lineSpec["startX"]?.ToObject<double>() ?? lineSpec["x1"]?.ToObject<double>() ?? 0;
+                        double y1 = lineSpec["startY"]?.ToObject<double>() ?? lineSpec["y1"]?.ToObject<double>() ?? 0;
+                        double x2 = lineSpec["endX"]?.ToObject<double>() ?? lineSpec["x2"]?.ToObject<double>() ?? 0;
+                        double y2 = lineSpec["endY"]?.ToObject<double>() ?? lineSpec["y2"]?.ToObject<double>() ?? 0;
+                        string name = lineSpec["name"]?.ToString() ?? "";
+
+                        var startPt = new XYZ(x1, y1, 0);
+                        var endPt = new XYZ(x2, y2, 0);
+
+                        if (startPt.DistanceTo(endPt) < 0.001)
+                        {
+                            createdLines.Add(new { name = name, success = false, error = "Line too short" });
+                            continue;
+                        }
+
+                        var geomLine = Line.CreateBound(startPt, endPt);
+                        DetailCurve detailLine;
+
+                        if (lineStyle != null)
+                        {
+                            detailLine = doc.Create.NewDetailCurve(view, geomLine);
+                            detailLine.LineStyle = lineStyle;
+                        }
+                        else
+                        {
+                            detailLine = doc.Create.NewDetailCurve(view, geomLine);
+                        }
+
+                        createdLines.Add(new
+                        {
+                            name = name,
+                            success = true,
+                            lineId = detailLine.Id.Value,
+                            startX = x1,
+                            startY = y1,
+                            endX = x2,
+                            endY = y2
+                        });
+                    }
+
+                    trans.Commit();
+
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        count = createdLines.Count,
+                        lines = createdLines
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    error = ex.Message,
+                    stackTrace = ex.StackTrace
+                });
+            }
+        }
+
+        #endregion
 
         #endregion
     }

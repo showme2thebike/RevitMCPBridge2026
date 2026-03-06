@@ -1,0 +1,76 @@
+{
+  "templateId": "roof-eave-detail",
+  "name": "Roof Eave / Overhang Detail",
+  "description": "Section through roof eave where roof meets top of exterior wall. Shows roof assembly, fascia, soffit, and wall-to-roof connection.",
+  "category": "roof",
+  "scale": "1 1/2\" = 1'-0\"",
+  "version": "1.0",
+
+  "parameters": {
+    "roofSlope": { "default": "5:12", "options": ["3:12", "4:12", "5:12", "6:12", "8:12", "12:12"] },
+    "overhangLength": { "default": 2.0, "unit": "feet", "note": "Measured horizontal from wall face" },
+    "roofSheathing": { "default": "5/8\" plywood", "thickness": 0.052, "unit": "feet" },
+    "roofing": { "default": "asphalt_shingle", "options": ["asphalt_shingle", "metal_standing_seam", "concrete_tile", "clay_tile"] },
+    "underlayment": { "default": "synthetic", "options": ["synthetic", "felt_30", "ice_and_water"] },
+    "fasciaSize": { "default": "2x8", "options": ["1x6", "1x8", "2x8", "2x10", "2x12"] },
+    "soffitType": { "default": "vented_vinyl", "options": ["vented_vinyl", "plywood", "aluminum", "hardie"] },
+    "gutterType": { "default": "K-style", "options": ["K-style", "half_round", "box", "none"] },
+    "dripEdge": { "default": true },
+    "rafterSize": { "default": "2x8", "options": ["2x6", "2x8", "2x10", "2x12"] },
+    "ceilingInsulation": { "default": "R-38", "options": ["R-30", "R-38", "R-49"] },
+    "raisedHeelTruss": { "default": false, "note": "Energy heel allows full insulation depth at eave" }
+  },
+
+  "drawInstructions": {
+    "method": "batchDrawDetail",
+    "note": "Origin = intersection of wall exterior face and top plate. Roof slopes up-right, overhang extends left.",
+    "conceptualLayout": [
+      "1. Double top plate on top of wall studs",
+      "2. Rafter/truss bearing on top plate, extending past wall for overhang",
+      "3. Roof sheathing on top of rafters, extending to fascia",
+      "4. Underlayment over sheathing",
+      "5. Roofing material over underlayment",
+      "6. Drip edge at eave (metal L-shaped, under roofing, over fascia)",
+      "7. Fascia board at tail of rafter",
+      "8. Soffit from wall face to fascia bottom (horizontal or sloped)",
+      "9. Gutter at fascia",
+      "10. Bird blocking between rafters at wall plate",
+      "11. Ceiling insulation starting at wall (may be reduced at eave if no energy heel)",
+      "12. Ceiling finish (GWB) below rafters/truss bottom chord"
+    ],
+
+    "criticalGeometry": {
+      "roofAngle": "atan(rise/12) - for 5:12: atan(5/12) = 22.6 degrees",
+      "rafterTail": "Overhang length / cos(roofAngle) = actual rafter tail length along slope",
+      "fasciaHeight": "Rafter depth at cut end (plumb cut or square cut)",
+      "soffitWidth": "Overhang length - fascia thickness"
+    },
+
+    "annotations": [
+      "ASPHALT SHINGLES OVER 30# FELT",
+      "5/8\" PLYWOOD ROOF SHEATHING",
+      "DRIP EDGE - METAL",
+      "2x8 RAFTER @ 16\" O.C. (OR TRUSS)",
+      "BIRD BLOCKING BETWEEN RAFTERS",
+      "2x8 FASCIA BOARD",
+      "CONT. SOFFIT VENT",
+      "GUTTER - K-STYLE",
+      "R-38 BATT INSULATION",
+      "DOUBLE TOP PLATE",
+      "5/8\" GWB CEILING",
+      "ROOF SLOPE: 5:12"
+    ]
+  },
+
+  "connections": {
+    "bottom": { "connectsTo": "wall-section-wood-frame", "anchor": "top plate", "note": "The wall assembly terminates at the double top plate. Roof rests on top plate." },
+    "ridge": { "connectsTo": "roof-ridge-detail", "note": "For full roof section" }
+  },
+
+  "codeRequirements": {
+    "ventilation": "1:150 ratio net free area, or 1:300 with balanced intake/exhaust (IRC R806.2)",
+    "insulation": "Baffle required between insulation and roof sheathing for ventilation air path (IRC R806.3)",
+    "iceBarrier": "Required in areas with history of ice dams - self-adhered membrane from eave to 24\" past interior wall face",
+    "florida": "HVHZ: Enhanced roof-to-wall connections (clips or straps per FBC Table 2321.6.1)"
+  }
+}

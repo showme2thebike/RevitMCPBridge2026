@@ -1,0 +1,101 @@
+{
+  "templateId": "wall-section-wood-frame",
+  "name": "Wall Section - Wood Frame",
+  "description": "Vertical section through wood-frame exterior wall assembly. Use with drawLayerStack for the wall layers, then batchDrawDetail for connections and annotations.",
+  "category": "wall",
+  "scale": "1 1/2\" = 1'-0\"",
+  "version": "1.0",
+
+  "parameters": {
+    "studSize": { "default": "2x6", "options": ["2x4", "2x6", "2x8"], "thicknessFeet": { "2x4": 0.2917, "2x6": 0.4583, "2x8": 0.625 } },
+    "studSpacing": { "default": 16, "options": [12, 16, 24], "unit": "inches OC" },
+    "exteriorFinish": { "default": "fiber_cement", "options": ["fiber_cement", "stucco", "vinyl", "brick_veneer"] },
+    "insulationType": { "default": "batt", "options": ["batt", "spray_foam", "rigid"] },
+    "interiorFinish": { "default": "gwb_5/8", "options": ["gwb_1/2", "gwb_5/8", "gwb_double"] },
+    "sheathingType": { "default": "osb_7/16", "options": ["osb_7/16", "plywood_1/2", "plywood_3/4"] },
+    "wrb": { "default": true },
+    "vaporBarrier": { "default": true }
+  },
+
+  "layerStack": {
+    "method": "drawLayerStack",
+    "height": 4.0,
+    "direction": "left-to-right",
+    "addLabels": true,
+    "note": "Layers listed exterior to interior. Thicknesses in feet.",
+    "layers": {
+      "fiber_cement": [
+        { "name": "Fiber Cement Siding", "thickness": 0.026, "hatch": "Solid", "lineWeight": "Wide Lines" },
+        { "name": "1\" Air Gap", "thickness": 0.083, "hatch": null },
+        { "name": "WRB (Tyvek)", "thickness": 0, "linePattern": "Dash" },
+        { "name": "7/16\" OSB Sheathing", "thickness": 0.036, "hatch": "Plywood", "lineWeight": "Thin Lines" },
+        { "name": "2x6 Stud @ 16\" OC", "thickness": 0.458, "hatch": "Wood - Section", "lineWeight": "Medium Lines" },
+        { "name": "R-21 Batt Insulation", "thickness": 0.458, "hatch": "Insulation", "overlay": true },
+        { "name": "Vapor Barrier", "thickness": 0, "linePattern": "Dash" },
+        { "name": "5/8\" GWB", "thickness": 0.052, "hatch": "Gypsum Board", "lineWeight": "Thin Lines" }
+      ],
+      "stucco": [
+        { "name": "3/4\" Stucco (3 Coat)", "thickness": 0.063, "hatch": "Solid", "lineWeight": "Wide Lines" },
+        { "name": "Metal Lath + WRB", "thickness": 0.01, "linePattern": "Dash" },
+        { "name": "7/16\" OSB Sheathing", "thickness": 0.036, "hatch": "Plywood", "lineWeight": "Thin Lines" },
+        { "name": "2x6 Stud @ 16\" OC", "thickness": 0.458, "hatch": "Wood - Section", "lineWeight": "Medium Lines" },
+        { "name": "R-21 Batt Insulation", "thickness": 0.458, "hatch": "Insulation", "overlay": true },
+        { "name": "Vapor Barrier", "thickness": 0, "linePattern": "Dash" },
+        { "name": "5/8\" GWB", "thickness": 0.052, "hatch": "Gypsum Board", "lineWeight": "Thin Lines" }
+      ],
+      "vinyl": [
+        { "name": "Vinyl Siding", "thickness": 0.01, "hatch": null, "lineWeight": "Medium Lines" },
+        { "name": "WRB (Tyvek)", "thickness": 0, "linePattern": "Dash" },
+        { "name": "7/16\" OSB Sheathing", "thickness": 0.036, "hatch": "Plywood", "lineWeight": "Thin Lines" },
+        { "name": "2x6 Stud @ 16\" OC", "thickness": 0.458, "hatch": "Wood - Section", "lineWeight": "Medium Lines" },
+        { "name": "R-21 Batt Insulation", "thickness": 0.458, "hatch": "Insulation", "overlay": true },
+        { "name": "Vapor Barrier", "thickness": 0, "linePattern": "Dash" },
+        { "name": "5/8\" GWB", "thickness": 0.052, "hatch": "Gypsum Board", "lineWeight": "Thin Lines" }
+      ],
+      "brick_veneer": [
+        { "name": "4\" Brick Veneer", "thickness": 0.333, "hatch": "Brick", "lineWeight": "Wide Lines" },
+        { "name": "1\" Air Gap", "thickness": 0.083, "hatch": null },
+        { "name": "WRB (Tyvek)", "thickness": 0, "linePattern": "Dash" },
+        { "name": "7/16\" OSB Sheathing", "thickness": 0.036, "hatch": "Plywood", "lineWeight": "Thin Lines" },
+        { "name": "2x6 Stud @ 16\" OC", "thickness": 0.458, "hatch": "Wood - Section", "lineWeight": "Medium Lines" },
+        { "name": "R-21 Batt Insulation", "thickness": 0.458, "hatch": "Insulation", "overlay": true },
+        { "name": "Vapor Barrier", "thickness": 0, "linePattern": "Dash" },
+        { "name": "5/8\" GWB", "thickness": 0.052, "hatch": "Gypsum Board", "lineWeight": "Thin Lines" }
+      ]
+    }
+  },
+
+  "detailComponents": {
+    "note": "Place these after layer stack using batchDrawDetail. Coordinates are relative to layer stack origin.",
+    "typical": [
+      { "op": "detailComponent", "familyName": "Nominal Cut Lumber-Section", "typeName": "2x6", "description": "Top plate", "relativeLocation": "top of stud layer" },
+      { "op": "detailComponent", "familyName": "Nominal Cut Lumber-Section", "typeName": "2x6", "description": "Double top plate", "relativeLocation": "above top plate" },
+      { "op": "detailComponent", "familyName": "Nominal Cut Lumber-Section", "typeName": "2x6", "description": "Bottom plate", "relativeLocation": "bottom of stud layer" }
+    ]
+  },
+
+  "annotations": {
+    "note": "Standard callouts for this assembly type. Place with batchDrawDetail text operations.",
+    "labels": [
+      "FIBER CEMENT SIDING",
+      "1\" AIR GAP",
+      "WEATHER RESISTANT BARRIER",
+      "7/16\" OSB SHEATHING",
+      "2x6 WOOD STUD @ 16\" O.C.",
+      "R-21 BATT INSULATION",
+      "VAPOR BARRIER",
+      "5/8\" GWB TYPE X"
+    ],
+    "dimensions": [
+      { "what": "Overall wall thickness", "position": "exterior side" },
+      { "what": "Individual layer thicknesses", "position": "interior side" }
+    ]
+  },
+
+  "connections": {
+    "note": "How this assembly connects to adjacent assemblies. Used to compose full wall sections.",
+    "top": ["roof-eave", "parapet", "top-of-wall"],
+    "bottom": ["foundation-spread-footing", "foundation-slab-on-grade", "floor-framing"],
+    "openings": ["window-head", "window-sill", "window-jamb", "door-head", "door-jamb"]
+  }
+}

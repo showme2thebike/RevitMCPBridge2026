@@ -1,0 +1,77 @@
+{
+  "version": "1.0",
+  "description": "Parametric detail templates for AI-driven detail generation via RevitMCPBridge",
+  "lastUpdated": "2026-03-05",
+
+  "usage": {
+    "workflow": [
+      "1. AI reads template JSON for the requested detail type",
+      "2. AI calls getTypeAssembly(typeId) to get actual wall/floor/roof layers from the model",
+      "3. AI merges template knowledge with actual model data",
+      "4. AI calls drawLayerStack() for assembly layers OR batchDrawDetail() for custom geometry",
+      "5. AI calls batchDrawDetail() for annotations, dimensions, and detail components",
+      "6. AI can also use importSvgToDetail() for complex custom geometry",
+      "7. AI captures view image for self-review (Phase 4)"
+    ],
+    "mcpMethods": {
+      "getTypeAssembly": "Read actual wall/floor/roof compound structure layers",
+      "drawLayerStack": "Auto-generate layer stack with lines, hatches, and labels",
+      "batchDrawDetail": "Execute multiple drawing ops (lines, arcs, fills, text, components) in one call",
+      "importSvgToDetail": "Import SVG markup as Revit detail elements"
+    }
+  },
+
+  "templates": [
+    {
+      "id": "wall-section-wood-frame",
+      "file": "wall-section-wood-frame.json",
+      "name": "Wall Section - Wood Frame",
+      "category": "wall",
+      "usedFor": ["exterior wall sections", "building sections", "wall type details"]
+    },
+    {
+      "id": "wall-section-cmu",
+      "file": "wall-section-cmu.json",
+      "name": "Wall Section - CMU",
+      "category": "wall",
+      "usedFor": ["CMU wall sections", "masonry details", "Florida residential"]
+    },
+    {
+      "id": "foundation-spread-footing",
+      "file": "foundation-spread-footing.json",
+      "name": "Foundation - Spread Footing",
+      "category": "foundation",
+      "usedFor": ["foundation sections", "footing details", "wall base connections"]
+    },
+    {
+      "id": "window-head-jamb-sill",
+      "file": "window-head-jamb-sill.json",
+      "name": "Window Details (Head/Jamb/Sill)",
+      "category": "window",
+      "usedFor": ["window installation details", "flashing details", "opening details"]
+    },
+    {
+      "id": "roof-eave-detail",
+      "file": "roof-eave-detail.json",
+      "name": "Roof Eave / Overhang",
+      "category": "roof",
+      "usedFor": ["roof edge details", "eave details", "soffit/fascia", "wall-to-roof connection"]
+    }
+  ],
+
+  "plannedTemplates": [
+    "foundation-slab-on-grade",
+    "parapet-flat-roof",
+    "roof-ridge-detail",
+    "door-threshold-exterior",
+    "stair-section",
+    "waterproofing-below-grade",
+    "expansion-joint",
+    "floor-framing-section",
+    "balcony-connection",
+    "firewall-section"
+  ],
+
+  "detailComponentLibrary": "patterns.json",
+  "extractedDetails": "../_extraction_summary.json"
+}

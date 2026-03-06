@@ -1,0 +1,149 @@
+{
+  "templateId": "window-head-jamb-sill",
+  "name": "Window Details - Head, Jamb, and Sill",
+  "description": "Three related details showing window installation in wood-frame wall. Each is a separate drafting view. Use batchDrawDetail for all three.",
+  "category": "window",
+  "scale": "3\" = 1'-0\"",
+  "version": "1.0",
+
+  "parameters": {
+    "wallType": { "default": "2x6 wood frame", "note": "Use getTypeAssembly to read actual wall layers" },
+    "windowFrame": { "default": "vinyl", "options": ["vinyl", "aluminum", "wood", "fiberglass"] },
+    "frameMaterial": { "default": "vinyl", "thickness": 0.125, "unit": "feet" },
+    "glazing": { "default": "double_pane", "options": ["single", "double_pane", "triple_pane"] },
+    "glazingThickness": { "default": 0.083, "unit": "feet", "note": "1\" for double pane" },
+    "sealant": { "default": "backer_rod_and_sealant", "width": 0.042, "unit": "feet" },
+    "flashingType": { "default": "self_adhered", "options": ["self_adhered", "metal", "liquid_applied"] },
+    "interiorTrim": { "default": "wood_casing", "width": 0.25, "unit": "feet" },
+    "exteriorTrim": { "default": "j_mold", "options": ["j_mold", "wood_trim", "metal_flashing"] }
+  },
+
+  "details": {
+    "head": {
+      "name": "Window Head Detail",
+      "description": "Horizontal section at top of window showing header, flashing, and drip edge",
+      "drawMethod": "batchDrawDetail",
+      "conceptualLayout": {
+        "note": "Section looking up. Exterior at top, interior at bottom.",
+        "layers_top_to_bottom": [
+          "Exterior finish (from wall assembly)",
+          "Sheathing",
+          "Head flashing - bent metal or self-adhered membrane lapping over WRB",
+          "Header beam (doubled 2x_ or LVL, per span table)",
+          "Cripple studs above header to top plate",
+          "Window frame head",
+          "Glazing unit (top)",
+          "Interior trim / casing",
+          "Interior finish (GWB return)"
+        ]
+      },
+      "criticalItems": [
+        "Head flashing MUST lap over WRB below",
+        "Sealant at exterior frame-to-wall joint",
+        "Header size per IRC Table R602.7 (span dependent)",
+        "1/4\" min gap at frame top for shimming",
+        "Insulate header cavity"
+      ],
+      "annotations": [
+        "HEAD FLASHING - SELF-ADHERED MEMBRANE",
+        "LAP WRB OVER FLASHING MIN 4\"",
+        "(2) 2x10 HEADER (OR LVL PER STRUCT.)",
+        "BACKER ROD & SEALANT - TYP.",
+        "VINYL WINDOW FRAME",
+        "INSULATED GLAZING UNIT",
+        "WOOD CASING - PAINT FINISH",
+        "5/8\" GWB RETURN"
+      ]
+    },
+
+    "jamb": {
+      "name": "Window Jamb Detail",
+      "description": "Vertical section at side of window showing frame, sealant, and trim",
+      "drawMethod": "batchDrawDetail",
+      "conceptualLayout": {
+        "note": "Section looking down at jamb. Exterior at left, interior at right (or vice versa).",
+        "layers_exterior_to_interior": [
+          "Exterior finish",
+          "Sheathing",
+          "WRB turned into rough opening",
+          "Sealant joint (backer rod + sealant)",
+          "Window frame jamb",
+          "Glazing unit",
+          "Window frame interior edge",
+          "Shim space",
+          "Interior casing / trim",
+          "Interior finish (GWB)"
+        ]
+      },
+      "criticalItems": [
+        "WRB wraps into rough opening min 2\"",
+        "Sealant at exterior, no sealant at interior (weep path)",
+        "Shims at 12\" OC, min 2 per jamb",
+        "Jack stud (trimmer) full height of opening",
+        "1/4\" gap each side for shimming"
+      ],
+      "annotations": [
+        "BACKER ROD & SEALANT",
+        "WRB TURNED INTO R.O. MIN 2\"",
+        "VINYL WINDOW FRAME",
+        "INSULATED GLAZING UNIT",
+        "SHIMS @ 12\" O.C.",
+        "JACK STUD (TRIMMER)",
+        "KING STUD",
+        "WOOD CASING",
+        "5/8\" GWB"
+      ]
+    },
+
+    "sill": {
+      "name": "Window Sill Detail",
+      "description": "Horizontal section at bottom of window showing sill pan, slope, and flashing",
+      "drawMethod": "batchDrawDetail",
+      "conceptualLayout": {
+        "note": "Section cut through sill. Exterior at top, interior at bottom. CRITICAL DETAIL - #1 leak point.",
+        "layers_top_to_bottom": [
+          "Exterior finish",
+          "Sheathing",
+          "Sill pan flashing (slope 1/4\" per foot min to exterior)",
+          "Window frame sill",
+          "Glazing unit (bottom)",
+          "Interior stool (wood or marble)",
+          "Apron trim below stool",
+          "Interior finish (GWB)"
+        ]
+      },
+      "criticalItems": [
+        "SILL PAN IS MANDATORY - #1 leak source in buildings",
+        "Sill must slope to exterior (1/4\" per foot minimum)",
+        "End dams on sill pan turned up min 1\" at jambs",
+        "Back dam turned up min 2\" at interior",
+        "Weep holes at exterior - do NOT seal bottom of frame",
+        "Sealant at sides and top of frame only, NOT at sill bottom"
+      ],
+      "annotations": [
+        "SILL PAN FLASHING - SLOPE TO EXT.",
+        "MIN 1/4\" PER FOOT SLOPE",
+        "END DAMS TURNED UP MIN 1\"",
+        "BACK DAM MIN 2\"",
+        "DO NOT SEAL BOTTOM OF FRAME",
+        "VINYL WINDOW FRAME",
+        "INSULATED GLAZING UNIT",
+        "WOOD STOOL",
+        "WOOD APRON",
+        "5/8\" GWB"
+      ]
+    }
+  },
+
+  "svgTemplate": {
+    "note": "For AI-generated SVG approach. The AI can modify this template SVG for specific conditions.",
+    "head_svg_hint": "Draw as horizontal cross-section. Wall layers vertical, window frame as U-shape opening downward, flashing as angled line above frame.",
+    "jamb_svg_hint": "Draw as plan cross-section. Wall layers horizontal, window frame as vertical U-shape, sealant as thin line between frame and wall.",
+    "sill_svg_hint": "Draw as horizontal cross-section. Wall layers vertical, sill pan as angled line (slope!), window frame as U-shape opening upward, stool extends beyond frame interior."
+  },
+
+  "connections": {
+    "wallAssembly": "Inherits wall layers from wall-section template. Use getTypeAssembly for actual wall.",
+    "note": "Each detail shows the wall assembly in section with the window component inserted. The wall layers are interrupted by the rough opening."
+  }
+}
