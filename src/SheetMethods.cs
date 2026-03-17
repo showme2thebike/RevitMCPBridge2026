@@ -328,7 +328,7 @@ namespace RevitMCPBridge
 
                     var sheet = ViewSheet.Create(doc, titleblock.Id);
                     sheet.SheetNumber = sheetNumber;
-                    sheet.Name = sheetName;
+                    sheet.Name = sheetName.EndsWith(" *") ? sheetName : sheetName + " *";
 
                     trans.Commit();
 
@@ -830,6 +830,63 @@ namespace RevitMCPBridge
                             centerX = Math.Round(centerX, 4),
                             centerY = Math.Round(centerY, 4)
                         })
+                        .Build();
+                }
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Place a schedule view onto a sheet using ScheduleSheetInstance.Create
+        /// </summary>
+        [MCPMethod("placeScheduleOnSheet", Category = "Sheet", Description = "Place a schedule view onto a sheet at a specified location")]
+        public static string PlaceScheduleOnSheet(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                var pv = new ParameterValidator(parameters, "placeScheduleOnSheet");
+                pv.Require("sheetId").IsType<int>();
+                pv.Require("scheduleId").IsType<int>();
+                pv.ThrowIfInvalid();
+
+                var sheetId   = new ElementId(pv.GetRequired<int>("sheetId"));
+                var schedId   = new ElementId(pv.GetRequired<int>("scheduleId"));
+
+                var sheet    = doc.GetElement(sheetId) as ViewSheet;
+                var schedule = doc.GetElement(schedId) as ViewSchedule;
+
+                if (sheet == null)
+                    return ResponseBuilder.Error("Sheet not found").Build();
+                if (schedule == null)
+                    return ResponseBuilder.Error("Schedule view not found (element may not be a schedule)").Build();
+
+                // Parse optional x/y position
+                double x = 0, y = 0;
+                if (parameters["location"] is JArray loc && loc.Count >= 2)
+                { x = (double)loc[0]; y = (double)loc[1]; }
+                else
+                { x = parameters["x"]?.Value<double>() ?? 0; y = parameters["y"]?.Value<double>() ?? 0; }
+
+                var point = new XYZ(x, y, 0);
+
+                using (var trans = new Transaction(doc, "Place Schedule on Sheet"))
+                {
+                    trans.Start();
+                    var instance = ScheduleSheetInstance.Create(doc, sheetId, schedId, point);
+                    trans.Commit();
+
+                    return ResponseBuilder.Success()
+                        .With("instanceId",    (int)instance.Id.Value)
+                        .With("sheetId",       (int)sheetId.Value)
+                        .With("scheduleId",    (int)schedId.Value)
+                        .With("scheduleName",  schedule.Name)
+                        .With("sheetNumber",   sheet.SheetNumber)
+                        .With("location",      new[] { x, y })
                         .Build();
                 }
             }

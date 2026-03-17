@@ -92,6 +92,7 @@ namespace RevitMCPBridge
                     {
                         view.Name = viewName;
                     }
+                    if (!view.Name.EndsWith(" *")) view.Name = view.Name + " *";
 
                     trans.Commit();
 
@@ -151,6 +152,7 @@ namespace RevitMCPBridge
                     {
                         view.Name = viewName;
                     }
+                    if (!view.Name.EndsWith(" *")) view.Name = view.Name + " *";
 
                     trans.Commit();
 
@@ -224,6 +226,7 @@ namespace RevitMCPBridge
                     {
                         section.Name = viewName;
                     }
+                    if (!section.Name.EndsWith(" *")) section.Name = section.Name + " *";
 
                     trans.Commit();
 
@@ -285,6 +288,7 @@ namespace RevitMCPBridge
                     {
                         elevationView.Name = viewName;
                     }
+                    if (!elevationView.Name.EndsWith(" *")) elevationView.Name = elevationView.Name + " *";
 
                     trans.Commit();
 
@@ -333,7 +337,7 @@ namespace RevitMCPBridge
                     trans.SetFailureHandlingOptions(failureOptions);
 
                     var draftingView = ViewDrafting.Create(doc, viewFamilyTypeId);
-                    draftingView.Name = viewName;
+                    draftingView.Name = viewName.EndsWith(" *") ? viewName : viewName + " *";
                     draftingView.Scale = scale;
 
                     trans.Commit();
@@ -392,6 +396,7 @@ namespace RevitMCPBridge
                     {
                         newView.Name = newName;
                     }
+                    if (!newView.Name.EndsWith(" *")) newView.Name = newView.Name + " *";
 
                     trans.Commit();
 
@@ -1648,7 +1653,7 @@ namespace RevitMCPBridge
                     var legendView = ViewDrafting.Create(doc, draftingViewFamilyType.Id);
 
                     // Set the name
-                    legendView.Name = viewName;
+                    legendView.Name = viewName.EndsWith(" *") ? viewName : viewName + " *";
 
                     // Set the scale
                     legendView.Scale = scale;
@@ -3132,7 +3137,7 @@ namespace RevitMCPBridge
 
                     if (newLegend != null)
                     {
-                        newLegend.Name = name;
+                        newLegend.Name = name.EndsWith(" *") ? name : name + " *";
                         if (scale > 0)
                         {
                             newLegend.Scale = scale;

@@ -705,7 +705,7 @@ namespace RevitMCPBridge
                         view3d = View3D.CreateIsometric(doc, viewFamilyType.Id);
                     }
 
-                    view3d.Name = viewName;
+                    view3d.Name = viewName.EndsWith(" *") ? viewName : viewName + " *";
 
                     trans.Commit();
                 }
