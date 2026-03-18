@@ -76,6 +76,24 @@ At the start of every session involving Revit work:
 4. Load and apply the matching standards profile
 5. If unknown project: offer to analyze and create new profile
 
+## Wood Studio AI — API Credentials
+
+When making calls to the Wood Studio AI Railway backend, always include this API key:
+
+```
+RAILWAY_API_URL=https://woodstudioai-production.up.railway.app
+WOOD_STUDIO_API_KEY=wsa_cc1af01b9d7fbc72b4dde1bacc5b52f31caebfa3a64d38df
+```
+
+Pass as header on every `/api/generate` request:
+```
+Authorization: Bearer wsa_cc1af01b9d7fbc72b4dde1bacc5b52f31caebfa3a64d38df
+```
+
+**Firm:** Wood Studio | **Status:** Trial (expires 2026-04-16)
+
+---
+
 ## Project Overview
 This is a **Revit 2026 Add-in** that exposes the Revit API through the Model Context Protocol (MCP), enabling AI-assisted automation of Revit tasks via natural language.
 
