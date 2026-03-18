@@ -963,10 +963,13 @@ namespace RevitMCPBridge
                             viewports.Add(new
                             {
                                 viewportId = (int)viewport.Id.Value,
-                                viewId = (int)viewport.ViewId.Value,
-                                viewName = view?.Name ?? "",
-                                location = new[] { location.X, location.Y, location.Z },
-                                typeId = (int)viewport.GetTypeId().Value
+                                viewId    = (int)viewport.ViewId.Value,
+                                viewName  = view?.Name ?? "",
+                                // location as object {x,y,z} — easier to destructure than array
+                                location  = new { x = location.X, y = location.Y, z = location.Z },
+                                scale     = view?.Scale ?? 0,
+                                viewType  = view?.ViewType.ToString() ?? "",
+                                typeId    = (int)viewport.GetTypeId().Value
                             });
                         }
                     }
@@ -1085,7 +1088,23 @@ namespace RevitMCPBridge
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 var viewportId = new ElementId(int.Parse(parameters["viewportId"].ToString()));
-                var newLocation = parameters["newLocation"].ToObject<double[]>();
+
+                // Accept both array [x,y,z] and object {x,y,z} formats
+                double locX = 0, locY = 0;
+                var locToken = parameters["newLocation"];
+                if (locToken == null)
+                    return ResponseBuilder.Error("newLocation is required", "MISSING_PARAMETER").Build();
+                if (locToken.Type == JTokenType.Array)
+                {
+                    var arr = locToken.ToObject<double[]>();
+                    locX = arr.Length > 0 ? arr[0] : 0;
+                    locY = arr.Length > 1 ? arr[1] : 0;
+                }
+                else
+                {
+                    locX = locToken["x"]?.Value<double>() ?? 0;
+                    locY = locToken["y"]?.Value<double>() ?? 0;
+                }
 
                 var viewport = doc.GetElement(viewportId) as Viewport;
                 if (viewport == null)
@@ -1095,7 +1114,7 @@ namespace RevitMCPBridge
 
                 // Get current center
                 var currentCenter = viewport.GetBoxCenter();
-                var targetPoint = new XYZ(newLocation[0], newLocation[1], 0);  // Z should always be 0 for sheet
+                var targetPoint = new XYZ(locX, locY, 0);  // Z should always be 0 for sheet
 
                 // Calculate the movement delta
                 var delta = targetPoint - currentCenter;
@@ -1248,6 +1267,16 @@ namespace RevitMCPBridge
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 var viewportId = new ElementId(int.Parse(parameters["viewportId"].ToString()));
+
+                // Pre-check: pinned elements cannot be deleted — return a clear error
+                // rather than a cryptic "ElementId cannot be deleted" message.
+                var vpCheck = doc.GetElement(viewportId) as Viewport;
+                if (vpCheck == null)
+                    return ResponseBuilder.Error($"Viewport {viewportId.Value} not found", "ELEMENT_NOT_FOUND").Build();
+                if (vpCheck.Pinned)
+                    return ResponseBuilder.Error(
+                        $"Viewport {viewportId.Value} is pinned — unpin it in Revit first (select viewport → Modify → Unpin)",
+                        "ELEMENT_PINNED").Build();
 
                 using (var trans = new Transaction(doc, "Remove Viewport"))
                 {
@@ -2338,20 +2367,48 @@ namespace RevitMCPBridge
                 if (view == null)
                     return ResponseBuilder.Error("View not found", "ELEMENT_NOT_FOUND").Build();
 
+                // force:true — if view is already on another sheet, remove it first then re-place.
+                // Default false to preserve existing behaviour.
+                bool force = parameters["force"]?.Value<bool>() ?? false;
+
                 // Check if view can be placed
                 if (!Viewport.CanAddViewToSheet(doc, sheetId, viewId))
                 {
-                    string reason = "View cannot be placed on this sheet";
                     var existingVp = new FilteredElementCollector(doc)
                         .OfClass(typeof(Viewport))
                         .Cast<Viewport>()
                         .FirstOrDefault(vp => vp.ViewId == viewId);
-                    if (existingVp != null)
+
+                    if (force && existingVp != null)
                     {
-                        var existingSheet = doc.GetElement(existingVp.SheetId) as ViewSheet;
-                        reason = $"View already placed on sheet '{existingSheet?.SheetNumber}'";
+                        // Remove from old sheet so we can re-place on the target sheet
+                        if (existingVp.Pinned)
+                        {
+                            var oldSheet = doc.GetElement(existingVp.SheetId) as ViewSheet;
+                            return ResponseBuilder.Error(
+                                $"View is on sheet '{oldSheet?.SheetNumber}' and that viewport is pinned — unpin it in Revit first",
+                                "ELEMENT_PINNED").Build();
+                        }
+                        using (var removeTrans = new Transaction(doc, "Remove Viewport for Force-Place"))
+                        {
+                            removeTrans.Start();
+                            doc.Delete(existingVp.Id);
+                            removeTrans.Commit();
+                        }
+                        // Re-check after removal
+                        if (!Viewport.CanAddViewToSheet(doc, sheetId, viewId))
+                            return ResponseBuilder.Error("View still cannot be placed after removing existing viewport", "OPERATION_FAILED").Build();
                     }
-                    return ResponseBuilder.Error(reason, "OPERATION_FAILED").Build();
+                    else
+                    {
+                        string reason = "View cannot be placed on this sheet";
+                        if (existingVp != null)
+                        {
+                            var existingSheet = doc.GetElement(existingVp.SheetId) as ViewSheet;
+                            reason = $"View already placed on sheet '{existingSheet?.SheetNumber}' — pass force:true to move it";
+                        }
+                        return ResponseBuilder.Error(reason, "OPERATION_FAILED").Build();
+                    }
                 }
 
                 // Get sheet dimensions from title block

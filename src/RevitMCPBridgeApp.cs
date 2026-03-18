@@ -85,6 +85,27 @@ namespace RevitMCPBridge
                     {
                         Log.Error(ex, "Failed to initialize ChangeTracker");
                     }
+
+                    // Fix: auto-restart pipe server when a new document is opened.
+                    // Revit's named pipe context becomes stale after switching files —
+                    // a fresh Stop+Start clears any dead connections and re-initialises
+                    // the server against the newly active document.
+                    _uiApplication.Application.DocumentOpened += (s, e) =>
+                    {
+                        try
+                        {
+                            if (_mcpServer != null)
+                            {
+                                _mcpServer.Stop();
+                                _mcpServer.Start();
+                                Log.Information($"MCP Server restarted after document open: {e.Document.Title}");
+                            }
+                        }
+                        catch (Exception restartEx)
+                        {
+                            Log.Error(restartEx, "Failed to restart MCP Server after document open");
+                        }
+                    };
                 };
                 
                 // Initialize logger
