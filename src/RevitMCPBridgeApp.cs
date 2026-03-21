@@ -500,11 +500,18 @@ namespace RevitMCPBridge
             // Muzzle
             dc.DrawEllipse(white, penThin, new Point(40 * s, 48 * s), 10 * s, 7 * s);
             // Eyes
-            dc.DrawEllipse(dark, null, new Point(34 * s, 34 * s), 2.8 * s, 2.8 * s);
-            dc.DrawEllipse(dark, null, new Point(46 * s, 34 * s), 2.8 * s, 2.8 * s);
-            // Nostrils
-            dc.DrawEllipse(dark, null, new Point(37 * s, 48 * s), 1.2 * s, 1.2 * s);
-            dc.DrawEllipse(dark, null, new Point(43 * s, 48 * s), 1.2 * s, 1.2 * s);
+            dc.DrawEllipse(dark, null, new Point(34 * s, 34 * s), 3.5 * s, 3.5 * s);
+            dc.DrawEllipse(dark, null, new Point(46 * s, 34 * s), 3.5 * s, 3.5 * s);
+            // Nostrils (higher on muzzle)
+            dc.DrawEllipse(dark, null, new Point(37 * s, 46 * s), 1.4 * s, 1.4 * s);
+            dc.DrawEllipse(dark, null, new Point(43 * s, 46 * s), 1.4 * s, 1.4 * s);
+            // Smile
+            var smileFigure = new System.Windows.Media.PathFigure { StartPoint = new Point(33 * s, 51 * s) };
+            smileFigure.Segments.Add(new System.Windows.Media.QuadraticBezierSegment(new Point(40 * s, 55 * s), new Point(47 * s, 51 * s), true));
+            var smilePath = new System.Windows.Media.PathGeometry();
+            smilePath.Figures.Add(smileFigure);
+            var smilePen = new Pen(dark, Math.Max(0.8, 1.0 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            dc.DrawGeometry(null, smilePen, smilePath);
         }
 
         private void DrawClaudeIcon(DrawingContext dc, int size)
