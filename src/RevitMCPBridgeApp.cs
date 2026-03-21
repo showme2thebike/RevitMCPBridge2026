@@ -16,7 +16,7 @@ namespace RevitMCPBridge
     {
         private static MCPServer _mcpServer;
         private static UIApplication _uiApplication;
-        private static string _tabName = "bimmonkey.ai";
+        private static string _tabName = "BIM Monkey";
         private static MCPRequestHandler _requestHandler;
         private static ExternalEvent _externalEvent;
 
@@ -223,6 +223,20 @@ namespace RevitMCPBridge
             statusButton.LargeImage = CreateButtonIcon("status", 32);
             statusButton.Image = CreateButtonIcon("status", 16);
 
+            // Platform button
+            var platformButtonData = new PushButtonData(
+                "BimMonkeyPlatform",
+                "Platform",
+                Assembly.GetExecutingAssembly().Location,
+                "RevitMCPBridge.Commands.OpenPlatformCommand")
+            {
+                ToolTip = "Open BIM Monkey dashboard",
+                LongDescription = "Opens app.bimmonkey.ai in your browser."
+            };
+            var platformButton = panel.AddItem(platformButtonData) as PushButton;
+            platformButton.LargeImage = CreateButtonIcon("ai", 32);
+            platformButton.Image = CreateButtonIcon("ai", 16);
+
             // FAQ button
             panel.AddSeparator();
             var faqButtonData = new PushButtonData(
@@ -231,10 +245,12 @@ namespace RevitMCPBridge
                 Assembly.GetExecutingAssembly().Location,
                 "RevitMCPBridge.Commands.BimMonkeyFaqCommand")
             {
-                ToolTip = "bimmonkey.ai help & FAQ",
-                LongDescription = "Opens the bimmonkey.ai quick-start guide and frequently asked questions."
+                ToolTip = "BIM Monkey help & FAQ",
+                LongDescription = "Opens the BIM Monkey quick-start guide and frequently asked questions."
             };
-            panel.AddItem(faqButtonData);
+            var faqButton = panel.AddItem(faqButtonData) as PushButton;
+            faqButton.LargeImage = CreateButtonIcon("logs", 32);
+            faqButton.Image = CreateButtonIcon("logs", 16);
         }
 
         private void CreateToolsPanel(UIControlledApplication application)
