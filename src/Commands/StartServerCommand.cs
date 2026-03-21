@@ -24,17 +24,14 @@ namespace RevitMCPBridge.Commands
                 
                 if (server.IsRunning)
                 {
-                    TaskDialog.Show("MCP Bridge", "Server is already running.");
+                    TaskDialog.Show("BIM Monkey", "Server is already running.");
                     return Result.Succeeded;
                 }
-                
+
                 server.Start();
-                
-                var dialog = new TaskDialog("MCP Bridge Server Started");
-                dialog.MainContent = $"The MCP Bridge server has been started successfully.\n\n" +
-                                   $"Pipe Name: {server.PipeName}\n" +
-                                   $"Status: Running\n\n" +
-                                   "You can now connect Claude or other MCP clients to interact with Revit.";
+
+                var dialog = new TaskDialog("BIM Monkey");
+                dialog.MainContent = "BIM Monkey server started. You can now run Claude.";
                 dialog.MainIcon = TaskDialogIcon.TaskDialogIconInformation;
                 dialog.Show();
                 
