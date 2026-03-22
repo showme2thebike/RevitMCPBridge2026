@@ -36,6 +36,13 @@ SHEET_PLACEABLE_TYPES = {"FloorPlan", "CeilingPlan", "Elevation", "Section",
                           "EngineeringPlan", "AreaPlan"}
 
 
+def _clean_str(s):
+    """Strip control characters that PowerShell pipe transport can corrupt."""
+    if not isinstance(s, str):
+        return s
+    return ''.join(c for c in s if ord(c) >= 32 or c == '\t').strip()
+
+
 def _get_revit_array(container, array_key):
     """Extract an array from a Revit response object or direct list."""
     if isinstance(container, list):
@@ -60,12 +67,12 @@ def build_model_summary(raw_model):
     # Views — filter to sheet-placeable types, keep only id/name/viewType
     raw_views = _get_revit_array(raw_model.get("views", {}), "views")
     existing_views = [
-        {"id": v["id"], "name": v["name"], "viewType": v["viewType"]}
+        {"id": v["id"], "name": _clean_str(v["name"]), "viewType": v["viewType"]}
         for v in raw_views
         if v.get("viewType") in SHEET_PLACEABLE_TYPES and v.get("id") and v.get("name")
     ]
     existing_drafting_views = [
-        {"id": v["id"], "name": v["name"]}
+        {"id": v["id"], "name": _clean_str(v["name"])}
         for v in raw_views
         if v.get("viewType") == "DraftingView" and v.get("id") and v.get("name")
     ]
@@ -73,7 +80,7 @@ def build_model_summary(raw_model):
     # Sheets — keep only sheetNumber and sheetName
     raw_sheets = _get_revit_array(raw_model.get("sheets", {}), "sheets")
     existing_sheets = [
-        {"sheetNumber": s.get("sheetNumber"), "sheetName": s.get("sheetName") or s.get("name")}
+        {"sheetNumber": _clean_str(s.get("sheetNumber")), "sheetName": _clean_str(s.get("sheetName") or s.get("name"))}
         for s in raw_sheets
         if s.get("sheetNumber")
     ]
@@ -81,7 +88,7 @@ def build_model_summary(raw_model):
     # Levels — keep id, name, elevation
     raw_levels = _get_revit_array(raw_model.get("levels", {}), "levels")
     levels = [
-        {"id": l.get("id"), "name": l.get("name"), "elevation": round(float(l.get("elevation", 0) or 0), 2)}
+        {"id": l.get("id"), "name": _clean_str(l.get("name")), "elevation": round(float(l.get("elevation", 0) or 0), 2)}
         for l in raw_levels
         if l.get("name")
     ]
@@ -91,10 +98,10 @@ def build_model_summary(raw_model):
     rooms = [
         {
             "id": r.get("id"),
-            "name": r.get("name"),
-            "number": r.get("number"),
+            "name": _clean_str(r.get("name")),
+            "number": _clean_str(r.get("number")),
             "area": round(float(r.get("area", 0) or 0), 1),
-            "levelName": r.get("levelName") or r.get("level"),
+            "levelName": _clean_str(r.get("levelName") or r.get("level")),
         }
         for r in raw_rooms
         if r.get("name")
@@ -105,9 +112,9 @@ def build_model_summary(raw_model):
     wall_types = [
         {
             "id": wt.get("id"),
-            "name": wt.get("name"),
+            "name": _clean_str(wt.get("name")),
             "width": round(float(wt.get("width", 0) or 0), 3),
-            "function": wt.get("function"),
+            "function": _clean_str(wt.get("function")),
         }
         for wt in raw_wall_types
         if wt.get("name")
@@ -121,15 +128,15 @@ def build_model_summary(raw_model):
     if not isinstance(pi, dict):
         pi = {}
     project_info = {k: v for k, v in {
-        "name": pi.get("name"),
-        "address": pi.get("address"),
-        "number": pi.get("number"),
+        "name": _clean_str(pi.get("name")),
+        "address": _clean_str(pi.get("address")),
+        "number": _clean_str(pi.get("number")),
     }.items() if v}
 
     project_name = (
         raw_model.get("projectName") or
         project_info.get("name") or
-        doc.get("title") or
+        _clean_str(doc.get("title")) or
         "Unnamed Project"
     )
 

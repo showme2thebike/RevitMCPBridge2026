@@ -244,8 +244,13 @@ namespace RevitMCPBridge
                 var v = new ParameterValidator(parameters, "CreateSheet");
                 v.ThrowIfInvalid();
 
-                var sheetNumber = v.GetOptional<string>("sheetNumber", "A101");
-                var sheetName = v.GetOptional<string>("sheetName", "Unnamed Sheet");
+                // Accept both naming conventions: sheetNumber/sheetName (preferred) or number/name (alias)
+                var sheetNumber = parameters["sheetNumber"]?.ToString()
+                               ?? parameters["number"]?.ToString()
+                               ?? "A101";
+                var sheetName = parameters["sheetName"]?.ToString()
+                             ?? parameters["name"]?.ToString()
+                             ?? "Unnamed Sheet";
 
                 // AUTO-SWITCH: Switch to the sheet after creation (default: true)
                 bool switchTo = v.GetOptional<bool>("switchTo", true);

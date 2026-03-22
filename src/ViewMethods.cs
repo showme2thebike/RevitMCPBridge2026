@@ -389,6 +389,15 @@ namespace RevitMCPBridge
                         _ => ViewDuplicateOption.Duplicate
                     };
 
+                    // Auto-upgrade DraftingView and Detail duplications to WithDetailing.
+                    // The default Duplicate option creates a shell with no content — Revit
+                    // then silently returns null from Viewport.Create, wasting the operation.
+                    if (option == ViewDuplicateOption.Duplicate &&
+                        (view.ViewType == ViewType.DraftingView || view.ViewType == ViewType.Detail))
+                    {
+                        option = ViewDuplicateOption.WithDetailing;
+                    }
+
                     var newViewId = view.Duplicate(option);
                     var newView = doc.GetElement(newViewId) as View;
 
@@ -398,6 +407,11 @@ namespace RevitMCPBridge
                     }
                     if (!newView.Name.EndsWith(" *")) newView.Name = newView.Name + " *";
 
+                    // Count elements so caller knows if the duplicate has usable content
+                    var elementCount = new FilteredElementCollector(doc, newViewId)
+                        .WhereElementIsNotElementType()
+                        .GetElementCount();
+
                     trans.Commit();
 
                     return ResponseBuilder.Success()
@@ -405,6 +419,8 @@ namespace RevitMCPBridge
                         .With("newViewId", (int)newViewId.Value)
                         .With("newViewName", newView.Name)
                         .With("duplicateOption", option.ToString())
+                        .With("elementCount", elementCount)
+                        .With("canPlace", elementCount > 1)
                         .Build();
                 }
             }
