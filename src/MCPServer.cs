@@ -3762,11 +3762,30 @@ namespace RevitMCPBridge
                                 Helpers.MethodDispatchWrapper.Execute(method, registeredMethod, uiApp, parameters));
                         }
 
+                        // Find closest matches by substring containment to help Claude recover without a full getMethods round-trip
+                        var methodLower = method.ToLowerInvariant();
+                        var suggestions = _methodRegistry.Keys
+                            .Where(m => {
+                                var ml = m.ToLowerInvariant();
+                                return ml.Contains(methodLower) || methodLower.Contains(ml) ||
+                                       (methodLower.Length > 4 && ml.Length > 4 &&
+                                        (ml.StartsWith(methodLower.Substring(0, Math.Min(4, methodLower.Length))) ||
+                                         methodLower.StartsWith(ml.Substring(0, Math.Min(4, ml.Length)))));
+                            })
+                            .OrderBy(m => Math.Abs(m.Length - method.Length))
+                            .Take(5)
+                            .ToList();
+
+                        var hint = suggestions.Any()
+                            ? $"Did you mean: {string.Join(", ", suggestions)}? Use getMethods to list all available methods."
+                            : "Use getMethods or getBatchMethods to list available methods.";
+
                         return Helpers.ResponseBuilder.Error(
                             $"Unknown method: {method}",
                             "METHOD_NOT_FOUND")
                             .With("method", method)
-                            .With("hint", "Use getMethods or getBatchMethods to list available methods")
+                            .With("suggestions", suggestions)
+                            .With("hint", hint)
                             .Build();
                 }
             }

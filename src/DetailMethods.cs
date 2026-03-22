@@ -6660,7 +6660,11 @@ namespace RevitMCPBridge2026
 
                 var operations = parameters["operations"] as JArray;
                 if (operations == null || operations.Count == 0)
-                    return ResponseBuilder.Error("batchDrawDetail", "operations array is empty").Build();
+                    return ResponseBuilder.Error("batchDrawDetail",
+                        "operations array is required and must not be empty. " +
+                        "Expected schema: { viewId: int, operations: [ { type: 'line'|'arc'|'filledRegion'|'text'|'detailComponent'|'dimension', ...typeSpecificParams } ] }. " +
+                        "Example: { \"viewId\": 12345, \"operations\": [{ \"type\": \"text\", \"x\": 0, \"y\": 0, \"text\": \"LABEL\" }] }")
+                        .Build();
 
                 // Cache line styles and filled region types for lookups by name
                 var lineStyleCache = new Dictionary<string, GraphicsStyle>(StringComparer.OrdinalIgnoreCase);
@@ -6896,7 +6900,9 @@ namespace RevitMCPBridge2026
                 double originX = parameters["originX"]?.ToObject<double>() ?? 0;
                 double originY = parameters["originY"]?.ToObject<double>() ?? 0;
                 double height = parameters["height"]?.ToObject<double>() ?? 8.0; // default 8 feet (or width for vertical)
-                string direction = parameters["direction"]?.ToString() ?? "left-to-right"; // left-to-right, right-to-left, top-to-bottom, bottom-to-top
+                // Default is bottom-to-top so construction details stack vertically (earth at bottom, finish at top).
+                // Pass direction="left-to-right" explicitly for horizontal assemblies (floor plans, etc).
+                string direction = parameters["direction"]?.ToString() ?? "bottom-to-top"; // left-to-right, right-to-left, top-to-bottom, bottom-to-top
                 bool addLabels = parameters["addLabels"]?.ToObject<bool>() ?? true;
                 double labelOffset = parameters["labelOffset"]?.ToObject<double>() ?? 0.5; // feet from stack
                 bool addDimensions = parameters["addDimensions"]?.ToObject<bool>() ?? true;
@@ -6926,6 +6932,9 @@ namespace RevitMCPBridge2026
                 double currentY = originY;
                 int dirMultiplier = (direction == "right-to-left" || direction == "bottom-to-top") ? -1 : 1;
                 var layerPositions = new List<object>(); // Track for dimension output
+                var missingRegionTypes = new List<string>(); // Hatch names requested but not found in project
+                // Fallback filled region type — used when a requested hatch name doesn't exist in the project
+                FilledRegionType fallbackRegionType = filledRegionTypeCache.Values.FirstOrDefault();
 
                 using (var trans = new Transaction(doc, "MCP Draw Layer Stack"))
                 {
@@ -7013,6 +7022,11 @@ namespace RevitMCPBridge2026
                             {
                                 FilledRegionType frt = null;
                                 filledRegionTypeCache.TryGetValue(hatch, out frt);
+                                if (frt == null)
+                                {
+                                    missingRegionTypes.Add(hatch);
+                                    frt = fallbackRegionType; // use first available type rather than silently skipping
+                                }
                                 if (frt != null)
                                 {
                                     var curveLoop = new CurveLoop();
@@ -7078,6 +7092,11 @@ namespace RevitMCPBridge2026
                             {
                                 FilledRegionType frt = null;
                                 filledRegionTypeCache.TryGetValue(hatch, out frt);
+                                if (frt == null)
+                                {
+                                    missingRegionTypes.Add(hatch);
+                                    frt = fallbackRegionType; // use first available type rather than silently skipping
+                                }
                                 if (frt != null)
                                 {
                                     var curveLoop = new CurveLoop();
@@ -7138,7 +7157,12 @@ namespace RevitMCPBridge2026
                         ? new { left = originX, right = originX + height, bottom = Math.Min(originY, currentY), top = Math.Max(originY, currentY) }
                         : new { left = Math.Min(originX, currentX), right = Math.Max(originX, currentX), bottom = originY, top = originY + height },
                     layerPositions,
-                    createdElements
+                    createdElements,
+                    // Hatch names that weren't found in the project — regions were drawn with fallback type instead.
+                    // Add these filled region types to the project (via Revit UI: Annotate > Region > Filled Region)
+                    // then re-run to get the correct hatching.
+                    missingRegionTypes = missingRegionTypes.Distinct().ToList(),
+                    hasMissingRegionTypes = missingRegionTypes.Count > 0,
                 });
             }
             catch (Exception ex)
