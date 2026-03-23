@@ -286,17 +286,6 @@ namespace RevitMCPBridge
             faqButton.LargeImage = CreateButtonIcon("faq", 32);
             faqButton.Image = CreateButtonIcon("faq", 16);
 
-            var snakeButtonData = new PushButtonData(
-                "Snake",
-                "Snake",
-                Assembly.GetExecutingAssembly().Location,
-                "RevitMCPBridge.Commands.SnakeCommand")
-            {
-                ToolTip = "Play Snake while Claude spins your Revit model"
-            };
-            var snakeButton = standardsPanel.AddItem(snakeButtonData) as PushButton;
-            snakeButton.LargeImage = CreateButtonIcon("snake", 32);
-            snakeButton.Image = CreateButtonIcon("snake", 16);
         }
 
         private void CreateToolsPanel(UIControlledApplication application)
@@ -533,9 +522,6 @@ namespace RevitMCPBridge
                             break;
                         case "faq":
                             DrawFaqIcon(dc, size);
-                            break;
-                        case "snake":
-                            DrawSnakeIcon(dc, size);
                             break;
                     }
                 }
@@ -1185,66 +1171,6 @@ namespace RevitMCPBridge
             double qx = m + (w - qText.Width) / 2 - cornerFold * 0.15;
             double qy = m + cornerFold + (h - cornerFold - qText.Height) / 2;
             dc.DrawText(qText, new Point(qx, qy));
-        }
-
-        private void DrawSnakeIcon(DrawingContext dc, int size)
-        {
-            // Dark background
-            dc.DrawRectangle(
-                new SolidColorBrush(Color.FromRgb(10, 10, 20)),
-                null,
-                new Rect(0, 0, size, size));
-
-            double s = size / 32.0;
-            var snakeBrush = new SolidColorBrush(Color.FromRgb(30, 200, 80));
-            var headBrush  = new SolidColorBrush(Color.FromRgb(40, 230, 100));
-            var foodBrush  = new SolidColorBrush(Color.FromRgb(255, 220, 50));
-            double seg = 4 * s;
-            double gap = 1 * s;
-            double r   = 1.5 * s;
-
-            // Snake body: S-curve path drawn as rounded segments
-            // row 1: → from col 2 to col 6
-            // row 2: ← from col 6 to col 2
-            // row 3: → head at col 3
-            var segs = new (double cx, double cy)[]
-            {
-                (6*s,  5*s), (10*s,  5*s), (14*s,  5*s), (18*s,  5*s), (22*s,  5*s),
-                (22*s, 12*s), (18*s, 12*s), (14*s, 12*s), (10*s, 12*s), (6*s,  12*s),
-                (6*s,  19*s), (10*s, 19*s), (14*s, 19*s)
-            };
-
-            // Draw body segments (tail to head-1)
-            for (int i = segs.Length - 1; i > 0; i--)
-            {
-                byte g = (byte)Math.Max(80, 200 - (segs.Length - 1 - i) * 10);
-                dc.DrawRoundedRectangle(
-                    new SolidColorBrush(Color.FromRgb(20, g, 60)),
-                    null,
-                    new Rect(segs[i].cx - seg / 2, segs[i].cy - seg / 2, seg - gap, seg - gap),
-                    r, r);
-            }
-
-            // Head
-            dc.DrawRoundedRectangle(
-                headBrush, null,
-                new Rect(segs[0].cx - seg / 2, segs[0].cy - seg / 2, seg - gap, seg - gap),
-                r + 0.5, r + 0.5);
-
-            // Eye on head (moving right → eye upper-right)
-            dc.DrawEllipse(Brushes.White, null,
-                new Point(segs[0].cx + seg * 0.25, segs[0].cy - seg * 0.15),
-                0.9 * s, 0.9 * s);
-
-            // Food circle (glowing yellow dot)
-            dc.DrawEllipse(foodBrush, null,
-                new Point(22 * s, 19 * s),
-                2.5 * s, 2.5 * s);
-            dc.DrawEllipse(
-                new SolidColorBrush(Color.FromArgb(100, 255, 255, 150)),
-                null,
-                new Point(22 * s, 19 * s),
-                3.5 * s, 3.5 * s);
         }
 
         private void DrawStartGenIcon(DrawingContext dc, int size)
