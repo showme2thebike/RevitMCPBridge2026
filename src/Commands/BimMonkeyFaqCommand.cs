@@ -51,15 +51,16 @@ namespace RevitMCPBridge.Commands
             html.AppendLine("body{font-family:'Segoe UI',Arial,sans-serif;margin:0;background:#f5f5f5;color:#111;}");
             html.AppendLine(".header{background:#000;color:#f5f5f5;padding:1.5rem 2rem;letter-spacing:-0.02em;}");
             html.AppendLine(".header h1{margin:0;font-size:1.4rem;font-weight:300;}");
-            html.AppendLine(".header p{margin:0.3rem 0 0;font-size:0.85rem;color:#aaa;font-weight:300;}");
-            html.AppendLine(".content{max-width:680px;margin:1.5rem auto;padding:0 1.5rem 3rem;}");
-            html.AppendLine("h2{font-size:0.78rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;margin:1.75rem 0 0.6rem;border-bottom:1px solid #ddd;padding-bottom:0.35rem;color:#555;}");
-            html.AppendLine(".q{font-weight:500;margin:0.9rem 0 0.2rem;font-size:0.95rem;}");
-            html.AppendLine(".a{color:#444;font-weight:300;line-height:1.6;margin:0 0 0.5rem 0;font-size:0.9rem;}");
-            html.AppendLine("code{background:#e8e8e8;padding:0.1rem 0.35rem;border-radius:3px;font-size:0.85em;}");
-            html.AppendLine(".step{display:flex;gap:0.75rem;margin:0.4rem 0;font-size:0.9rem;}");
-            html.AppendLine(".step-num{font-weight:600;min-width:1.25rem;}");
-            html.AppendLine("a{color:#000;}");
+            html.AppendLine(".header p{margin:0.3rem 0 0;font-size:0.85rem;color:#ccc;font-weight:300;}");
+            html.AppendLine(".content{max-width:680px;margin:1.5rem auto;padding:0 2.5rem 3rem;}");
+            html.AppendLine("h2{font-size:0.78rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;margin:1.75rem 0 0.6rem;border-bottom:2px solid #0055cc;padding-bottom:0.35rem;color:#0055cc;}");
+            html.AppendLine(".q{font-weight:600;margin:0.9rem 0 0.2rem;font-size:0.95rem;color:#000;border-left:3px solid #0055cc;padding-left:0.5rem;}");
+            html.AppendLine(".a{color:#000;font-weight:300;line-height:1.6;margin:0 0 0.5rem 0;font-size:0.9rem;}");
+            html.AppendLine("code{background:#e8e8e8;padding:0.1rem 0.35rem;border-radius:3px;font-size:0.85em;color:#000;}");
+            html.AppendLine(".step{display:table;width:100%;margin:0.4rem 0;font-size:0.9rem;}");
+            html.AppendLine(".step-num{display:table-cell;font-weight:600;white-space:nowrap;padding-right:0.6rem;vertical-align:top;width:1.5rem;color:#000;}");
+            html.AppendLine(".step > div + div{display:table-cell;vertical-align:top;color:#000;}");
+            html.AppendLine("a{color:#0066cc;}");
             html.AppendLine("</style></head><body>");
 
             html.AppendLine("<div class='header'><h1>BIM Monkey</h1><p>Revit Plugin — Quick Start &amp; FAQ</p></div>");
@@ -85,9 +86,47 @@ namespace RevitMCPBridge.Commands
             html.AppendLine("<p class='q'>Does output from Revit get added to the library?</p><p class='a'>Yes. Every CD set generated through the plugin feeds back into your training library automatically.</p>");
 
             html.AppendLine("<h2>Troubleshooting</h2>");
-            html.AppendLine("<p class='q'>Claude says it can't connect to Revit.</p><p class='a'>Click <strong>Server Status</strong> in the ribbon. If stopped, click <strong>Start Server</strong>. Make sure a project file is open in Revit.</p>");
+
+            html.AppendLine("<p class='q'>Claude says it can't connect to Revit / server isn't responding.</p>");
+            html.AppendLine("<p class='a'>The BIM Monkey server needs to be running before Claude can talk to Revit. To restart it:</p>");
+            html.AppendLine("<div class='step'><div class='step-num'>1.</div><div>Go to the <strong>BIM Monkey</strong> tab → <strong>Server Control</strong> panel</div></div>");
+            html.AppendLine("<div class='step'><div class='step-num'>2.</div><div>Click <strong>Stop Server</strong>, wait 2 seconds</div></div>");
+            html.AppendLine("<div class='step'><div class='step-num'>3.</div><div>Click <strong>Start Server</strong> — the status indicator should turn green</div></div>");
+            html.AppendLine("<div class='step'><div class='step-num'>4.</div><div>Return to Claude Code and retry your request</div></div>");
+
+            html.AppendLine("<p class='q'>I opened a new Revit file mid-session and Claude is reading the old file.</p>");
+            html.AppendLine("<p class='a'>The server stays bound to the document that was open when it started. After switching files, reset the connection:</p>");
+            html.AppendLine("<div class='step'><div class='step-num'>1.</div><div>Open your new Revit project file</div></div>");
+            html.AppendLine("<div class='step'><div class='step-num'>2.</div><div>BIM Monkey tab → click <strong>Stop Server</strong> then <strong>Start Server</strong></div></div>");
+            html.AppendLine("<div class='step'><div class='step-num'>3.</div><div>Claude will now read from the new active document</div></div>");
+
+            html.AppendLine("<p class='q'>Claude Code doesn't see the Revit tools (revit_execute not available).</p>");
+            html.AppendLine("<p class='a'>Claude Code <strong>must be opened from the BIM Monkey folder</strong> — not from a general terminal or another project. The MCP config that connects to Revit lives in <code>Documents\\BIM Monkey\\</code>.</p>");
+            html.AppendLine("<div class='step'><div class='step-num'>1.</div><div>Close any existing Claude Code session</div></div>");
+            html.AppendLine("<div class='step'><div class='step-num'>2.</div><div>In Revit, go to <strong>BIM Monkey tab</strong> and click the <strong>Claude Code</strong> button — this opens Claude Code pointed at the correct folder automatically</div></div>");
+            html.AppendLine("<div class='step'><div class='step-num'>3.</div><div>Alternatively, open Claude Code manually and navigate to <code>Documents\\BIM Monkey</code> as the working directory</div></div>");
+            html.AppendLine("<div class='step'><div class='step-num'>4.</div><div>Verify the <code>revit-bridge</code> MCP server shows as connected in Claude's tool list</div></div>");
+
             html.AppendLine("<p class='q'>Commands time out.</p><p class='a'>Revit must not have any modal dialogs open. Dismiss any dialogs, click in the drawing area to give Revit focus, then retry.</p>");
+
+            html.AppendLine("<p class='q'>Generation runs but produces no sheets / everything fails immediately.</p>");
+            html.AppendLine("<p class='a'>Usually means the API key is missing or the BIM Monkey server is unreachable. Check:</p>");
+            html.AppendLine("<div class='step'><div class='step-num'>1.</div><div>Open <code>Documents\\BIM Monkey\\CLAUDE.md</code> and confirm the line <code>BIM_MONKEY_API_KEY=bm_...</code> is present</div></div>");
+            html.AppendLine("<div class='step'><div class='step-num'>2.</div><div>Make sure you have an active internet connection</div></div>");
+            html.AppendLine("<div class='step'><div class='step-num'>3.</div><div>Restart the server (Stop → Start) and retry</div></div>");
+
+            html.AppendLine("<p class='q'>Revit shows a warning about duplicate Type Mark values.</p><p class='a'>This is a standard Revit model quality warning — it has nothing to do with BIM Monkey or the plugin. Revit is flagging elements in your model that share a Type Mark parameter. You can safely dismiss it.</p>");
+
+            html.AppendLine("<p class='q'>A sheet was created but views are missing or placement failed.</p>");
+            html.AppendLine("<p class='a'>In Revit, each view can only be placed on one sheet at a time. Claude handles this automatically by duplicating views when needed, but some complex cases may fail. Check the System Report on app.bimmonkey.ai for details on what failed and why, including specific recommendations.</p>");
+
             html.AppendLine("<p class='q'>API key rejected.</p><p class='a'>Keys start with <code>bm_</code>. Re-run the installer to re-enter your key, or email <a href='mailto:hello@bimmonkey.ai'>hello@bimmonkey.ai</a>.</p>");
+
+            html.AppendLine("<p class='q'>The installer was blocked by Windows / antivirus.</p>");
+            html.AppendLine("<p class='a'>The installer is not yet code-signed. Windows SmartScreen may block it.</p>");
+            html.AppendLine("<div class='step'><div class='step-num'>1.</div><div>Right-click the downloaded .zip → Properties → check <strong>Unblock</strong></div></div>");
+            html.AppendLine("<div class='step'><div class='step-num'>2.</div><div>Extract, right-click <code>BimMonkeySetup.exe</code> → Properties → <strong>Unblock</strong></div></div>");
+            html.AppendLine("<div class='step'><div class='step-num'>3.</div><div>Run installer → click <strong>More Info → Run Anyway</strong> if SmartScreen appears</div></div>");
 
             html.AppendLine("<h2>Support</h2>");
             html.AppendLine("<p class='a'>Email <a href='mailto:hello@bimmonkey.ai'>hello@bimmonkey.ai</a> or visit <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a>.</p>");

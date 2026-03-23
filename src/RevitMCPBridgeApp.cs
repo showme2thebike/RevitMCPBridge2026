@@ -230,8 +230,8 @@ namespace RevitMCPBridge
             statusButton.LargeImage = CreateButtonIcon("status", 32);
             statusButton.Image = CreateButtonIcon("status", 16);
 
-            // ── Generation Control ─────────────────────────────────────────
-            var easyPanel = application.CreateRibbonPanel(_tabName, "Generation");
+            // ── Documentation Control ──────────────────────────────────────
+            var easyPanel = application.CreateRibbonPanel(_tabName, "Documentation");
 
             var startGenButtonData = new PushButtonData(
                 "StartGeneration",
@@ -259,12 +259,12 @@ namespace RevitMCPBridge
             stopGenButton.LargeImage = CreateButtonIcon("stopgen", 32);
             stopGenButton.Image = CreateButtonIcon("stopgen", 16);
 
-            // ── Library Stats ──────────────────────────────────────────────
-            var standardsPanel = application.CreateRibbonPanel(_tabName, "Standards");
+            // ── Additions (Standards + FAQ) ────────────────────────────────
+            var standardsPanel = application.CreateRibbonPanel(_tabName, "Additions");
 
             var standardsButtonData = new PushButtonData(
                 "Standards",
-                "Library\nStats",
+                "Standards",
                 Assembly.GetExecutingAssembly().Location,
                 "RevitMCPBridge.Commands.StandardsCommand")
             {
@@ -273,6 +273,18 @@ namespace RevitMCPBridge
             var standardsButton = standardsPanel.AddItem(standardsButtonData) as PushButton;
             standardsButton.LargeImage = CreateButtonIcon("standards", 32);
             standardsButton.Image = CreateButtonIcon("standards", 16);
+
+            var faqButtonData = new PushButtonData(
+                "FAQ",
+                "FAQ",
+                Assembly.GetExecutingAssembly().Location,
+                "RevitMCPBridge.Commands.BimMonkeyFaqCommand")
+            {
+                ToolTip = "Frequently asked questions and troubleshooting tips"
+            };
+            var faqButton = standardsPanel.AddItem(faqButtonData) as PushButton;
+            faqButton.LargeImage = CreateButtonIcon("faq", 32);
+            faqButton.Image = CreateButtonIcon("faq", 16);
         }
 
         private void CreateToolsPanel(UIControlledApplication application)
@@ -506,6 +518,9 @@ namespace RevitMCPBridge
                             break;
                         case "standards":
                             DrawStandardsIcon(dc, size);
+                            break;
+                        case "faq":
+                            DrawFaqIcon(dc, size);
                             break;
                     }
                 }
@@ -1106,6 +1121,55 @@ namespace RevitMCPBridge
             dc.DrawLine(new Pen(dark, Math.Max(1, size * 0.04)),
                 new Point(margin * 0.6, bottom),
                 new Point(size - margin * 0.6, bottom));
+        }
+
+        private void DrawFaqIcon(DrawingContext dc, int size)
+        {
+            // Open book / document with lines of text
+            var ink   = new SolidColorBrush(Color.FromRgb(50, 50, 50));
+            var page  = new SolidColorBrush(Colors.White);
+            var fold  = new SolidColorBrush(Color.FromRgb(200, 200, 200));
+            var pen   = new Pen(ink, Math.Max(1, size * 0.04));
+            double m  = size * 0.10;
+            double w  = size - 2 * m;
+            double h  = size * 0.80;
+            double cornerFold = size * 0.18;
+
+            // Page body (with folded top-right corner)
+            var pagePath = new StreamGeometry();
+            using (var ctx = pagePath.Open())
+            {
+                ctx.BeginFigure(new Point(m, m), true, true);
+                ctx.LineTo(new Point(m + w - cornerFold, m), true, false);
+                ctx.LineTo(new Point(m + w, m + cornerFold), true, false);
+                ctx.LineTo(new Point(m + w, m + h), true, false);
+                ctx.LineTo(new Point(m, m + h), true, false);
+            }
+            dc.DrawGeometry(page, pen, pagePath);
+
+            // Folded corner triangle
+            var foldPath = new StreamGeometry();
+            using (var ctx = foldPath.Open())
+            {
+                ctx.BeginFigure(new Point(m + w - cornerFold, m), true, true);
+                ctx.LineTo(new Point(m + w - cornerFold, m + cornerFold), true, false);
+                ctx.LineTo(new Point(m + w, m + cornerFold), true, false);
+            }
+            dc.DrawGeometry(fold, pen, foldPath);
+
+            // "?" character centered on page
+            var qText = new FormattedText(
+                "?",
+                System.Globalization.CultureInfo.CurrentCulture,
+                System.Windows.FlowDirection.LeftToRight,
+                new Typeface(new FontFamily("Arial"), System.Windows.FontStyles.Normal,
+                    System.Windows.FontWeights.Bold, System.Windows.FontStretches.Normal),
+                size * 0.38,
+                ink,
+                96);
+            double qx = m + (w - qText.Width) / 2 - cornerFold * 0.15;
+            double qy = m + cornerFold + (h - cornerFold - qText.Height) / 2;
+            dc.DrawText(qText, new Point(qx, qy));
         }
 
         private void DrawStartGenIcon(DrawingContext dc, int size)
