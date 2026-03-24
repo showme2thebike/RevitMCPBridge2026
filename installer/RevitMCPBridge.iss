@@ -72,6 +72,7 @@ Source: "files\2024\Serilog.Sinks.File.dll"; DestDir: "{userappdata}\Autodesk\Re
 Source: "files\wrapper\revit_mcp_wrapper.py"; DestDir: "{app}\wrapper"; Components: mcpwrapper; Flags: ignoreversion
 Source: "files\wrapper\requirements.txt"; DestDir: "{app}\wrapper"; Components: mcpwrapper; Flags: ignoreversion
 Source: "files\wrapper\setup_claude.py"; DestDir: "{app}\wrapper"; Components: mcpwrapper; Flags: ignoreversion
+Source: "files\wrapper\analyze_redlines.py"; DestDir: "{app}\wrapper"; Components: mcpwrapper; Flags: ignoreversion
 
 ; === Documentation ===
 Source: "files\README.txt"; DestDir: "{app}"; Flags: ignoreversion isreadme
@@ -136,5 +137,10 @@ begin
       ForceDirectories(ExpandConstant('{userappdata}\Autodesk\Revit\Addins\2025'));
     if WizardIsComponentSelected('revit2024') then
       ForceDirectories(ExpandConstant('{userappdata}\Autodesk\Revit\Addins\2024'));
+
+    // Create BIM Monkey Documents folders
+    ForceDirectories(ExpandConstant('{userdocs}\BIM Monkey'));
+    ForceDirectories(ExpandConstant('{userdocs}\BIM Monkey\Redline Review'));
+    ForceDirectories(ExpandConstant('{userdocs}\BIM Monkey\Families'));
   end;
 end;

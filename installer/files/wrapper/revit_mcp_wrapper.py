@@ -37,10 +37,17 @@ SHEET_PLACEABLE_TYPES = {"FloorPlan", "CeilingPlan", "Elevation", "Section",
 
 
 def _clean_str(s):
-    """Strip control characters that PowerShell pipe transport can corrupt."""
+    """Strip control characters and chars that break Claude's JSON output.
+
+    Double-quotes inside Revit names (e.g. 'Concrete 6"') get embedded in
+    the generation prompt verbatim. When Claude copies them into its JSON
+    response without escaping, JSON.parse fails. Replace with inch symbol.
+    """
     if not isinstance(s, str):
         return s
-    return ''.join(c for c in s if ord(c) >= 32 or c == '\t').strip()
+    s = ''.join(c for c in s if ord(c) >= 32 or c == '\t').strip()
+    s = s.replace('"', '\u2033')  # replace " with ″ (double prime / inch symbol)
+    return s
 
 
 def _get_revit_array(container, array_key):
@@ -77,10 +84,16 @@ def build_model_summary(raw_model):
         if v.get("viewType") == "DraftingView" and v.get("id") and v.get("name")
     ]
 
-    # Sheets — keep only sheetNumber and sheetName
+    # Sheets — keep sheetNumber, sheetName, and placedViews (view IDs already on the sheet).
+    # placedViews is used by the backend to mark which views are already placed so the
+    # plan can set requiresDuplicate correctly instead of discovering conflicts at runtime.
     raw_sheets = _get_revit_array(raw_model.get("sheets", {}), "sheets")
     existing_sheets = [
-        {"sheetNumber": _clean_str(s.get("sheetNumber")), "sheetName": _clean_str(s.get("sheetName") or s.get("name"))}
+        {
+            "sheetNumber": _clean_str(s.get("sheetNumber")),
+            "sheetName": _clean_str(s.get("sheetName") or s.get("name")),
+            "placedViews": s.get("placedViews") or [],
+        }
         for s in raw_sheets
         if s.get("sheetNumber")
     ]
@@ -332,8 +345,74 @@ async def bim_monkey_generate(model_data: str) -> dict:
         {
           "success": true,
           "generationId": 42,          # save this — pass to bim_monkey_mark_executed when done
-          "plan": { ... }              # the full CD plan to execute in Revit
+          "plan": {
+            "sheets": [...],           # PHASE 1: create sheets + place views
+            "detailPlan": [...],       # PHASE 2: create drafting views + draw layer stacks + add callouts
+            "schedulePlan": [...]      # PHASE 3: door/window/roomFinish/keynote schedules
+          }
         }
+
+    REDLINE PRE-CHECK (before generating the plan):
+      If the user has loaded a redline PDF, call bim_monkey_get_redlines() first.
+      If it returns analysis results, incorporate those changes into the CD plan.
+      A redline change overrides the default plan — the architect's handwritten corrections take priority.
+
+    EXECUTION ORDER — all three phases are mandatory:
+      PHASE 1 — for each sheet in plan.sheets:
+        1. createSheet calls MUST be sent SEQUENTIALLY — never in parallel (bridge serializes writes)
+        2. for each viewPlacement: placeViewOnSheet (or placeScheduleOnSheet for schedules)
+           - before placeViewOnSheet: call canPlaceView(viewId, sheetId). If canPlace: false, call duplicateView(viewId) first and use the returned duplicateId for placement. Never skip — all views that are already placed on other sheets MUST be duplicated.
+           - do NOT place views on any sheet that plan.schedulePlan also targets
+        ELEVATION COMPOSITION RULE: align viewport edges to sheet margins — do not center.
+          Left-side views flush to left margin, right-side views flush to right margin.
+          Centering wastes whitespace and produces unprofessional layouts.
+
+      PHASE 2 — for each detail in plan.detailPlan:
+        0. FIRST call getUnplacedDraftingViews — place any existing unplaced hand-crafted views
+           before generating new ones. Do not re-create views that already exist in Revit.
+        1. createDraftingView (name, scale) — only for genuinely new details
+        2. DETAIL COMPONENT PREFERENCE (Sprint Q):
+           a. Call bim_monkey_list_detail_components() to see what families are loaded.
+           b. If matching detail component families exist (2x6 stud, GWB, plywood, etc.),
+              use placeDetailComponent / placeDetailComponentByName to build the layer stack.
+              Detail components are BIM-correct, taggable, and preferred over drawn lines.
+           c. If no matching components are loaded, fall back to drawLayerStack.
+           drawLayerStack fallback: direction="bottom-to-top", thickness in FEET (not inches).
+             3.5" stud = 0.292 ft, 5/8" GWB = 0.052 ft, 8" CMU = 0.667 ft.
+             Bridge auto-converts values > 2.0 ft but always pass correct feet values.
+        3. createTextNote (NOT addTextNote — that method does not exist) for each leaderCallout
+        4. Before placeViewOnSheet: verify the view has content — skip views with 0 elements returned by getElementsInView. Views with no elements will fail silently.
+        5. placeViewOnSheet to put the drafting view on its target sheet
+        DETAIL SHEET RULES:
+          - Max 4 viewports per A4.xx detail sheet (not 6 — 4 produces readable scale).
+          - Large master section details (full wall sections > half sheet height) go on G sheets, not A4.
+          - Split excess details to A4.xx+1, A4.xx+2, etc.
+      Never skip Phase 2 — detail sheets will be empty without it.
+
+      PHASE 3 — for each item in plan.schedulePlan:
+        door/window:
+          1. createSchedule (category="Doors" or "Windows", name=scheduleTitle)
+          2. addScheduleField for each field in fields[] — send sequentially
+          3. After creating, check row count. Configure column widths to fit content in single rows.
+             If a text field causes multi-row entries, reduce its column width or truncate field name.
+             Goal: every schedule entry fits in ONE row — never allow text wrapping.
+          4. placeScheduleOnSheet (scheduleId, sheetNumber)
+        roomFinish:
+          1. createRoomFinishSchedule (name=scheduleTitle) — one-shot, no addScheduleField needed
+          2. placeScheduleOnSheet (scheduleId, sheetNumber)
+        keynote:
+          1. createKeynoteSchedule (name=scheduleTitle) — one-shot
+          2. placeScheduleOnSheet (scheduleId, sheetNumber)
+      Schedule placement rules:
+        - After creating each schedule, check its row count. If rows > 25, it gets its own dedicated sheet.
+        - Never place more than one large schedule (> 25 rows) per sheet.
+        - If 3 schedules all have > 25 rows, use 3 separate sheets (A5.1, A5.2, A5.3).
+        - placeScheduleOnSheet accepts sheetNumber (string like "A5.1") OR sheetId (int) — prefer sheetNumber for readability.
+      Never skip Phase 3 — schedules are a core deliverable of every CD set.
+
+    ROOM TAG PLACEMENT RULE (applies to all floor plan views in Phase 1 and Audit Plans):
+      Place room tags in the lower-left quadrant of each room boundary — not center.
+      Center placement gets covered by furniture and notes. Lower-left is always visible.
     """
     if not BIM_MONKEY_API_KEY:
         return {"success": False, "error": "BIM_MONKEY_API_KEY not set in environment."}
@@ -381,6 +460,17 @@ async def bim_monkey_generate(model_data: str) -> dict:
             }
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace")[:500]
+        if e.code == 401:
+            key_preview = BIM_MONKEY_API_KEY[:12] + "..." if len(BIM_MONKEY_API_KEY) > 12 else BIM_MONKEY_API_KEY
+            key_len = len(BIM_MONKEY_API_KEY)
+            hint = " (key looks doubled — expected ~49 chars)" if key_len > 60 else ""
+            return {"success": False, "error": (
+                f"BIM Monkey API key rejected (401){hint}. "
+                f"Key in use: '{key_preview}' ({key_len} chars). "
+                f"Check BIM_MONKEY_API_KEY in Documents\\BIM Monkey\\.mcp.json — "
+                f"it should be ~49 characters starting with bm_. "
+                f"Reinstall the plugin to re-enter your key."
+            )}
         return {"success": False, "error": f"HTTP {e.code}: {body}"}
     except urllib.error.URLError as e:
         return {"success": False, "error": f"Network error: {e.reason}"}
@@ -466,6 +556,152 @@ async def bim_monkey_mark_executed(generation_id: int) -> dict:
         return {"success": False, "error": f"HTTP {e.code}: {body}"}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# ── Redline Review tools (Sprint N) ──────────────────────────────────────────
+
+def _redline_folder() -> str:
+    return os.path.join(os.path.expandvars('%USERPROFILE%'), 'Documents', 'BIM Monkey', 'Redline Review')
+
+
+@mcp.tool()
+async def bim_monkey_analyze_redlines() -> dict:
+    """
+    Convert the redline PDF loaded via the Revit ribbon into PNG page images.
+
+    After this returns, READ each file in pages[].path using the Read tool.
+    Look for red-ink annotations on each page: circles (element circled + change note),
+    arrows (what they point to + associated handwritten text), and red handwritten text.
+    For each annotation record: page number, element/area marked, and requested change.
+    Then call bim_monkey_save_redline_analysis() with your structured list of changes.
+
+    Returns:
+        {
+          "success": true,
+          "pageCount": 3,
+          "pages": [{"page": 1, "path": "C:\\...\\page-001.png", "width_px": 2200, "height_px": 1700}]
+        }
+    """
+    folder = _redline_folder()
+    pdf_path = os.path.join(folder, 'redline.pdf')
+
+    if not os.path.exists(pdf_path):
+        return {
+            "success": False,
+            "error": (
+                "No redline PDF found. Click 'Load' in the Redline Review ribbon panel "
+                "to select and load a PDF first."
+            )
+        }
+
+    # Find the analyze_redlines.py script (alongside this file)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_path = os.path.join(script_dir, 'analyze_redlines.py')
+
+    if not os.path.exists(script_path):
+        return {"success": False, "error": f"analyze_redlines.py not found at: {script_path}"}
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['python', script_path, '--folder', folder],
+            capture_output=True, text=True, timeout=120
+        )
+        output = result.stdout.strip()
+        if not output:
+            err = result.stderr.strip()[:300]
+            return {"success": False, "error": f"Script produced no output. stderr: {err}"}
+        return json.loads(output)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def bim_monkey_save_redline_analysis(changes: str) -> dict:
+    """
+    Save your structured redline analysis to disk so generation can use it.
+
+    Args:
+        changes: JSON string — list of change objects:
+            [{"page": 1, "element": "Door 101", "change": "Change to 3'-0\" wide", "type": "dimension"},
+             {"page": 2, "element": "Window W-3", "change": "Add awning operator", "type": "specification"},
+             ...]
+            type values: dimension | specification | note | tag | deletion | addition | other
+
+    Returns:
+        {"success": true, "path": "...", "changeCount": N}
+    """
+    folder = _redline_folder()
+    os.makedirs(folder, exist_ok=True)
+
+    try:
+        parsed = json.loads(changes) if isinstance(changes, str) else changes
+        out_path = os.path.join(folder, 'redline_analysis.json')
+        with open(out_path, 'w') as f:
+            json.dump({"changes": parsed, "analyzedAt": __import__('datetime').datetime.now().isoformat()}, f, indent=2)
+        return {"success": True, "path": out_path, "changeCount": len(parsed)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def bim_monkey_get_redlines() -> dict:
+    """
+    Read saved redline analysis. Call this at the start of generation to check
+    if the architect has loaded redline markup that should override the default plan.
+
+    Returns:
+        {"success": true, "hasRedlines": true, "changeCount": 5, "changes": [...]}
+        OR {"success": true, "hasRedlines": false} if no redlines loaded.
+    """
+    folder = _redline_folder()
+    analysis_path = os.path.join(folder, 'redline_analysis.json')
+
+    if not os.path.exists(analysis_path):
+        return {"success": True, "hasRedlines": False}
+
+    try:
+        with open(analysis_path, 'r') as f:
+            data = json.load(f)
+        changes = data.get('changes', [])
+        return {
+            "success": True,
+            "hasRedlines": len(changes) > 0,
+            "changeCount": len(changes),
+            "analyzedAt": data.get('analyzedAt'),
+            "changes": changes,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ── Detail Component tools (Sprint Q) ────────────────────────────────────────
+
+@mcp.tool()
+async def bim_monkey_list_detail_components() -> dict:
+    """
+    List detail component families and types loaded in the current Revit document.
+
+    Use this at the start of Phase 2 to determine whether to use placeDetailComponent
+    (BIM-correct, taggable) or fall back to drawLayerStack (lines only).
+
+    If families like "Detail Component - 2x6 Stud", "Detail Component - GWB", etc. are
+    present, prefer placeDetailComponent / placeDetailComponentByName over drawLayerStack.
+
+    Returns families[] and types[] available for placement via placeDetailComponent.
+    """
+    families = call_revit("getDetailComponentFamilies")
+    types = call_revit("getDetailComponentTypes", {})
+    return {
+        "success": True,
+        "families": families.get("families", []),
+        "types": types.get("types", []),
+        "note": (
+            "Prefer placeDetailComponent for wall layer stacks if matching types exist. "
+            "Detail components are BIM-correct and taggable — they represent real building materials "
+            "rather than drafted lines. Fall back to drawLayerStack only when no matching families are loaded."
+        ),
+    }
 
 
 if __name__ == "__main__":

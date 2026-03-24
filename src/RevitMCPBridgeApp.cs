@@ -259,6 +259,59 @@ namespace RevitMCPBridge
             stopGenButton.LargeImage = CreateButtonIcon("stopgen", 32);
             stopGenButton.Image = CreateButtonIcon("stopgen", 16);
 
+            var auditButtonData = new PushButtonData(
+                "AuditPlans",
+                "Audit",
+                Assembly.GetExecutingAssembly().Location,
+                "RevitMCPBridge.Commands.AuditPlansCommand")
+            {
+                ToolTip = "Tag all floor plans with room, door, and window tags",
+                AvailabilityClassName = "RevitMCPBridge.Commands.GenerationNotRunningAvailability"
+            };
+            var auditButton = easyPanel.AddItem(auditButtonData) as PushButton;
+            auditButton.LargeImage = CreateButtonIcon("audit", 32);
+            auditButton.Image = CreateButtonIcon("audit", 16);
+
+            // ── Redline Review ─────────────────────────────────────────────
+            var redlinePanel = application.CreateRibbonPanel(_tabName, "Redline Review");
+
+            var redlineLoadData = new PushButtonData(
+                "RedlineLoad",
+                "Load",
+                Assembly.GetExecutingAssembly().Location,
+                "RevitMCPBridge.Commands.RedlineLoadCommand")
+            {
+                ToolTip = "Load a redline PDF for Claude to analyze",
+                AvailabilityClassName = "RevitMCPBridge.Commands.RedlineNotAnalyzingAvailability"
+            };
+            var redlineLoadButton = redlinePanel.AddItem(redlineLoadData) as PushButton;
+            redlineLoadButton.LargeImage = CreateButtonIcon("redline-load", 32);
+            redlineLoadButton.Image = CreateButtonIcon("redline-load", 16);
+
+            var redlineCancelData = new PushButtonData(
+                "RedlineCancel",
+                "Cancel",
+                Assembly.GetExecutingAssembly().Location,
+                "RevitMCPBridge.Commands.RedlineCancelCommand")
+            {
+                ToolTip = "Stop the in-progress redline analysis and clear the loaded PDF"
+            };
+            var redlineCancelButton = redlinePanel.AddItem(redlineCancelData) as PushButton;
+            redlineCancelButton.LargeImage = CreateButtonIcon("redline-cancel", 32);
+            redlineCancelButton.Image = CreateButtonIcon("redline-cancel", 16);
+
+            var redlineClearData = new PushButtonData(
+                "RedlineClear",
+                "Clear",
+                Assembly.GetExecutingAssembly().Location,
+                "RevitMCPBridge.Commands.RedlineClearCommand")
+            {
+                ToolTip = "Remove all redline context — next generation runs clean"
+            };
+            var redlineClearButton = redlinePanel.AddItem(redlineClearData) as PushButton;
+            redlineClearButton.LargeImage = CreateButtonIcon("redline-clear", 32);
+            redlineClearButton.Image = CreateButtonIcon("redline-clear", 16);
+
             // ── Additions (Standards + FAQ) ────────────────────────────────
             var standardsPanel = application.CreateRibbonPanel(_tabName, "Additions");
 
@@ -522,6 +575,18 @@ namespace RevitMCPBridge
                             break;
                         case "faq":
                             DrawFaqIcon(dc, size);
+                            break;
+                        case "audit":
+                            DrawAuditIcon(dc, size);
+                            break;
+                        case "redline-load":
+                            DrawRedlineLoadIcon(dc, size);
+                            break;
+                        case "redline-cancel":
+                            DrawRedlineCancelIcon(dc, size);
+                            break;
+                        case "redline-clear":
+                            DrawRedlineClearIcon(dc, size);
                             break;
                     }
                 }
@@ -1171,6 +1236,91 @@ namespace RevitMCPBridge
             double qx = m + (w - qText.Width) / 2 - cornerFold * 0.15;
             double qy = m + cornerFold + (h - cornerFold - qText.Height) / 2;
             dc.DrawText(qText, new Point(qx, qy));
+        }
+
+        private void DrawAuditIcon(DrawingContext dc, int size)
+        {
+            // Green magnifying glass with a checkmark inside the lens
+            double s = size / 32.0;
+            var green = new SolidColorBrush(Color.FromRgb(56, 142, 60));
+            var white = new SolidColorBrush(Colors.White);
+            var pen   = new Pen(green, Math.Max(1.5, 2.5 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            var penW  = new Pen(white, Math.Max(1.2, 2.0 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+
+            // Lens circle
+            double cx = 13 * s, cy = 13 * s, r = 8 * s;
+            dc.DrawEllipse(green, null, new Point(cx, cy), r, r);
+            // White checkmark inside lens
+            dc.DrawLine(penW, new Point(9 * s, 13 * s), new Point(12 * s, 16 * s));
+            dc.DrawLine(penW, new Point(12 * s, 16 * s), new Point(17 * s, 9 * s));
+            // Handle
+            dc.DrawLine(pen, new Point(cx + r * 0.72, cy + r * 0.72), new Point(28 * s, 28 * s));
+        }
+
+        private void DrawRedlineLoadIcon(DrawingContext dc, int size)
+        {
+            // Teal document with red upward arrow indicating "load redlines"
+            double s = size / 32.0;
+            var teal    = new SolidColorBrush(Color.FromRgb(0, 131, 143));
+            var white   = new SolidColorBrush(Colors.White);
+            var red     = new SolidColorBrush(Color.FromRgb(211, 47, 47));
+            var penDoc  = new Pen(teal, Math.Max(1, 1.5 * s));
+            var penArr  = new Pen(red, Math.Max(1.5, 2.5 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+
+            // Document body
+            double dm = 3 * s, dw = 16 * s, dh = 22 * s, fold = 5 * s;
+            var docPath = new StreamGeometry();
+            using (var ctx = docPath.Open())
+            {
+                ctx.BeginFigure(new Point(dm, dm), true, true);
+                ctx.LineTo(new Point(dm + dw - fold, dm), true, false);
+                ctx.LineTo(new Point(dm + dw, dm + fold), true, false);
+                ctx.LineTo(new Point(dm + dw, dm + dh), true, false);
+                ctx.LineTo(new Point(dm, dm + dh), true, false);
+            }
+            dc.DrawGeometry(white, penDoc, docPath);
+
+            // Red upward arrow (right side of icon)
+            double ax = 23 * s, ayb = 29 * s, ayt = 14 * s, aw = 4 * s;
+            dc.DrawLine(penArr, new Point(ax, ayb), new Point(ax, ayt));
+            dc.DrawLine(penArr, new Point(ax, ayt), new Point(ax - aw, ayt + aw));
+            dc.DrawLine(penArr, new Point(ax, ayt), new Point(ax + aw, ayt + aw));
+        }
+
+        private void DrawRedlineCancelIcon(DrawingContext dc, int size)
+        {
+            // Orange circle with white X
+            double s  = size / 32.0;
+            var orange = new SolidColorBrush(Color.FromRgb(245, 124, 0));
+            var white  = new SolidColorBrush(Colors.White);
+            var penX   = new Pen(white, Math.Max(2, 3.0 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+
+            double cx = 16 * s, r = 13 * s;
+            dc.DrawEllipse(orange, null, new Point(cx, cx), r, r);
+            double m = 9 * s, edge = 23 * s;
+            dc.DrawLine(penX, new Point(m, m), new Point(edge, edge));
+            dc.DrawLine(penX, new Point(edge, m), new Point(m, edge));
+        }
+
+        private void DrawRedlineClearIcon(DrawingContext dc, int size)
+        {
+            // Gray broom / sweep indicating clear
+            double s  = size / 32.0;
+            var gray  = new SolidColorBrush(Color.FromRgb(100, 100, 100));
+            var red   = new SolidColorBrush(Color.FromRgb(183, 28, 28));
+            var penG  = new Pen(gray, Math.Max(1.5, 2.5 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            var penR  = new Pen(red, Math.Max(1.2, 2.0 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+
+            // Broom handle
+            dc.DrawLine(penG, new Point(24 * s, 4 * s), new Point(10 * s, 22 * s));
+            // Broom head (arc of bristles)
+            dc.DrawLine(penG, new Point(10 * s, 22 * s), new Point(4 * s, 28 * s));
+            dc.DrawLine(penG, new Point(10 * s, 22 * s), new Point(8 * s, 29 * s));
+            dc.DrawLine(penG, new Point(10 * s, 22 * s), new Point(13 * s, 29 * s));
+            dc.DrawLine(penG, new Point(10 * s, 22 * s), new Point(17 * s, 27 * s));
+            // Small red X in top-right corner indicating "remove"
+            dc.DrawLine(penR, new Point(22 * s, 4 * s), new Point(29 * s, 11 * s));
+            dc.DrawLine(penR, new Point(29 * s, 4 * s), new Point(22 * s, 11 * s));
         }
 
         private void DrawStartGenIcon(DrawingContext dc, int size)
