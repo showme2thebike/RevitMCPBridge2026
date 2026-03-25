@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 
 namespace RevitMCPBridge.Commands
 {
@@ -11,15 +12,31 @@ namespace RevitMCPBridge.Commands
         public static bool IsAnalyzing =>
             AnalysisProcess != null && !AnalysisProcess.HasExited;
 
+        /// <summary>Base folder: ~/Documents/BIM Monkey/Redline Review</summary>
         public static string RedlineFolder =>
             Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
                 "BIM Monkey", "Redline Review");
 
+        /// <summary>Session folder set when the user clicks Load. Each load gets its own timestamped subfolder.</summary>
+        public static string CurrentSessionFolder { get; set; }
+
+        /// <summary>Create a new timestamped session folder and set it as current.</summary>
+        public static string CreateSessionFolder()
+        {
+            var name = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            var path = Path.Combine(RedlineFolder, name);
+            Directory.CreateDirectory(path);
+            CurrentSessionFolder = path;
+            return path;
+        }
+
         public static bool HasPendingPdf =>
-            File.Exists(Path.Combine(RedlineFolder, "redline.pdf"));
+            CurrentSessionFolder != null &&
+            File.Exists(Path.Combine(CurrentSessionFolder, "redline.pdf"));
 
         public static bool HasCompletedAnalysis =>
-            File.Exists(Path.Combine(RedlineFolder, "redline_analysis.json"));
+            CurrentSessionFolder != null &&
+            File.Exists(Path.Combine(CurrentSessionFolder, "redline_analysis.json"));
     }
 }

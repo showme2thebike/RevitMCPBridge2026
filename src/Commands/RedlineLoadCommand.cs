@@ -17,11 +17,13 @@ namespace RevitMCPBridge.Commands
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
-        private const string AnalysisPrompt =
-            "Analyze redline PDF: call bim_monkey_analyze_redlines() to convert it to page images, " +
-            "then read each image file returned and identify all red-ink annotations — circles, arrows, " +
-            "and handwritten notes in red. For each annotation note: page, what element is marked, " +
-            "and what change is requested. Save findings with bim_monkey_save_redline_analysis(). " +
+        private static string BuildAnalysisPrompt(string pdfPath) =>
+            $"Analyze redline PDF: call bim_monkey_analyze_redlines(pdf_path='{pdfPath}') to convert it to page images, " +
+            "then read each image file returned. Look for ALL markup styles — red ink, orange callouts, " +
+            "circled elements, revision clouds, and typed annotation boxes. For each annotation note: " +
+            "page number, what element is marked, and what change is requested. " +
+            "Use PDF text extraction if annotation text is too small to read visually. " +
+            "Save findings with bim_monkey_save_redline_analysis(). " +
             "When complete, tell the user analysis is done and they can click Start Generation.";
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
@@ -43,15 +45,12 @@ namespace RevitMCPBridge.Commands
                 if (dlg.ShowDialog() != true)
                     return Result.Succeeded;
 
-                var folder = RedlineState.RedlineFolder;
-                Directory.CreateDirectory(folder);
+                // Each load gets its own self-contained session folder
+                var sessionFolder = RedlineState.CreateSessionFolder();
 
-                // Clear any previous redline session
-                foreach (var f in Directory.GetFiles(folder))
-                    File.Delete(f);
-
-                var destPath = Path.Combine(folder, "redline.pdf");
-                File.Copy(dlg.FileName, destPath, overwrite: true);
+                // Copy PDF as redline.pdf inside the session folder
+                var destPath = Path.Combine(sessionFolder, "redline.pdf");
+                File.Copy(dlg.FileName, destPath, overwrite: false);
                 Log.Information($"Redline PDF loaded: {destPath}");
 
                 // Launch Claude to analyze
@@ -60,10 +59,11 @@ namespace RevitMCPBridge.Commands
                     "BIM Monkey");
                 Directory.CreateDirectory(workingDir);
 
+                var prompt = BuildAnalysisPrompt(destPath);
                 var process = Process.Start(new ProcessStartInfo
                 {
                     FileName = "cmd.exe",
-                    Arguments = $"/K cd /D \"{workingDir}\" && claude \"{AnalysisPrompt}\"",
+                    Arguments = $"/K cd /D \"{workingDir}\" && claude \"{prompt}\"",
                     UseShellExecute = true,
                     WorkingDirectory = workingDir,
                     WindowStyle = ProcessWindowStyle.Normal,

@@ -6,7 +6,8 @@ Called by the bim_monkey_analyze_redlines MCP tool in revit_mcp_wrapper.py.
 Requires: pip install pymupdf
 
 Usage:
-  python analyze_redlines.py --folder "C:\\Users\\...\\BIM Monkey\\Redline Review"
+  python analyze_redlines.py --pdf "C:\\path\\to\\redline_20260324_143022.pdf" --folder "C:\\...\\Redline Review"
+  python analyze_redlines.py --folder "C:\\...\\Redline Review"   # legacy: looks for redline.pdf in folder
 """
 import argparse
 import json
@@ -14,10 +15,9 @@ import os
 import sys
 
 
-def convert_pdf_to_pages(folder: str) -> dict:
-    pdf_path = os.path.join(folder, "redline.pdf")
+def convert_pdf_to_pages(pdf_path: str, output_folder: str) -> dict:
     if not os.path.exists(pdf_path):
-        return {"success": False, "error": f"No redline.pdf found in: {folder}"}
+        return {"success": False, "error": f"PDF not found: {pdf_path}"}
 
     try:
         import fitz  # PyMuPDF
@@ -31,13 +31,15 @@ def convert_pdf_to_pages(folder: str) -> dict:
         }
 
     try:
+        os.makedirs(output_folder, exist_ok=True)
         doc = fitz.open(pdf_path)
         pages = []
+        # 300 DPI — readable for small annotation text and handwriting
+        scale = 300 / 72
+        mat = fitz.Matrix(scale, scale)
         for i, page in enumerate(doc):
-            # 2× scale = 144 DPI — enough for Claude to read handwriting clearly
-            mat = fitz.Matrix(2.0, 2.0)
             pix = page.get_pixmap(matrix=mat)
-            png_path = os.path.join(folder, f"page-{i + 1:03d}.png")
+            png_path = os.path.join(output_folder, f"page-{i + 1:03d}.png")
             pix.save(png_path)
             pages.append({
                 "page": i + 1,
@@ -59,8 +61,16 @@ def convert_pdf_to_pages(folder: str) -> dict:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--folder", required=True, help="Path to Redline Review folder")
+    parser.add_argument("--pdf", help="Full path to the PDF file")
+    parser.add_argument("--folder", required=True, help="Output folder for PNG pages")
     args = parser.parse_args()
-    result = convert_pdf_to_pages(args.folder)
+
+    # Resolve PDF path: --pdf takes priority, then look for redline.pdf in folder
+    if args.pdf:
+        resolved = args.pdf
+    else:
+        resolved = os.path.join(args.folder, "redline.pdf")
+
+    result = convert_pdf_to_pages(resolved, args.folder)
     print(json.dumps(result, indent=2))
     sys.exit(0 if result.get("success") else 1)
