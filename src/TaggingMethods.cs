@@ -378,36 +378,44 @@ namespace RevitMCPBridge
         /// <summary>
         /// Tag all doors in a view
         /// </summary>
-        [MCPMethod("batchTagDoors", Category = "Tagging", Description = "Tag all doors in a view")]
+        [MCPMethod("batchTagDoors", Category = "Tagging", Description = "Tag all doors in a view. skipAlreadyTagged (default true) prevents duplicate tags on repeated runs.")]
         public static string BatchTagDoors(UIApplication uiApp, JObject parameters)
         {
             try
             {
                 var doc = uiApp.ActiveUIDocument.Document;
-
-                // Parse parameters
                 var viewId = new ElementId(int.Parse(parameters["viewId"].ToString()));
                 bool addLeader = parameters["addLeader"]?.ToObject<bool>() ?? false;
+                bool skipAlreadyTagged = parameters["skipAlreadyTagged"]?.ToObject<bool>() ?? true;
 
                 var view = doc.GetElement(viewId) as View;
-
                 if (view == null)
-                {
-                    return JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "View not found"
-                    });
-                }
+                    return JsonConvert.SerializeObject(new { success = false, error = "View not found" });
 
-                // Get all doors in view
                 var doors = new FilteredElementCollector(doc, view.Id)
                     .OfCategory(BuiltInCategory.OST_Doors)
                     .WhereElementIsNotElementType()
                     .Cast<FamilyInstance>()
                     .ToList();
 
+                // Build set of already-tagged door IDs to prevent duplicates
+                var alreadyTaggedIds = new HashSet<long>();
+                if (skipAlreadyTagged)
+                {
+                    var existingTags = new FilteredElementCollector(doc, view.Id)
+                        .OfCategory(BuiltInCategory.OST_DoorTags)
+                        .WhereElementIsNotElementType()
+                        .Cast<IndependentTag>()
+                        .ToList();
+                    foreach (var t in existingTags)
+                    {
+                        try { foreach (var id in t.GetTaggedLocalElementIds()) alreadyTaggedIds.Add(id.Value); }
+                        catch { }
+                    }
+                }
+
                 var taggedCount = 0;
+                var skippedCount = 0;
                 var taggedIds = new List<long>();
 
                 using (var trans = new Transaction(doc, "Batch Tag Doors"))
@@ -419,20 +427,16 @@ namespace RevitMCPBridge
 
                     foreach (var door in doors)
                     {
+                        if (skipAlreadyTagged && alreadyTaggedIds.Contains(door.Id.Value))
+                        {
+                            skippedCount++;
+                            continue;
+                        }
                         try
                         {
                             var location = (door.Location as LocationPoint).Point;
-
-                            var tag = IndependentTag.Create(
-                                doc,
-                                view.Id,
-                                new Reference(door),
-                                addLeader,
-                                TagMode.TM_ADDBY_CATEGORY,
-                                TagOrientation.Horizontal,
-                                location
-                            );
-
+                            var tag = IndependentTag.Create(doc, view.Id, new Reference(door),
+                                addLeader, TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, location);
                             taggedIds.Add(tag.Id.Value);
                             taggedCount++;
                         }
@@ -441,17 +445,17 @@ namespace RevitMCPBridge
                             Log.Warning($"Failed to tag door {door.Id.Value}: {ex.Message}");
                         }
                     }
-
                     trans.Commit();
                 }
 
                 Log.Information($"Tagged {taggedCount} doors in view {viewId.Value}");
-
                 return JsonConvert.SerializeObject(new
                 {
                     success = true,
+                    totalElements = doors.Count,
                     totalDoors = doors.Count,
-                    taggedCount = taggedCount,
+                    taggedCount,
+                    skippedCount,
                     tagIds = taggedIds,
                     viewId = viewId.Value
                 });
@@ -466,35 +470,44 @@ namespace RevitMCPBridge
         /// <summary>
         /// Tag all rooms in a view
         /// </summary>
-        [MCPMethod("batchTagRooms", Category = "Tagging", Description = "Tag all rooms in a view")]
+        [MCPMethod("batchTagRooms", Category = "Tagging", Description = "Tag all rooms in a view. skipAlreadyTagged (default true) prevents duplicate tags on repeated runs. tagPosition: 'center' (default) or 'lower-left'.")]
         public static string BatchTagRooms(UIApplication uiApp, JObject parameters)
         {
             try
             {
                 var doc = uiApp.ActiveUIDocument.Document;
-
-                // Parse parameters
                 var viewId = new ElementId(int.Parse(parameters["viewId"].ToString()));
+                bool skipAlreadyTagged = parameters["skipAlreadyTagged"]?.ToObject<bool>() ?? true;
+                var tagPosition = parameters["tagPosition"]?.ToString() ?? "lower-left";
 
                 var view = doc.GetElement(viewId) as View;
-
                 if (view == null)
-                {
-                    return JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "View not found"
-                    });
-                }
+                    return JsonConvert.SerializeObject(new { success = false, error = "View not found" });
 
-                // Get all rooms in view
                 var rooms = new FilteredElementCollector(doc, view.Id)
                     .OfCategory(BuiltInCategory.OST_Rooms)
                     .WhereElementIsNotElementType()
                     .Cast<Room>()
                     .ToList();
 
+                // Build set of already-tagged room IDs to prevent duplicates
+                var alreadyTaggedIds = new HashSet<long>();
+                if (skipAlreadyTagged)
+                {
+                    var existingRoomTags = new FilteredElementCollector(doc, view.Id)
+                        .OfCategory(BuiltInCategory.OST_RoomTags)
+                        .WhereElementIsNotElementType()
+                        .Cast<RoomTag>()
+                        .ToList();
+                    foreach (var t in existingRoomTags)
+                    {
+                        try { if (t.Room != null) alreadyTaggedIds.Add(t.Room.Id.Value); }
+                        catch { }
+                    }
+                }
+
                 var taggedCount = 0;
+                var skippedCount = 0;
                 var taggedIds = new List<long>();
 
                 using (var trans = new Transaction(doc, "Batch Tag Rooms"))
@@ -506,16 +519,24 @@ namespace RevitMCPBridge
 
                     foreach (var room in rooms)
                     {
+                        if (skipAlreadyTagged && alreadyTaggedIds.Contains(room.Id.Value))
+                        {
+                            skippedCount++;
+                            continue;
+                        }
                         try
                         {
-                            var location = (room.Location as LocationPoint).Point;
+                            var bb = room.get_BoundingBox(view);
+                            UV uv;
+                            if (tagPosition == "lower-left" && bb != null)
+                                uv = new UV(bb.Min.X + (bb.Max.X - bb.Min.X) * 0.2, bb.Min.Y + (bb.Max.Y - bb.Min.Y) * 0.2);
+                            else
+                            {
+                                var loc = (room.Location as LocationPoint).Point;
+                                uv = new UV(loc.X, loc.Y);
+                            }
 
-                            var roomTag = doc.Create.NewRoomTag(
-                                new LinkElementId(room.Id),
-                                new UV(location.X, location.Y),
-                                view.Id
-                            );
-
+                            var roomTag = doc.Create.NewRoomTag(new LinkElementId(room.Id), uv, view.Id);
                             taggedIds.Add(roomTag.Id.Value);
                             taggedCount++;
                         }
@@ -524,17 +545,17 @@ namespace RevitMCPBridge
                             Log.Warning($"Failed to tag room {room.Id.Value}: {ex.Message}");
                         }
                     }
-
                     trans.Commit();
                 }
 
                 Log.Information($"Tagged {taggedCount} rooms in view {viewId.Value}");
-
                 return JsonConvert.SerializeObject(new
                 {
                     success = true,
+                    totalElements = rooms.Count,
                     totalRooms = rooms.Count,
-                    taggedCount = taggedCount,
+                    taggedCount,
+                    skippedCount,
                     tagIds = taggedIds,
                     viewId = viewId.Value
                 });
@@ -542,6 +563,210 @@ namespace RevitMCPBridge
             catch (Exception ex)
             {
                 Log.Error(ex, "Error batch tagging rooms");
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        [MCPMethod("batchTagWindows", Category = "Tagging", Description = "Tag all windows in a view. Mirrors batchTagDoors signature exactly. skipAlreadyTagged (default true) prevents duplicates.")]
+        public static string BatchTagWindows(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var viewId = new ElementId(int.Parse(parameters["viewId"].ToString()));
+                bool addLeader = parameters["addLeader"]?.ToObject<bool>() ?? false;
+                bool skipAlreadyTagged = parameters["skipAlreadyTagged"]?.ToObject<bool>() ?? true;
+
+                var view = doc.GetElement(viewId) as View;
+                if (view == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = "View not found" });
+
+                var windows = new FilteredElementCollector(doc, view.Id)
+                    .OfCategory(BuiltInCategory.OST_Windows)
+                    .WhereElementIsNotElementType()
+                    .Cast<FamilyInstance>()
+                    .ToList();
+
+                var alreadyTaggedIds = new HashSet<long>();
+                if (skipAlreadyTagged)
+                {
+                    var existingTags = new FilteredElementCollector(doc, view.Id)
+                        .OfCategory(BuiltInCategory.OST_WindowTags)
+                        .WhereElementIsNotElementType()
+                        .Cast<IndependentTag>()
+                        .ToList();
+                    foreach (var t in existingTags)
+                    {
+                        try { foreach (var id in t.GetTaggedLocalElementIds()) alreadyTaggedIds.Add(id.Value); }
+                        catch { }
+                    }
+                }
+
+                var taggedCount = 0;
+                var skippedCount = 0;
+                var taggedIds = new List<long>();
+
+                using (var trans = new Transaction(doc, "Batch Tag Windows"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    foreach (var window in windows)
+                    {
+                        if (skipAlreadyTagged && alreadyTaggedIds.Contains(window.Id.Value))
+                        {
+                            skippedCount++;
+                            continue;
+                        }
+                        try
+                        {
+                            var location = (window.Location as LocationPoint).Point;
+                            var tag = IndependentTag.Create(doc, view.Id, new Reference(window),
+                                addLeader, TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, location);
+                            taggedIds.Add(tag.Id.Value);
+                            taggedCount++;
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warning($"Failed to tag window {window.Id.Value}: {ex.Message}");
+                        }
+                    }
+                    trans.Commit();
+                }
+
+                Log.Information($"Tagged {taggedCount} windows in view {viewId.Value}");
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    totalElements = windows.Count,
+                    totalWindows = windows.Count,
+                    taggedCount,
+                    skippedCount,
+                    tagIds = taggedIds,
+                    viewId = viewId.Value
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error batch tagging windows");
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        [MCPMethod("getUntaggedElements", Category = "Tagging", Description = "Read-only preflight: returns element IDs with no tag in the view. category: Doors | Windows | Rooms | Walls.")]
+        public static string GetUntaggedElements(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var viewId = new ElementId(int.Parse(parameters["viewId"].ToString()));
+                var categoryName = parameters["category"]?.ToString() ?? "Doors";
+
+                var view = doc.GetElement(viewId) as View;
+                if (view == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = "View not found" });
+
+                BuiltInCategory elemCat, tagCat;
+                switch (categoryName.ToLower())
+                {
+                    case "windows": elemCat = BuiltInCategory.OST_Windows;  tagCat = BuiltInCategory.OST_WindowTags; break;
+                    case "rooms":   elemCat = BuiltInCategory.OST_Rooms;    tagCat = BuiltInCategory.OST_RoomTags;   break;
+                    case "walls":   elemCat = BuiltInCategory.OST_Walls;    tagCat = BuiltInCategory.OST_WallTags;   break;
+                    default:        elemCat = BuiltInCategory.OST_Doors;    tagCat = BuiltInCategory.OST_DoorTags;   break;
+                }
+
+                var elements = new FilteredElementCollector(doc, viewId)
+                    .OfCategory(elemCat)
+                    .WhereElementIsNotElementType()
+                    .ToList();
+
+                // Collect tagged element IDs (rooms use RoomTag, others use IndependentTag)
+                var taggedIds = new HashSet<long>();
+                if (categoryName.ToLower() == "rooms")
+                {
+                    foreach (var t in new FilteredElementCollector(doc, viewId)
+                        .OfCategory(tagCat).WhereElementIsNotElementType().Cast<RoomTag>())
+                    {
+                        try { if (t.Room != null) taggedIds.Add(t.Room.Id.Value); } catch { }
+                    }
+                }
+                else
+                {
+                    foreach (var t in new FilteredElementCollector(doc, viewId)
+                        .OfCategory(tagCat).WhereElementIsNotElementType().Cast<IndependentTag>())
+                    {
+                        try { foreach (var id in t.GetTaggedLocalElementIds()) taggedIds.Add(id.Value); } catch { }
+                    }
+                }
+
+                var untagged = elements.Where(e => !taggedIds.Contains(e.Id.Value)).ToList();
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    category = categoryName,
+                    totalElements = elements.Count,
+                    taggedCount = taggedIds.Count,
+                    untaggedCount = untagged.Count,
+                    untaggedElementIds = untagged.Select(e => e.Id.Value).ToList(),
+                    viewId = viewId.Value
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error getting untagged elements");
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        [MCPMethod("batchTagAll", Category = "Tagging", Description = "Tag rooms, doors, and windows in one call. categories[] defaults to [Rooms, Doors, Windows]. Returns per-category counts.")]
+        public static string BatchTagAll(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var viewId = new ElementId(int.Parse(parameters["viewId"].ToString()));
+                var categories = parameters["categories"]?.ToObject<List<string>>()
+                    ?? new List<string> { "Rooms", "Doors", "Windows" };
+                bool skipAlreadyTagged = parameters["skipAlreadyTagged"]?.ToObject<bool>() ?? true;
+
+                var results = new List<object>();
+
+                foreach (var cat in categories)
+                {
+                    var catParams = new JObject
+                    {
+                        ["viewId"] = viewId.Value,
+                        ["skipAlreadyTagged"] = skipAlreadyTagged
+                    };
+
+                    string result;
+                    switch (cat.ToLower())
+                    {
+                        case "rooms":   result = BatchTagRooms(uiApp, catParams);   break;
+                        case "doors":   result = BatchTagDoors(uiApp, catParams);   break;
+                        case "windows": result = BatchTagWindows(uiApp, catParams); break;
+                        default:
+                            results.Add(new { category = cat, success = false, error = $"Unknown category '{cat}'. Use Rooms, Doors, or Windows." });
+                            continue;
+                    }
+
+                    var parsed = JsonConvert.DeserializeObject<dynamic>(result);
+                    results.Add(new { category = cat, result = parsed });
+                }
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    viewId = viewId.Value,
+                    results
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error in batchTagAll");
                 return ResponseBuilder.FromException(ex).Build();
             }
         }

@@ -4337,15 +4337,27 @@ namespace RevitMCPBridge
         /// Automatically tag all untagged elements of a category in a view.
         /// Uses smart placement to avoid overlapping existing tags.
         /// </summary>
-        [MCPMethod("autoTagUntagged", Category = "ViewAnnotation", Description = "Automatically tag all untagged elements of a category in a view")]
+        [MCPMethod("autoTagUntagged", Category = "ViewAnnotation", Description = "Tag all untagged elements of a single category in a view. Use 'category' (singular string), not 'categories'. For multi-category tagging use batchTagAll. tagPosition: 'center' | 'lower-left' (default center).")]
         public static string AutoTagUntagged(UIApplication uiApp, JObject parameters)
         {
             try
             {
                 var doc = uiApp.ActiveUIDocument.Document;
                 var viewIdParam = parameters?["viewId"];
+
+                // Fail loudly if caller passed 'categories' (array) — silent fallback caused wrong-category bugs
+                if (parameters?["categories"] != null)
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = "Use 'category' (singular string), not 'categories' (array). autoTagUntagged processes one category at a time. For multi-category tagging use batchTagAll."
+                    });
+                }
+
                 var categoryName = parameters?["category"]?.ToString() ?? "Doors";
-                var tagOffset = parameters?["offset"]?.ToObject<double>() ?? 2.0; // 2 feet default
+                var tagOffset = parameters?["offset"]?.ToObject<double>() ?? 2.0;
+                var tagPositionParam = parameters?["tagPosition"]?.ToString() ?? "center";
 
                 if (viewIdParam == null)
                 {
@@ -4389,9 +4401,11 @@ namespace RevitMCPBridge
                         tagCategory = BuiltInCategory.OST_WallTags;
                         break;
                     default:
-                        elemCategory = BuiltInCategory.OST_Doors;
-                        tagCategory = BuiltInCategory.OST_DoorTags;
-                        break;
+                        return JsonConvert.SerializeObject(new
+                        {
+                            success = false,
+                            error = $"Unknown category '{categoryName}'. Supported values: Doors, Windows, Rooms, Walls."
+                        });
                 }
 
                 // Get all elements in view
@@ -4439,6 +4453,7 @@ namespace RevitMCPBridge
 
                 int tagsPlaced = 0;
                 var errors = new List<string>();
+                var newTagIds = new List<long>();
 
                 using (var trans = new Transaction(doc, "Auto Tag Untagged Elements"))
                 {
@@ -4457,17 +4472,20 @@ namespace RevitMCPBridge
                             var bb = elem.get_BoundingBox(view);
                             if (bb == null) continue;
 
-                            var center = (bb.Min + bb.Max) / 2;
+                            XYZ tagPos;
+                            if (tagPositionParam == "lower-left")
+                                tagPos = new XYZ(bb.Min.X + (bb.Max.X - bb.Min.X) * 0.2, bb.Min.Y + (bb.Max.Y - bb.Min.Y) * 0.2, bb.Min.Z);
+                            else
+                                tagPos = FindBestTagPosition((bb.Min + bb.Max) / 2, existingTagPositions, tagOffset);
 
-                            // Find best tag position avoiding existing tags
-                            var tagPosition = FindBestTagPosition(center, existingTagPositions, tagOffset);
-                            existingTagPositions.Add(tagPosition);
+                            existingTagPositions.Add(tagPos);
 
                             var reference = new Reference(elem);
-                            var tag = IndependentTag.Create(doc, viewId, reference, false, TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, tagPosition);
+                            var tag = IndependentTag.Create(doc, viewId, reference, false, TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, tagPos);
 
                             if (tag != null)
                             {
+                                newTagIds.Add(tag.Id.Value);
                                 tagsPlaced++;
                             }
                         }
@@ -4488,7 +4506,10 @@ namespace RevitMCPBridge
                         category = categoryName,
                         totalElements = elements.Count,
                         alreadyTagged = taggedElementIds.Count,
-                        tagsPlaced = tagsPlaced,
+                        taggedCount = tagsPlaced,
+                        skippedCount = taggedElementIds.Count,
+                        tagsPlaced,
+                        tagIds = newTagIds,
                         errors = errors.Count > 0 ? errors.Take(10).ToList() : null
                     }
                 });
