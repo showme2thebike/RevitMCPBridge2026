@@ -589,62 +589,59 @@ namespace RevitMCPBridge
 
         private void DrawStartIcon(DrawingContext dc, int size)
         {
-            // Green play button
-            var margin = size * 0.2;
-            var playPath = new PathGeometry();
-            var figure = new PathFigure { StartPoint = new Point(margin, margin) };
-            figure.Segments.Add(new LineSegment(new Point(margin, size - margin), true));
-            figure.Segments.Add(new LineSegment(new Point(size - margin, size / 2), true));
-            figure.IsClosed = true;
-            playPath.Figures.Add(figure);
-            
-            var gradient = new LinearGradientBrush(
-                Color.FromRgb(76, 175, 80),
-                Color.FromRgb(56, 142, 60),
-                90);
-            
-            dc.DrawGeometry(gradient, new Pen(new SolidColorBrush(Color.FromRgb(46, 125, 50)), 1), playPath);
+            // White 3D play triangle — Architecture-tab style
+            double m = size * 0.18;
+            var shadow = new SolidColorBrush(Color.FromRgb(140, 140, 140));
+            var fill   = new LinearGradientBrush(Colors.White, Color.FromRgb(195, 195, 195), 135);
+            var pen    = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, size * 0.04));
+
+            // Shadow offset
+            var sf = new PathFigure { StartPoint = new Point(m+2, m+2) };
+            sf.Segments.Add(new LineSegment(new Point(m+2, size-m+2), true));
+            sf.Segments.Add(new LineSegment(new Point(size-m+2, size/2.0+2), true));
+            sf.IsClosed = true;
+            var sp = new PathGeometry(); sp.Figures.Add(sf);
+            dc.DrawGeometry(shadow, null, sp);
+
+            // Main triangle
+            var ff = new PathFigure { StartPoint = new Point(m, m) };
+            ff.Segments.Add(new LineSegment(new Point(m, size-m), true));
+            ff.Segments.Add(new LineSegment(new Point(size-m, size/2.0), true));
+            ff.IsClosed = true;
+            var fp = new PathGeometry(); fp.Figures.Add(ff);
+            dc.DrawGeometry(fill, pen, fp);
         }
         
         private void DrawStopIcon(DrawingContext dc, int size)
         {
-            // Red stop square
-            var margin = size * 0.25;
-            var rect = new Rect(margin, margin, size - 2 * margin, size - 2 * margin);
-            
-            var gradient = new LinearGradientBrush(
-                Color.FromRgb(244, 67, 54),
-                Color.FromRgb(211, 47, 47),
-                90);
-            
-            dc.DrawRoundedRectangle(gradient, 
-                new Pen(new SolidColorBrush(Color.FromRgb(183, 28, 28)), 1), 
-                rect, 2, 2);
+            // White 3D stop square — Architecture-tab style
+            double m = size * 0.22;
+            var shadow = new SolidColorBrush(Color.FromRgb(140, 140, 140));
+            var fill   = new LinearGradientBrush(Colors.White, Color.FromRgb(195, 195, 195), 135);
+            var pen    = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, size * 0.04));
+            dc.DrawRectangle(shadow, null, new Rect(m+2, m+2, size-2*m, size-2*m));
+            dc.DrawRectangle(fill, pen, new Rect(m, m, size-2*m, size-2*m));
+
         }
         
         private void DrawStatusIcon(DrawingContext dc, int size)
         {
-            // Status indicator with dots
-            var centerY = size / 2;
-            var dotRadius = size * 0.08;
-            var spacing = size * 0.25;
-            
-            // Three dots
+            // White 3D signal bars — Architecture-tab style
+            double s2 = size / 32.0;
+            var shadow  = new SolidColorBrush(Color.FromRgb(140, 140, 140));
+            var fill    = new LinearGradientBrush(Colors.White, Color.FromRgb(195, 195, 195), 90);
+            var pen     = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.5, s2 * 0.8));
+            var baseline = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5 * s2));
+
+            double bottom = 26 * s2, bw = 7 * s2, gap = 2 * s2, left = 3 * s2;
+            double[] heights = { 8 * s2, 14 * s2, 20 * s2 };
             for (int i = 0; i < 3; i++)
             {
-                var x = size / 2 - spacing + i * spacing;
-                var color = i == 0 ? Colors.Green : (i == 1 ? Colors.Orange : Colors.Gray);
-                dc.DrawEllipse(new SolidColorBrush(color), null, new Point(x, centerY), dotRadius, dotRadius);
+                double x = left + i * (bw + gap), h = heights[i];
+                dc.DrawRectangle(shadow, null, new Rect(x+2, bottom-h+2, bw, h));
+                dc.DrawRectangle(fill, pen,   new Rect(x,   bottom-h,   bw, h));
             }
-            
-            // Connection lines
-            var linePen = new Pen(new SolidColorBrush(Color.FromRgb(100, 100, 100)), 1);
-            dc.DrawLine(linePen, 
-                new Point(size / 2 - spacing + dotRadius, centerY),
-                new Point(size / 2 - dotRadius, centerY));
-            dc.DrawLine(linePen,
-                new Point(size / 2 + dotRadius, centerY),
-                new Point(size / 2 + spacing - dotRadius, centerY));
+            dc.DrawLine(baseline, new Point(left - 2*s2, bottom), new Point(left + 3*(bw+gap) + 2*s2, bottom));
         }
         
         private void DrawQueryIcon(DrawingContext dc, int size)
@@ -1099,68 +1096,72 @@ namespace RevitMCPBridge
 
         private void DrawStandardsIcon(DrawingContext dc, int size)
         {
-            // Bar chart — three ascending bars in blue
-            var blue1 = new SolidColorBrush(Color.FromRgb(144, 202, 249));  // light blue
-            var blue2 = new SolidColorBrush(Color.FromRgb(66, 165, 245));   // medium blue
-            var blue3 = new SolidColorBrush(Color.FromRgb(21, 101, 192));   // dark blue
-            var dark  = new SolidColorBrush(Color.FromRgb(13, 71, 161));
-            double margin = size * 0.12;
-            double bottom = size - margin;
-            double barW = (size - 2 * margin) / 4.0;
-            double gap = barW * 0.3;
-            double bw = barW - gap;
+            // White 3D ascending bar chart — Architecture-tab style
+            double s2 = size / 32.0;
+            var shadow   = new SolidColorBrush(Color.FromRgb(140, 140, 140));
+            var fill     = new LinearGradientBrush(Colors.White, Color.FromRgb(195, 195, 195), 90);
+            var pen      = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.5, s2 * 0.8));
+            var baseline = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5 * s2));
 
-            // Bar 1 — short
-            double h1 = size * 0.3;
-            dc.DrawRectangle(blue1, null, new Rect(margin, bottom - h1, bw, h1));
-            // Bar 2 — medium
-            double h2 = size * 0.52;
-            dc.DrawRectangle(blue2, null, new Rect(margin + barW, bottom - h2, bw, h2));
-            // Bar 3 — tall
-            double h3 = size * 0.72;
-            dc.DrawRectangle(blue3, null, new Rect(margin + barW * 2, bottom - h3, bw, h3));
-
-            // Baseline
-            dc.DrawLine(new Pen(dark, Math.Max(1, size * 0.04)),
-                new Point(margin * 0.6, bottom),
-                new Point(size - margin * 0.6, bottom));
+            double bottom = 26 * s2, bw = 7 * s2, gap = 2 * s2, left = 3 * s2;
+            double[] heights = { 8 * s2, 14 * s2, 20 * s2 };
+            for (int i = 0; i < 3; i++)
+            {
+                double x = left + i * (bw + gap), h = heights[i];
+                dc.DrawRectangle(shadow, null, new Rect(x+2, bottom-h+2, bw, h));
+                dc.DrawRectangle(fill, pen,   new Rect(x,   bottom-h,   bw, h));
+            }
+            dc.DrawLine(baseline, new Point(left - 2*s2, bottom), new Point(left + 3*(bw+gap) + 2*s2, bottom));
         }
 
         private void DrawFaqIcon(DrawingContext dc, int size)
         {
-            // Open book / document with lines of text
-            var ink   = new SolidColorBrush(Color.FromRgb(50, 50, 50));
-            var page  = new SolidColorBrush(Colors.White);
-            var fold  = new SolidColorBrush(Color.FromRgb(200, 200, 200));
-            var pen   = new Pen(ink, Math.Max(1, size * 0.04));
-            double m  = size * 0.10;
-            double w  = size - 2 * m;
-            double h  = size * 0.80;
-            double cornerFold = size * 0.18;
+            // White 3D page with dark "?" — Architecture-tab style
+            double s2 = size / 32.0;
+            double dm = 3*s2, dw = 22*s2, dh = 26*s2, fold = 6*s2;
+            var shadow = new SolidColorBrush(Color.FromRgb(140, 140, 140));
+            var fill   = new LinearGradientBrush(Colors.White, Color.FromRgb(195, 195, 195), 135);
+            var pen    = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5*s2));
 
-            // Page body (with folded top-right corner)
+            // Shadow page
+            var shadowPage = new StreamGeometry();
+            using (var ctx = shadowPage.Open())
+            {
+                ctx.BeginFigure(new Point(dm+2, dm+2), true, true);
+                ctx.LineTo(new Point(dm+dw-fold+2, dm+2), true, false);
+                ctx.LineTo(new Point(dm+dw+2, dm+fold+2), true, false);
+                ctx.LineTo(new Point(dm+dw+2, dm+dh+2), true, false);
+                ctx.LineTo(new Point(dm+2, dm+dh+2), true, false);
+            }
+            dc.DrawGeometry(shadow, null, shadowPage);
+
+            // Main page
             var pagePath = new StreamGeometry();
             using (var ctx = pagePath.Open())
             {
-                ctx.BeginFigure(new Point(m, m), true, true);
-                ctx.LineTo(new Point(m + w - cornerFold, m), true, false);
-                ctx.LineTo(new Point(m + w, m + cornerFold), true, false);
-                ctx.LineTo(new Point(m + w, m + h), true, false);
-                ctx.LineTo(new Point(m, m + h), true, false);
+                ctx.BeginFigure(new Point(dm, dm), true, true);
+                ctx.LineTo(new Point(dm+dw-fold, dm), true, false);
+                ctx.LineTo(new Point(dm+dw, dm+fold), true, false);
+                ctx.LineTo(new Point(dm+dw, dm+dh), true, false);
+                ctx.LineTo(new Point(dm, dm+dh), true, false);
             }
-            dc.DrawGeometry(page, pen, pagePath);
+            dc.DrawGeometry(fill, pen, pagePath);
 
-            // Folded corner triangle
+            // Folded corner crease
             var foldPath = new StreamGeometry();
             using (var ctx = foldPath.Open())
             {
-                ctx.BeginFigure(new Point(m + w - cornerFold, m), true, true);
-                ctx.LineTo(new Point(m + w - cornerFold, m + cornerFold), true, false);
-                ctx.LineTo(new Point(m + w, m + cornerFold), true, false);
+                ctx.BeginFigure(new Point(dm+dw-fold, dm), false, false);
+                ctx.LineTo(new Point(dm+dw-fold, dm+fold), true, false);
+                ctx.LineTo(new Point(dm+dw, dm+fold), true, false);
             }
-            dc.DrawGeometry(fold, pen, foldPath);
+            dc.DrawGeometry(null, pen, foldPath);
 
-            // "?" character centered on page — blue
+            // "?" centered — dark charcoal
+            double m  = dm;
+            double w  = dw;
+            double h  = dh;
+            double cornerFold = fold;
             var qText = new FormattedText(
                 "?",
                 System.Globalization.CultureInfo.CurrentCulture,
@@ -1168,7 +1169,7 @@ namespace RevitMCPBridge
                 new Typeface(new FontFamily("Arial"), System.Windows.FontStyles.Normal,
                     System.Windows.FontWeights.Bold, System.Windows.FontStretches.Normal),
                 size * 0.38,
-                new SolidColorBrush(Color.FromRgb(25, 118, 210)),
+                new SolidColorBrush(Color.FromRgb(55, 55, 55)),
                 96);
             double qx = m + (w - qText.Width) / 2 - cornerFold * 0.15;
             double qy = m + cornerFold + (h - cornerFold - qText.Height) / 2;
@@ -1177,121 +1178,169 @@ namespace RevitMCPBridge
 
         private void DrawAuditIcon(DrawingContext dc, int size)
         {
-            // Green magnifying glass with a checkmark inside the lens
+            // White 3D magnifying glass with checkmark — Architecture-tab style
             double s = size / 32.0;
-            var green = new SolidColorBrush(Color.FromRgb(56, 142, 60));
-            var white = new SolidColorBrush(Colors.White);
-            var pen   = new Pen(green, Math.Max(1.5, 2.5 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
-            var penW  = new Pen(white, Math.Max(1.2, 2.0 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+            var shadow   = new SolidColorBrush(Color.FromRgb(140, 140, 140));
+            var fill     = new LinearGradientBrush(Colors.White, Color.FromRgb(195, 195, 195), 135);
+            var pen      = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1.5, 2.5*s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            var checkPen = new Pen(new SolidColorBrush(Color.FromRgb(55, 55, 55)), Math.Max(1, 2*s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
 
-            // Lens circle
-            double cx = 13 * s, cy = 13 * s, r = 8 * s;
-            dc.DrawEllipse(green, null, new Point(cx, cy), r, r);
-            // White checkmark inside lens
-            dc.DrawLine(penW, new Point(9 * s, 13 * s), new Point(12 * s, 16 * s));
-            dc.DrawLine(penW, new Point(12 * s, 16 * s), new Point(17 * s, 9 * s));
-            // Handle
-            dc.DrawLine(pen, new Point(cx + r * 0.72, cy + r * 0.72), new Point(28 * s, 28 * s));
+            double cx = 13*s, cy = 13*s, r = 8.5*s;
+            // Shadow lens
+            dc.DrawEllipse(shadow, null, new Point(cx+2, cy+2), r, r);
+            // Main lens
+            dc.DrawEllipse(fill, pen, new Point(cx, cy), r, r);
+            // Checkmark
+            dc.DrawLine(checkPen, new Point(9*s, 13*s), new Point(12*s, 16*s));
+            dc.DrawLine(checkPen, new Point(12*s, 16*s), new Point(17*s, 9*s));
+            // Handle shadow + handle
+            var handleShadow = new Pen(shadow, Math.Max(2, 3*s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            dc.DrawLine(handleShadow, new Point(cx+r*0.7+2, cy+r*0.7+2), new Point(28*s+2, 28*s+2));
+            dc.DrawLine(pen, new Point(cx+r*0.7, cy+r*0.7), new Point(28*s, 28*s));
         }
 
         private void DrawRedlineLoadIcon(DrawingContext dc, int size)
         {
-            // Teal document with red upward arrow indicating "load redlines"
+            // White 3D document with up-arrow — Architecture-tab style
             double s = size / 32.0;
-            var teal    = new SolidColorBrush(Color.FromRgb(0, 131, 143));
-            var white   = new SolidColorBrush(Colors.White);
-            var red     = new SolidColorBrush(Color.FromRgb(211, 47, 47));
-            var penDoc  = new Pen(teal, Math.Max(1, 1.5 * s));
-            var penArr  = new Pen(red, Math.Max(1.5, 2.5 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            var shadow  = new SolidColorBrush(Color.FromRgb(140, 140, 140));
+            var fill    = new LinearGradientBrush(Colors.White, Color.FromRgb(195, 195, 195), 135);
+            var pen     = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5*s));
+            var penArr  = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1.5, 2.5*s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
 
-            // Document body
-            double dm = 3 * s, dw = 16 * s, dh = 22 * s, fold = 5 * s;
+            double dm = 4*s, dw = 14*s, dh = 22*s, fold = 5*s;
+
+            // Shadow doc
+            var shadowDoc = new StreamGeometry();
+            using (var ctx = shadowDoc.Open())
+            {
+                ctx.BeginFigure(new Point(dm+2, dm+2), true, true);
+                ctx.LineTo(new Point(dm+dw-fold+2, dm+2), true, false);
+                ctx.LineTo(new Point(dm+dw+2, dm+fold+2), true, false);
+                ctx.LineTo(new Point(dm+dw+2, dm+dh+2), true, false);
+                ctx.LineTo(new Point(dm+2, dm+dh+2), true, false);
+            }
+            dc.DrawGeometry(shadow, null, shadowDoc);
+
+            // Main doc
             var docPath = new StreamGeometry();
             using (var ctx = docPath.Open())
             {
                 ctx.BeginFigure(new Point(dm, dm), true, true);
-                ctx.LineTo(new Point(dm + dw - fold, dm), true, false);
-                ctx.LineTo(new Point(dm + dw, dm + fold), true, false);
-                ctx.LineTo(new Point(dm + dw, dm + dh), true, false);
-                ctx.LineTo(new Point(dm, dm + dh), true, false);
+                ctx.LineTo(new Point(dm+dw-fold, dm), true, false);
+                ctx.LineTo(new Point(dm+dw, dm+fold), true, false);
+                ctx.LineTo(new Point(dm+dw, dm+dh), true, false);
+                ctx.LineTo(new Point(dm, dm+dh), true, false);
             }
-            dc.DrawGeometry(white, penDoc, docPath);
+            dc.DrawGeometry(fill, pen, docPath);
 
-            // Red upward arrow (right side of icon)
-            double ax = 23 * s, ayb = 29 * s, ayt = 14 * s, aw = 4 * s;
+            // Fold crease
+            var foldPath = new StreamGeometry();
+            using (var ctx = foldPath.Open())
+            {
+                ctx.BeginFigure(new Point(dm+dw-fold, dm), false, false);
+                ctx.LineTo(new Point(dm+dw-fold, dm+fold), true, false);
+                ctx.LineTo(new Point(dm+dw, dm+fold), true, false);
+            }
+            dc.DrawGeometry(null, pen, foldPath);
+
+            // Up arrow (right side)
+            double ax = 24*s, ayb = 29*s, ayt = 14*s, aw = 3.5*s;
             dc.DrawLine(penArr, new Point(ax, ayb), new Point(ax, ayt));
-            dc.DrawLine(penArr, new Point(ax, ayt), new Point(ax - aw, ayt + aw));
-            dc.DrawLine(penArr, new Point(ax, ayt), new Point(ax + aw, ayt + aw));
+            dc.DrawLine(penArr, new Point(ax, ayt), new Point(ax-aw, ayt+aw));
+            dc.DrawLine(penArr, new Point(ax, ayt), new Point(ax+aw, ayt+aw));
         }
 
         private void DrawRedlineCancelIcon(DrawingContext dc, int size)
         {
-            // Orange circle with white X
+            // White 3D circle with dark X — Architecture-tab style
             double s  = size / 32.0;
-            var orange = new SolidColorBrush(Color.FromRgb(245, 124, 0));
-            var white  = new SolidColorBrush(Colors.White);
-            var penX   = new Pen(white, Math.Max(2, 3.0 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            double cx = 16*s, r = 13*s;
+            var shadow = new SolidColorBrush(Color.FromRgb(140, 140, 140));
+            var fill   = new LinearGradientBrush(Colors.White, Color.FromRgb(195, 195, 195), 135);
+            var pen    = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5*s));
+            var penX   = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1.5, 2.5*s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
 
-            double cx = 16 * s, r = 13 * s;
-            dc.DrawEllipse(orange, null, new Point(cx, cx), r, r);
-            double m = 9 * s, edge = 23 * s;
+            dc.DrawEllipse(shadow, null, new Point(cx+2, cx+2), r, r);
+            dc.DrawEllipse(fill, pen, new Point(cx, cx), r, r);
+            double m = 9*s, edge = 23*s;
             dc.DrawLine(penX, new Point(m, m), new Point(edge, edge));
             dc.DrawLine(penX, new Point(edge, m), new Point(m, edge));
         }
 
         private void DrawRedlineClearIcon(DrawingContext dc, int size)
         {
-            // Gray broom / sweep indicating clear
-            double s  = size / 32.0;
-            var gray  = new SolidColorBrush(Color.FromRgb(100, 100, 100));
-            var red   = new SolidColorBrush(Color.FromRgb(183, 28, 28));
-            var penG  = new Pen(gray, Math.Max(1.5, 2.5 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
-            var penR  = new Pen(red, Math.Max(1.2, 2.0 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            // White 3D eraser — Architecture-tab style
+            double s = size / 32.0;
+            var shadow = new SolidColorBrush(Color.FromRgb(140, 140, 140));
+            var fill   = new LinearGradientBrush(Colors.White, Color.FromRgb(195, 195, 195), 135);
+            var pen    = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5*s));
+            var divPen = new Pen(new SolidColorBrush(Color.FromRgb(130, 130, 130)), Math.Max(1, 1.2*s));
 
-            // Broom handle
-            dc.DrawLine(penG, new Point(24 * s, 4 * s), new Point(10 * s, 22 * s));
-            // Broom head (arc of bristles)
-            dc.DrawLine(penG, new Point(10 * s, 22 * s), new Point(4 * s, 28 * s));
-            dc.DrawLine(penG, new Point(10 * s, 22 * s), new Point(8 * s, 29 * s));
-            dc.DrawLine(penG, new Point(10 * s, 22 * s), new Point(13 * s, 29 * s));
-            dc.DrawLine(penG, new Point(10 * s, 22 * s), new Point(17 * s, 27 * s));
-            // Small red X in top-right corner indicating "remove"
-            dc.DrawLine(penR, new Point(22 * s, 4 * s), new Point(29 * s, 11 * s));
-            dc.DrawLine(penR, new Point(29 * s, 4 * s), new Point(22 * s, 11 * s));
+            // Eraser body — slanted parallelogram
+            var ef = new PathFigure { StartPoint = new Point(5*s, 10*s) };
+            ef.Segments.Add(new LineSegment(new Point(19*s, 10*s), true));
+            ef.Segments.Add(new LineSegment(new Point(27*s, 22*s), true));
+            ef.Segments.Add(new LineSegment(new Point(13*s, 22*s), true));
+            ef.IsClosed = true;
+            var eraserPath = new PathGeometry(); eraserPath.Figures.Add(ef);
+
+            var esf = new PathFigure { StartPoint = new Point(5*s+2, 10*s+2) };
+            esf.Segments.Add(new LineSegment(new Point(19*s+2, 10*s+2), true));
+            esf.Segments.Add(new LineSegment(new Point(27*s+2, 22*s+2), true));
+            esf.Segments.Add(new LineSegment(new Point(13*s+2, 22*s+2), true));
+            esf.IsClosed = true;
+            var eraserShadow = new PathGeometry(); eraserShadow.Figures.Add(esf);
+
+            dc.DrawGeometry(shadow, null, eraserShadow);
+            dc.DrawGeometry(fill, pen, eraserPath);
+            // Dividing line (eraser tip strip)
+            dc.DrawLine(divPen, new Point(19*s, 10*s), new Point(27*s, 22*s));
+            // Ground line
+            dc.DrawLine(pen, new Point(5*s, 26*s), new Point(29*s, 26*s));
         }
 
         private void DrawStartGenIcon(DrawingContext dc, int size)
         {
-            // Solid green circle with white "GO" text
-            var center = size / 2.0;
-            var radius = size * 0.42;
-            var green = new SolidColorBrush(Color.FromRgb(67, 160, 71));
-            var darkGreen = new SolidColorBrush(Color.FromRgb(46, 125, 50));
-            dc.DrawEllipse(green, new Pen(darkGreen, Math.Max(1, size * 0.04)), new Point(center, center), radius, radius);
+            // White 3D lightning bolt — Architecture-tab style
+            double s2 = size / 32.0;
+            var shadow = new SolidColorBrush(Color.FromRgb(140, 140, 140));
+            var fill   = new LinearGradientBrush(Colors.White, Color.FromRgb(195, 195, 195), 135);
+            var pen    = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5*s2));
 
-            var text = new FormattedText(
-                "GO",
-                System.Globalization.CultureInfo.CurrentCulture,
-                System.Windows.FlowDirection.LeftToRight,
-                new Typeface(new FontFamily("Arial"), System.Windows.FontStyles.Normal, System.Windows.FontWeights.Bold, System.Windows.FontStretches.Normal),
-                size * 0.32,
-                new SolidColorBrush(Colors.White),
-                96);
-            dc.DrawText(text, new Point(center - text.Width / 2, center - text.Height / 2));
+            // Lightning bolt points
+            var pts = new[] {
+                new Point(20*s2, 4*s2),
+                new Point(12*s2, 17*s2),
+                new Point(18*s2, 17*s2),
+                new Point(12*s2, 28*s2),
+                new Point(22*s2, 15*s2),
+                new Point(16*s2, 15*s2),
+            };
+
+            var sf2 = new PathFigure { StartPoint = new Point(pts[0].X+2, pts[0].Y+2) };
+            for (int i = 1; i < pts.Length; i++) sf2.Segments.Add(new LineSegment(new Point(pts[i].X+2, pts[i].Y+2), true));
+            sf2.IsClosed = true;
+            var sp2 = new PathGeometry(); sp2.Figures.Add(sf2);
+            dc.DrawGeometry(shadow, null, sp2);
+
+            var bf = new PathFigure { StartPoint = pts[0] };
+            for (int i = 1; i < pts.Length; i++) bf.Segments.Add(new LineSegment(pts[i], true));
+            bf.IsClosed = true;
+            var bp = new PathGeometry(); bp.Figures.Add(bf);
+            dc.DrawGeometry(fill, pen, bp);
         }
 
         private void DrawStopGenIcon(DrawingContext dc, int size)
         {
-            // Solid red circle with white stop square
-            var center = size / 2.0;
-            var radius = size * 0.42;
-            var red = new SolidColorBrush(Color.FromRgb(229, 57, 53));
-            var darkRed = new SolidColorBrush(Color.FromRgb(183, 28, 28));
-            dc.DrawEllipse(red, new Pen(darkRed, Math.Max(1, size * 0.04)), new Point(center, center), radius, radius);
+            // White 3D rounded stop square — Architecture-tab style
+            double m = size * 0.18, r = size * 0.08;
+            var shadow = new SolidColorBrush(Color.FromRgb(140, 140, 140));
+            var fill   = new LinearGradientBrush(Colors.White, Color.FromRgb(195, 195, 195), 135);
+            var pen    = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, size * 0.04));
 
-            var sq = size * 0.22;
-            dc.DrawRectangle(new SolidColorBrush(Colors.White), null,
-                new Rect(center - sq, center - sq, sq * 2, sq * 2));
+            dc.DrawRoundedRectangle(shadow, null, new Rect(m+2, m+2, size-2*m, size-2*m), r, r);
+            dc.DrawRoundedRectangle(fill, pen,    new Rect(m, m, size-2*m, size-2*m), r, r);
         }
 
         // Dialog handling event
