@@ -167,54 +167,72 @@ namespace RevitMCPBridge
             // ── AI Enablement ─────────────────────────────────────────────
             var aiPanel = application.CreateRibbonPanel(_tabName, "AI Enablement");
 
-            var claudeData = new PushButtonData("OpenClaude", "Claude Code", asm,
+            var claudeButtonData = new PushButtonData("OpenClaude", "Claude\nCode", asm,
                 "RevitMCPBridge.Commands.OpenClaudeCommand")
                 { ToolTip = "Open Claude Code in BIM Monkey folder" };
-            var platformData = new PushButtonData("BimMonkeyPlatform", "Web Platform", asm,
+            var claudeButton = aiPanel.AddItem(claudeButtonData) as PushButton;
+            claudeButton.LargeImage = CreateButtonIcon("claude", 32);
+            claudeButton.Image      = CreateButtonIcon("claude", 16);
+
+            var platformButtonData = new PushButtonData("BimMonkeyPlatform", "Web\nPlatform", asm,
                 "RevitMCPBridge.Commands.OpenPlatformCommand")
                 { ToolTip = "Open BIM Monkey dashboard" };
-            var aiItems = aiPanel.AddStackedItems(claudeData, platformData);
-            (aiItems[0] as PushButton).Image = CreateButtonIcon("claude", 16);
-            (aiItems[1] as PushButton).Image = CreateButtonIcon("monkey", 16);
+            var platformButton = aiPanel.AddItem(platformButtonData) as PushButton;
+            platformButton.LargeImage = CreateButtonIcon("monkey", 32);
+            platformButton.Image      = CreateButtonIcon("monkey", 16);
 
             // ── Server Control ────────────────────────────────────────────
             var serverPanel = application.CreateRibbonPanel(_tabName, "Server Control");
 
-            var startData = new PushButtonData("StartMCPServer", "Start Server", asm,
+            var startButtonData = new PushButtonData("StartMCPServer", "Start\nServer", asm,
                 "RevitMCPBridge.Commands.StartServerCommand")
                 { ToolTip = "Start BIM Monkey server",
                   AvailabilityClassName = "RevitMCPBridge.Commands.ServerStoppedAvailability" };
-            var stopData = new PushButtonData("StopMCPServer", "Stop Server", asm,
+            var startButton = serverPanel.AddItem(startButtonData) as PushButton;
+            startButton.LargeImage = CreateButtonIcon("start", 32);
+            startButton.Image      = CreateButtonIcon("start", 16);
+
+            var stopButtonData = new PushButtonData("StopMCPServer", "Stop\nServer", asm,
                 "RevitMCPBridge.Commands.StopServerCommand")
                 { ToolTip = "Stop BIM Monkey server",
                   AvailabilityClassName = "RevitMCPBridge.Commands.ServerRunningAvailability" };
-            var statusData = new PushButtonData("MCPServerStatus", "Server Status", asm,
+            var stopButton = serverPanel.AddItem(stopButtonData) as PushButton;
+            stopButton.LargeImage = CreateButtonIcon("stop", 32);
+            stopButton.Image      = CreateButtonIcon("stop", 16);
+
+            var statusButtonData = new PushButtonData("MCPServerStatus", "Server\nStatus", asm,
                 "RevitMCPBridge.Commands.ServerStatusCommand")
                 { ToolTip = "Check BIM Monkey server status" };
-            var serverItems = serverPanel.AddStackedItems(startData, stopData, statusData);
-            (serverItems[0] as PushButton).Image = CreateButtonIcon("start", 16);
-            (serverItems[1] as PushButton).Image = CreateButtonIcon("stop", 16);
-            (serverItems[2] as PushButton).Image = CreateButtonIcon("status", 16);
+            var statusButton = serverPanel.AddItem(statusButtonData) as PushButton;
+            statusButton.LargeImage = CreateButtonIcon("status", 32);
+            statusButton.Image      = CreateButtonIcon("status", 16);
 
             // ── Documentation Control ──────────────────────────────────────
             var easyPanel = application.CreateRibbonPanel(_tabName, "Documentation");
 
-            var startGenData = new PushButtonData("StartGeneration", "Start Generation", asm,
+            var startGenButtonData = new PushButtonData("StartGeneration", "Start\nGeneration", asm,
                 "RevitMCPBridge.Commands.StartGenerationCommand")
                 { ToolTip = "Start generating Construction Documents",
                   AvailabilityClassName = "RevitMCPBridge.Commands.GenerationNotRunningAvailability" };
-            var stopGenData = new PushButtonData("StopGeneration", "Stop Generation", asm,
+            var startGenButton = easyPanel.AddItem(startGenButtonData) as PushButton;
+            startGenButton.LargeImage = CreateButtonIcon("startgen", 32);
+            startGenButton.Image      = CreateButtonIcon("startgen", 16);
+
+            var stopGenButtonData = new PushButtonData("StopGeneration", "Stop\nGeneration", asm,
                 "RevitMCPBridge.Commands.StopGenerationCommand")
                 { ToolTip = "Stop the running generation",
                   AvailabilityClassName = "RevitMCPBridge.Commands.GenerationRunningAvailability" };
-            var auditData = new PushButtonData("AuditPlans", "Audit Plans", asm,
+            var stopGenButton = easyPanel.AddItem(stopGenButtonData) as PushButton;
+            stopGenButton.LargeImage = CreateButtonIcon("stopgen", 32);
+            stopGenButton.Image      = CreateButtonIcon("stopgen", 16);
+
+            var auditButtonData = new PushButtonData("AuditPlans", "Audit\nPlans", asm,
                 "RevitMCPBridge.Commands.AuditPlansCommand")
                 { ToolTip = "Tag all floor plans with room, door, and window tags",
                   AvailabilityClassName = "RevitMCPBridge.Commands.GenerationNotRunningAvailability" };
-            var docItems = easyPanel.AddStackedItems(startGenData, stopGenData, auditData);
-            (docItems[0] as PushButton).Image = CreateButtonIcon("startgen", 16);
-            (docItems[1] as PushButton).Image = CreateButtonIcon("stopgen", 16);
-            (docItems[2] as PushButton).Image = CreateButtonIcon("audit", 16);
+            var auditButton = easyPanel.AddItem(auditButtonData) as PushButton;
+            auditButton.LargeImage = CreateButtonIcon("audit", 32);
+            auditButton.Image      = CreateButtonIcon("audit", 16);
 
             // ── Redline Review ─────────────────────────────────────────────
             var redlinePanel = application.CreateRibbonPanel(_tabName, "Redline Review");
@@ -223,29 +241,40 @@ namespace RevitMCPBridge
                 "RevitMCPBridge.Commands.RedlineLoadCommand")
                 { ToolTip = "Load a redline PDF for Claude to analyze",
                   AvailabilityClassName = "RevitMCPBridge.Commands.RedlineNotAnalyzingAvailability" };
+            var redlineLoadButton = redlinePanel.AddItem(redlineLoadData) as PushButton;
+            redlineLoadButton.LargeImage = CreateButtonIcon("redline-load", 32);
+            redlineLoadButton.Image      = CreateButtonIcon("redline-load", 16);
+
             var redlineCancelData = new PushButtonData("RedlineCancel", "Cancel", asm,
                 "RevitMCPBridge.Commands.RedlineCancelCommand")
                 { ToolTip = "Stop the in-progress redline analysis and clear the loaded PDF" };
+            var redlineCancelButton = redlinePanel.AddItem(redlineCancelData) as PushButton;
+            redlineCancelButton.LargeImage = CreateButtonIcon("redline-cancel", 32);
+            redlineCancelButton.Image      = CreateButtonIcon("redline-cancel", 16);
+
             var redlineClearData = new PushButtonData("RedlineClear", "Clear", asm,
                 "RevitMCPBridge.Commands.RedlineClearCommand")
                 { ToolTip = "Remove all redline context — next generation runs clean" };
-            var redlineItems = redlinePanel.AddStackedItems(redlineLoadData, redlineCancelData, redlineClearData);
-            (redlineItems[0] as PushButton).Image = CreateButtonIcon("redline-load", 16);
-            (redlineItems[1] as PushButton).Image = CreateButtonIcon("redline-cancel", 16);
-            (redlineItems[2] as PushButton).Image = CreateButtonIcon("redline-clear", 16);
+            var redlineClearButton = redlinePanel.AddItem(redlineClearData) as PushButton;
+            redlineClearButton.LargeImage = CreateButtonIcon("redline-clear", 32);
+            redlineClearButton.Image      = CreateButtonIcon("redline-clear", 16);
 
             // ── Additions (Standards + FAQ) ────────────────────────────────
             var standardsPanel = application.CreateRibbonPanel(_tabName, "Additions");
 
-            var standardsData = new PushButtonData("Standards", "Standards", asm,
+            var standardsButtonData = new PushButtonData("Standards", "Standards", asm,
                 "RevitMCPBridge.Commands.StandardsCommand")
                 { ToolTip = "View your BIM Monkey training library statistics" };
-            var faqData = new PushButtonData("FAQ", "FAQ", asm,
+            var standardsButton = standardsPanel.AddItem(standardsButtonData) as PushButton;
+            standardsButton.LargeImage = CreateButtonIcon("standards", 32);
+            standardsButton.Image      = CreateButtonIcon("standards", 16);
+
+            var faqButtonData = new PushButtonData("FAQ", "FAQ", asm,
                 "RevitMCPBridge.Commands.BimMonkeyFaqCommand")
                 { ToolTip = "Frequently asked questions and troubleshooting tips" };
-            var addItems = standardsPanel.AddStackedItems(standardsData, faqData);
-            (addItems[0] as PushButton).Image = CreateButtonIcon("standards", 16);
-            (addItems[1] as PushButton).Image = CreateButtonIcon("faq", 16);
+            var faqButton = standardsPanel.AddItem(faqButtonData) as PushButton;
+            faqButton.LargeImage = CreateButtonIcon("faq", 32);
+            faqButton.Image      = CreateButtonIcon("faq", 16);
         }
 
         private void CreateToolsPanel(UIControlledApplication application)

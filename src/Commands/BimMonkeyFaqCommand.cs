@@ -68,8 +68,8 @@ namespace RevitMCPBridge.Commands
             // ── Getting Started ────────────────────────────────────────────────
             html.AppendLine("<h2>Getting Started</h2>");
             html.AppendLine("<p class='step'><span class='step-num'>1.</span> Open Revit and your project file.</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>2.</span> The BIM Monkey server starts automatically when Revit loads. Confirm it's running via <strong>BIM Monkey tab → Server Control → Server Status</strong>.</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>3.</span> Open Claude Code from <code>Documents\\BIM Monkey\\</code> and tell Claude to generate construction documents. Claude reads your model through the named pipe and calls the BIM Monkey API to produce a CD plan.</p>");
+            html.AppendLine("<p class='step'><span class='step-num'>2.</span> In the <strong>BIM Monkey</strong> tab, click <strong>Start Server</strong>. The server does not start automatically — you must start it before generation. Once running, it restarts automatically whenever you open a new project file.</p>");
+            html.AppendLine("<p class='step'><span class='step-num'>3.</span> Click <strong>Start Generation</strong> in the Documentation panel. Claude Code opens automatically, reads your model through the BIM Monkey plugin, calls the backend to build a CD plan from your firm's training library, and executes it directly in Revit.</p>");
             html.AppendLine("<p class='step'><span class='step-num'>4.</span> Claude executes the plan in three phases: <strong>Phase 1</strong> — sheets and view placements; <strong>Phase 2</strong> — section and assembly details; <strong>Phase 3</strong> — door schedule, window schedule, room finish schedule, and keynote legend.</p>");
             html.AppendLine("<p class='step'><span class='step-num'>5.</span> Generated sheets are marked <code>*</code> in the Project Browser. Review results and add notes at <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a>.</p>");
 
@@ -81,18 +81,24 @@ namespace RevitMCPBridge.Commands
 
             // ── Ribbon Buttons ─────────────────────────────────────────────────
             html.AppendLine("<h2>Ribbon Buttons</h2>");
-            html.AppendLine("<p class='q'>Start Server</p><p class='a'>Starts the MCP pipe server so Claude can communicate with Revit. Runs automatically on Revit launch — only needed if the server was stopped manually.</p>");
-            html.AppendLine("<p class='q'>Stop Server</p><p class='a'>Stops the pipe server. Use this before closing Revit or to reset a stale connection. Always Stop → Start after opening a different project file mid-session.</p>");
-            html.AppendLine("<p class='q'>Server Status</p><p class='a'>Shows whether the server is running, the pipe name (<code>RevitMCPBridge2026</code>), and active connection count.</p>");
-            html.AppendLine("<p class='q'>Standards</p><p class='a'>Fetches your firm's library score from the BIM Monkey API — pages analyzed, projects uploaded, detail type coverage, and score breakdown.</p>");
-            html.AppendLine("<p class='q'>Platform</p><p class='a'>Opens <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a> in your browser — review runs, upload CD sets, view your training library.</p>");
-            html.AppendLine("<p class='q'>FAQ</p><p class='a'>Opens this page.</p>");
+            html.AppendLine("<p class='q'>Claude Code (AI Enablement panel)</p><p class='a'>Opens a Claude Code terminal in your <code>Documents\\BIM Monkey\\</code> folder — for manual sessions outside of Start Generation.</p>");
+            html.AppendLine("<p class='q'>Web Platform (AI Enablement panel)</p><p class='a'>Opens <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a> in your browser — review runs, upload CD sets, view your training library, manage your team.</p>");
+            html.AppendLine("<p class='q'>Start Server (Server Control panel)</p><p class='a'>Starts the MCP pipe server so Claude can communicate with Revit. Must be clicked manually before your first generation. The server restarts automatically whenever you open a new project file.</p>");
+            html.AppendLine("<p class='q'>Stop Server (Server Control panel)</p><p class='a'>Stops the pipe server. Use this to reset a stale connection. Always Stop → Start after switching project files mid-session if auto-restart didn't fire.</p>");
+            html.AppendLine("<p class='q'>Server Status (Server Control panel)</p><p class='a'>Shows whether the server is running, the pipe name (<code>RevitMCPBridge2026</code>), and active connection count.</p>");
+            html.AppendLine("<p class='q'>Start Generation (Documentation panel)</p><p class='a'>Launches Claude Code and starts a full CD generation run — reads your model, calls the BIM Monkey backend, and builds sheets, views, schedules, and details directly in Revit.</p>");
+            html.AppendLine("<p class='q'>Stop Generation (Documentation panel)</p><p class='a'>Cancels a generation run in progress.</p>");
+            html.AppendLine("<p class='q'>Audit Plans (Documentation panel)</p><p class='a'>Tags all floor plans with room, door, and window tags in a single batch operation across all plan views.</p>");
+            html.AppendLine("<p class='q'>Load (Redline Review panel)</p><p class='a'>Opens a file picker to load a redlined PDF. Claude analyzes the markup and extracts a structured list of changes, which become instructions for the next generation run.</p>");
+            html.AppendLine("<p class='q'>Cancel / Clear (Redline Review panel)</p><p class='a'>Cancel stops an in-progress redline analysis. Clear removes all loaded redline context so the next generation runs clean.</p>");
+            html.AppendLine("<p class='q'>Standards (Additions panel)</p><p class='a'>Fetches your firm's library score from the BIM Monkey API — pages analyzed, projects uploaded, detail type coverage, and score breakdown.</p>");
+            html.AppendLine("<p class='q'>FAQ (Additions panel)</p><p class='a'>Opens this page.</p>");
 
             // ── Training Library ───────────────────────────────────────────────
             html.AppendLine("<h2>Training Library</h2>");
             html.AppendLine("<p class='q'>What should I upload?</p><p class='a'>100% completed Construction Document sets only — permit-ready drawings, not works in progress. The quality of uploads directly determines the quality of generated output. Works in progress degrade results.</p>");
             html.AppendLine("<p class='q'>How do I upload?</p><p class='a'>Go to <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a> → Upload tab. Drop in a PDF, select building type, click Analyze. Claude reads every page and adds it to your library automatically — no review step required.</p>");
-            html.AppendLine("<p class='q'>Does generated output feed back into the library?</p><p class='a'>Yes. Every CD set Claude generates is saved and used as a reference for future runs. The more you run it, the better it matches your standards.</p>");
+            html.AppendLine("<p class='q'>Does generated output feed back into the library?</p><p class='a'>Not automatically. Your training library is built from the CD sets <em>you upload</em> — only permit-ready drawings you've approved. Every run is logged at app.bimmonkey.ai where you can add notes to sheets and details. Those notes are applied as direct instructions on the next generation for that project, but they do not enter the training library.</p>");
             html.AppendLine("<p class='q'>How do I see my library health?</p><p class='a'>Click <strong>Standards</strong> in the ribbon or visit the Standards tab at app.bimmonkey.ai. Your library score (0–100) shows coverage, depth, and breadth across detail types.</p>");
 
             // ── Troubleshooting ────────────────────────────────────────────────
