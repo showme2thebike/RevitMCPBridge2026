@@ -162,183 +162,90 @@ namespace RevitMCPBridge
         
         private void CreateServerPanel(UIControlledApplication application)
         {
+            var asm = Assembly.GetExecutingAssembly().Location;
+
             // ── AI Enablement ─────────────────────────────────────────────
             var aiPanel = application.CreateRibbonPanel(_tabName, "AI Enablement");
 
-            var claudeButtonData = new PushButtonData(
-                "OpenClaude",
-                "Claude\nCode",
-                Assembly.GetExecutingAssembly().Location,
+            var claudeData = new PushButtonData("OpenClaude", "Claude Code", asm,
                 "RevitMCPBridge.Commands.OpenClaudeCommand")
-            {
-                ToolTip = "Open Claude Code in BIM Monkey folder"
-            };
-            var claudeButton = aiPanel.AddItem(claudeButtonData) as PushButton;
-            claudeButton.LargeImage = CreateButtonIcon("claude", 32);
-            claudeButton.Image = CreateButtonIcon("claude", 16);
-
-            var platformButtonData = new PushButtonData(
-                "BimMonkeyPlatform",
-                "Web\nPlatform",
-                Assembly.GetExecutingAssembly().Location,
+                { ToolTip = "Open Claude Code in BIM Monkey folder" };
+            var platformData = new PushButtonData("BimMonkeyPlatform", "Web Platform", asm,
                 "RevitMCPBridge.Commands.OpenPlatformCommand")
-            {
-                ToolTip = "Open BIM Monkey dashboard"
-            };
-            var platformButton = aiPanel.AddItem(platformButtonData) as PushButton;
-            platformButton.LargeImage = CreateButtonIcon("monkey", 32);
-            platformButton.Image = CreateButtonIcon("monkey", 16);
+                { ToolTip = "Open BIM Monkey dashboard" };
+            var aiItems = aiPanel.AddStackedItems(claudeData, platformData);
+            (aiItems[0] as PushButton).Image = CreateButtonIcon("claude", 16);
+            (aiItems[1] as PushButton).Image = CreateButtonIcon("monkey", 16);
 
             // ── Server Control ────────────────────────────────────────────
             var serverPanel = application.CreateRibbonPanel(_tabName, "Server Control");
 
-            var startButtonData = new PushButtonData(
-                "StartMCPServer",
-                "Start\nServer",
-                Assembly.GetExecutingAssembly().Location,
+            var startData = new PushButtonData("StartMCPServer", "Start Server", asm,
                 "RevitMCPBridge.Commands.StartServerCommand")
-            {
-                ToolTip = "Start BIM Monkey server",
-                AvailabilityClassName = "RevitMCPBridge.Commands.ServerStoppedAvailability"
-            };
-            var startButton = serverPanel.AddItem(startButtonData) as PushButton;
-            startButton.LargeImage = CreateButtonIcon("start", 32);
-            startButton.Image = CreateButtonIcon("start", 16);
-
-            var stopButtonData = new PushButtonData(
-                "StopMCPServer",
-                "Stop\nServer",
-                Assembly.GetExecutingAssembly().Location,
+                { ToolTip = "Start BIM Monkey server",
+                  AvailabilityClassName = "RevitMCPBridge.Commands.ServerStoppedAvailability" };
+            var stopData = new PushButtonData("StopMCPServer", "Stop Server", asm,
                 "RevitMCPBridge.Commands.StopServerCommand")
-            {
-                ToolTip = "Stop BIM Monkey server",
-                AvailabilityClassName = "RevitMCPBridge.Commands.ServerRunningAvailability"
-            };
-            var stopButton = serverPanel.AddItem(stopButtonData) as PushButton;
-            stopButton.LargeImage = CreateButtonIcon("stop", 32);
-            stopButton.Image = CreateButtonIcon("stop", 16);
-
-            var statusButtonData = new PushButtonData(
-                "MCPServerStatus",
-                "Server\nStatus",
-                Assembly.GetExecutingAssembly().Location,
+                { ToolTip = "Stop BIM Monkey server",
+                  AvailabilityClassName = "RevitMCPBridge.Commands.ServerRunningAvailability" };
+            var statusData = new PushButtonData("MCPServerStatus", "Server Status", asm,
                 "RevitMCPBridge.Commands.ServerStatusCommand")
-            {
-                ToolTip = "Check BIM Monkey server status"
-            };
-            var statusButton = serverPanel.AddItem(statusButtonData) as PushButton;
-            statusButton.LargeImage = CreateButtonIcon("status", 32);
-            statusButton.Image = CreateButtonIcon("status", 16);
+                { ToolTip = "Check BIM Monkey server status" };
+            var serverItems = serverPanel.AddStackedItems(startData, stopData, statusData);
+            (serverItems[0] as PushButton).Image = CreateButtonIcon("start", 16);
+            (serverItems[1] as PushButton).Image = CreateButtonIcon("stop", 16);
+            (serverItems[2] as PushButton).Image = CreateButtonIcon("status", 16);
 
             // ── Documentation Control ──────────────────────────────────────
             var easyPanel = application.CreateRibbonPanel(_tabName, "Documentation");
 
-            var startGenButtonData = new PushButtonData(
-                "StartGeneration",
-                "Start\nGeneration",
-                Assembly.GetExecutingAssembly().Location,
+            var startGenData = new PushButtonData("StartGeneration", "Start Generation", asm,
                 "RevitMCPBridge.Commands.StartGenerationCommand")
-            {
-                ToolTip = "Start generating Construction Documents",
-                AvailabilityClassName = "RevitMCPBridge.Commands.GenerationNotRunningAvailability"
-            };
-            var startGenButton = easyPanel.AddItem(startGenButtonData) as PushButton;
-            startGenButton.LargeImage = CreateButtonIcon("startgen", 32);
-            startGenButton.Image = CreateButtonIcon("startgen", 16);
-
-            var stopGenButtonData = new PushButtonData(
-                "StopGeneration",
-                "Stop\nGeneration",
-                Assembly.GetExecutingAssembly().Location,
+                { ToolTip = "Start generating Construction Documents",
+                  AvailabilityClassName = "RevitMCPBridge.Commands.GenerationNotRunningAvailability" };
+            var stopGenData = new PushButtonData("StopGeneration", "Stop Generation", asm,
                 "RevitMCPBridge.Commands.StopGenerationCommand")
-            {
-                ToolTip = "Stop the running generation",
-                AvailabilityClassName = "RevitMCPBridge.Commands.GenerationRunningAvailability"
-            };
-            var stopGenButton = easyPanel.AddItem(stopGenButtonData) as PushButton;
-            stopGenButton.LargeImage = CreateButtonIcon("stopgen", 32);
-            stopGenButton.Image = CreateButtonIcon("stopgen", 16);
-
-            var auditButtonData = new PushButtonData(
-                "AuditPlans",
-                "Audit",
-                Assembly.GetExecutingAssembly().Location,
+                { ToolTip = "Stop the running generation",
+                  AvailabilityClassName = "RevitMCPBridge.Commands.GenerationRunningAvailability" };
+            var auditData = new PushButtonData("AuditPlans", "Audit Plans", asm,
                 "RevitMCPBridge.Commands.AuditPlansCommand")
-            {
-                ToolTip = "Tag all floor plans with room, door, and window tags",
-                AvailabilityClassName = "RevitMCPBridge.Commands.GenerationNotRunningAvailability"
-            };
-            var auditButton = easyPanel.AddItem(auditButtonData) as PushButton;
-            auditButton.LargeImage = CreateButtonIcon("audit", 32);
-            auditButton.Image = CreateButtonIcon("audit", 16);
+                { ToolTip = "Tag all floor plans with room, door, and window tags",
+                  AvailabilityClassName = "RevitMCPBridge.Commands.GenerationNotRunningAvailability" };
+            var docItems = easyPanel.AddStackedItems(startGenData, stopGenData, auditData);
+            (docItems[0] as PushButton).Image = CreateButtonIcon("startgen", 16);
+            (docItems[1] as PushButton).Image = CreateButtonIcon("stopgen", 16);
+            (docItems[2] as PushButton).Image = CreateButtonIcon("audit", 16);
 
             // ── Redline Review ─────────────────────────────────────────────
             var redlinePanel = application.CreateRibbonPanel(_tabName, "Redline Review");
 
-            var redlineLoadData = new PushButtonData(
-                "RedlineLoad",
-                "Load",
-                Assembly.GetExecutingAssembly().Location,
+            var redlineLoadData = new PushButtonData("RedlineLoad", "Load", asm,
                 "RevitMCPBridge.Commands.RedlineLoadCommand")
-            {
-                ToolTip = "Load a redline PDF for Claude to analyze",
-                AvailabilityClassName = "RevitMCPBridge.Commands.RedlineNotAnalyzingAvailability"
-            };
-            var redlineLoadButton = redlinePanel.AddItem(redlineLoadData) as PushButton;
-            redlineLoadButton.LargeImage = CreateButtonIcon("redline-load", 32);
-            redlineLoadButton.Image = CreateButtonIcon("redline-load", 16);
-
-            var redlineCancelData = new PushButtonData(
-                "RedlineCancel",
-                "Cancel",
-                Assembly.GetExecutingAssembly().Location,
+                { ToolTip = "Load a redline PDF for Claude to analyze",
+                  AvailabilityClassName = "RevitMCPBridge.Commands.RedlineNotAnalyzingAvailability" };
+            var redlineCancelData = new PushButtonData("RedlineCancel", "Cancel", asm,
                 "RevitMCPBridge.Commands.RedlineCancelCommand")
-            {
-                ToolTip = "Stop the in-progress redline analysis and clear the loaded PDF"
-            };
-            var redlineCancelButton = redlinePanel.AddItem(redlineCancelData) as PushButton;
-            redlineCancelButton.LargeImage = CreateButtonIcon("redline-cancel", 32);
-            redlineCancelButton.Image = CreateButtonIcon("redline-cancel", 16);
-
-            var redlineClearData = new PushButtonData(
-                "RedlineClear",
-                "Clear",
-                Assembly.GetExecutingAssembly().Location,
+                { ToolTip = "Stop the in-progress redline analysis and clear the loaded PDF" };
+            var redlineClearData = new PushButtonData("RedlineClear", "Clear", asm,
                 "RevitMCPBridge.Commands.RedlineClearCommand")
-            {
-                ToolTip = "Remove all redline context — next generation runs clean"
-            };
-            var redlineClearButton = redlinePanel.AddItem(redlineClearData) as PushButton;
-            redlineClearButton.LargeImage = CreateButtonIcon("redline-clear", 32);
-            redlineClearButton.Image = CreateButtonIcon("redline-clear", 16);
+                { ToolTip = "Remove all redline context — next generation runs clean" };
+            var redlineItems = redlinePanel.AddStackedItems(redlineLoadData, redlineCancelData, redlineClearData);
+            (redlineItems[0] as PushButton).Image = CreateButtonIcon("redline-load", 16);
+            (redlineItems[1] as PushButton).Image = CreateButtonIcon("redline-cancel", 16);
+            (redlineItems[2] as PushButton).Image = CreateButtonIcon("redline-clear", 16);
 
             // ── Additions (Standards + FAQ) ────────────────────────────────
             var standardsPanel = application.CreateRibbonPanel(_tabName, "Additions");
 
-            var standardsButtonData = new PushButtonData(
-                "Standards",
-                "Standards",
-                Assembly.GetExecutingAssembly().Location,
+            var standardsData = new PushButtonData("Standards", "Standards", asm,
                 "RevitMCPBridge.Commands.StandardsCommand")
-            {
-                ToolTip = "View your BIM Monkey training library statistics"
-            };
-            var standardsButton = standardsPanel.AddItem(standardsButtonData) as PushButton;
-            standardsButton.LargeImage = CreateButtonIcon("standards", 32);
-            standardsButton.Image = CreateButtonIcon("standards", 16);
-
-            var faqButtonData = new PushButtonData(
-                "FAQ",
-                "FAQ",
-                Assembly.GetExecutingAssembly().Location,
+                { ToolTip = "View your BIM Monkey training library statistics" };
+            var faqData = new PushButtonData("FAQ", "FAQ", asm,
                 "RevitMCPBridge.Commands.BimMonkeyFaqCommand")
-            {
-                ToolTip = "Frequently asked questions and troubleshooting tips"
-            };
-            var faqButton = standardsPanel.AddItem(faqButtonData) as PushButton;
-            faqButton.LargeImage = CreateButtonIcon("faq", 32);
-            faqButton.Image = CreateButtonIcon("faq", 16);
-
+                { ToolTip = "Frequently asked questions and troubleshooting tips" };
+            var addItems = standardsPanel.AddStackedItems(standardsData, faqData);
+            (addItems[0] as PushButton).Image = CreateButtonIcon("standards", 16);
+            (addItems[1] as PushButton).Image = CreateButtonIcon("faq", 16);
         }
 
         private void CreateToolsPanel(UIControlledApplication application)
@@ -1163,10 +1070,11 @@ namespace RevitMCPBridge
 
         private void DrawStandardsIcon(DrawingContext dc, int size)
         {
-            // Bar chart — three ascending bars in dark grey
-            var dark = new SolidColorBrush(Color.FromRgb(50, 50, 50));
-            var mid  = new SolidColorBrush(Color.FromRgb(120, 120, 120));
-            var light = new SolidColorBrush(Color.FromRgb(190, 190, 190));
+            // Bar chart — three ascending bars in blue
+            var blue1 = new SolidColorBrush(Color.FromRgb(144, 202, 249));  // light blue
+            var blue2 = new SolidColorBrush(Color.FromRgb(66, 165, 245));   // medium blue
+            var blue3 = new SolidColorBrush(Color.FromRgb(21, 101, 192));   // dark blue
+            var dark  = new SolidColorBrush(Color.FromRgb(13, 71, 161));
             double margin = size * 0.12;
             double bottom = size - margin;
             double barW = (size - 2 * margin) / 4.0;
@@ -1175,13 +1083,13 @@ namespace RevitMCPBridge
 
             // Bar 1 — short
             double h1 = size * 0.3;
-            dc.DrawRectangle(light, null, new Rect(margin, bottom - h1, bw, h1));
+            dc.DrawRectangle(blue1, null, new Rect(margin, bottom - h1, bw, h1));
             // Bar 2 — medium
             double h2 = size * 0.52;
-            dc.DrawRectangle(mid, null, new Rect(margin + barW, bottom - h2, bw, h2));
+            dc.DrawRectangle(blue2, null, new Rect(margin + barW, bottom - h2, bw, h2));
             // Bar 3 — tall
             double h3 = size * 0.72;
-            dc.DrawRectangle(dark, null, new Rect(margin + barW * 2, bottom - h3, bw, h3));
+            dc.DrawRectangle(blue3, null, new Rect(margin + barW * 2, bottom - h3, bw, h3));
 
             // Baseline
             dc.DrawLine(new Pen(dark, Math.Max(1, size * 0.04)),
@@ -1223,7 +1131,7 @@ namespace RevitMCPBridge
             }
             dc.DrawGeometry(fold, pen, foldPath);
 
-            // "?" character centered on page
+            // "?" character centered on page — blue
             var qText = new FormattedText(
                 "?",
                 System.Globalization.CultureInfo.CurrentCulture,
@@ -1231,7 +1139,7 @@ namespace RevitMCPBridge
                 new Typeface(new FontFamily("Arial"), System.Windows.FontStyles.Normal,
                     System.Windows.FontWeights.Bold, System.Windows.FontStretches.Normal),
                 size * 0.38,
-                ink,
+                new SolidColorBrush(Color.FromRgb(25, 118, 210)),
                 96);
             double qx = m + (w - qText.Width) / 2 - cornerFold * 0.15;
             double qy = m + cornerFold + (h - cornerFold - qText.Height) / 2;
