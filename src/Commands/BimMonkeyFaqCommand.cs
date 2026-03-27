@@ -68,10 +68,11 @@ namespace RevitMCPBridge.Commands
             // ── Getting Started ────────────────────────────────────────────────
             html.AppendLine("<h2>Getting Started</h2>");
             html.AppendLine("<p class='step'><span class='step-num'>1.</span> Open Revit and your project file.</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>2.</span> In the <strong>BIM Monkey</strong> tab, click <strong>Start Server</strong>. The server does not start automatically — you must start it before generation. Once running, it restarts automatically whenever you open a new project file.</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>3.</span> Click <strong>Start Generation</strong> in the Documentation panel. Claude Code opens automatically, reads your model through the BIM Monkey plugin, calls the backend to build a CD plan from your firm's training library, and executes it directly in Revit.</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>4.</span> Claude executes the plan in three phases: <strong>Phase 1</strong> — sheets and view placements; <strong>Phase 2</strong> — section and assembly details; <strong>Phase 3</strong> — door schedule, window schedule, room finish schedule, and keynote legend.</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>5.</span> Generated sheets are marked <code>*</code> in the Project Browser. Review results and add notes at <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a>.</p>");
+            html.AppendLine("<p class='step'><span class='step-num'>2.</span> Confirm the BIM Monkey installer has finished — it installs Node.js, Claude Code, Python, PyMuPDF, and Playwright automatically. Python 3.10 or later is required (the installer adds 3.12 if nothing compatible is found). Existing Python 3.10, 3.11, 3.12, or 3.13 installs are all compatible and will not be replaced. If Python shows as missing after install, check that <em>Add Python to PATH</em> was checked during installation.</p>");
+            html.AppendLine("<p class='step'><span class='step-num'>3.</span> In the <strong>BIM Monkey</strong> tab, click <strong>Start Server</strong>. The server does not start automatically — you must start it before generation. Once running, it restarts automatically whenever you open a new project file.</p>");
+            html.AppendLine("<p class='step'><span class='step-num'>4.</span> Click <strong>Start Generation</strong> in the Documentation panel. Claude Code opens automatically, reads your model through the BIM Monkey plugin, calls the backend to build a CD plan from your firm's training library, and executes it directly in Revit.</p>");
+            html.AppendLine("<p class='step'><span class='step-num'>5.</span> Claude executes the plan in three phases: <strong>Phase 1</strong> — sheets and view placements; <strong>Phase 2</strong> — section and assembly details; <strong>Phase 3</strong> — door schedule, window schedule, room finish schedule, and keynote legend.</p>");
+            html.AppendLine("<p class='step'><span class='step-num'>6.</span> Generated sheets are marked <code>*</code> in the Project Browser. Review results and add notes at <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a>.</p>");
 
             // ── What Claude generates ──────────────────────────────────────────
             html.AppendLine("<h2>What Claude Generates</h2>");
@@ -132,6 +133,12 @@ namespace RevitMCPBridge.Commands
             html.AppendLine("<p class='step'><span class='step-num'>3.</span> Confirm <code>revit-bridge</code> shows as connected in Claude's tool list</p>");
 
             html.AppendLine("<p class='q'>Commands time out.</p><p class='a'>Revit must not have any modal dialogs open. Dismiss all dialogs, click in the drawing area to give Revit focus, then retry the command.</p>");
+
+            html.AppendLine("<p class='q'>Why does redline analysis take longer than other operations?</p>");
+            html.AppendLine("<p class='a'>Before Claude can read a redlined drawing, every page of the PDF has to be converted to an image. Claude then looks at each image the same way you would — finding the red circles, revision clouds, handwritten notes, and crossed-out items — rather than reading text from a data layer. That conversion step is what takes time.</p>");
+            html.AppendLine("<p class='a'>How long depends on the PDF. A 20-page set typically converts in 15–30 seconds. Larger sets take proportionally longer.</p>");
+            html.AppendLine("<p class='a'>If your redlines were added electronically in Acrobat or Bluebeam, the markup is stored as structured data inside the PDF and Claude can find it more reliably. If the drawings were printed, marked up by hand, and scanned back in — or if the PDF was flattened before delivery — there is no data layer. The only way to find the markup is to look at the pictures of the pages, which is slower and depends entirely on the image being legible.</p>");
+            html.AppendLine("<p class='a'>If analysis comes back with no markup found on a file you know has redlines, that is almost always the cause — the PDF was scanned or flattened. Make sure you are loading the marked-up version of the file, not the original clean set.</p>");
 
             html.AppendLine("<p class='q'>Generation starts but nothing is created.</p>");
             html.AppendLine("<p class='a'>Usually a missing API key or unreachable server. Check:</p>");

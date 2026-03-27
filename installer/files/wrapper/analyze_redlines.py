@@ -15,6 +15,17 @@ import os
 import sys
 
 
+def check_annotations(doc) -> dict:
+    """Quick pre-scan for PDF annotation objects before committing to full conversion."""
+    total_annots = 0
+    annot_types = set()
+    for page in doc:
+        for annot in page.annots():
+            total_annots += 1
+            annot_types.add(annot.type[1])  # e.g. "Highlight", "Ink", "FreeText", "Square"
+    return {"count": total_annots, "types": sorted(annot_types)}
+
+
 def convert_pdf_to_pages(pdf_path: str, output_folder: str) -> dict:
     if not os.path.exists(pdf_path):
         return {"success": False, "error": f"PDF not found: {pdf_path}"}
@@ -24,15 +35,26 @@ def convert_pdf_to_pages(pdf_path: str, output_folder: str) -> dict:
     except ImportError:
         return {
             "success": False,
-            "error": (
-                "PyMuPDF not installed. Run: pip install pymupdf\n"
-                "Then retry the redline analysis."
-            )
+            "error": "PyMuPDF not installed. Run: pip install pymupdf\nThen retry the redline analysis."
         }
 
     try:
         os.makedirs(output_folder, exist_ok=True)
         doc = fitz.open(pdf_path)
+
+        # Pre-scan for annotation objects before slow conversion
+        annot_info = check_annotations(doc)
+        if annot_info["count"] == 0:
+            # Still convert — baked-in vector markup won't show as /Annots
+            annotation_warning = (
+                "No PDF annotation objects found (0 /Annots). "
+                "This PDF may use baked-in vector markup (revision clouds, callout boxes drawn as geometry) "
+                "rather than digital ink annotations. Markup detection requires visual image analysis. "
+                "If this is an approved set with no new markup, this may be the wrong file."
+            )
+        else:
+            annotation_warning = None
+
         pages = []
         # 300 DPI — readable for small annotation text and handwriting
         scale = 300 / 72
@@ -49,12 +71,17 @@ def convert_pdf_to_pages(pdf_path: str, output_folder: str) -> dict:
             })
         doc.close()
 
-        return {
+        result = {
             "success": True,
             "pdfPath": pdf_path,
             "pageCount": len(pages),
             "pages": pages,
+            "annotationObjects": annot_info,
         }
+        if annotation_warning:
+            result["warning"] = annotation_warning
+        return result
+
     except Exception as e:
         return {"success": False, "error": str(e)}
 
