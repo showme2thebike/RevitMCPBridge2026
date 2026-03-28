@@ -33,8 +33,8 @@ namespace RevitMCPBridge.Commands
         public FaqWindow()
         {
             Title = "BIM Monkey — FAQ";
-            Width = 780;
-            Height = 660;
+            Width = 750;
+            Height = 720;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             ResizeMode = ResizeMode.CanResize;
 
@@ -47,28 +47,40 @@ namespace RevitMCPBridge.Commands
         {
             var html = new StringBuilder();
             html.AppendLine("<!DOCTYPE html><html><head><meta charset='utf-8'>");
+            html.AppendLine("<meta http-equiv='X-UA-Compatible' content='IE=edge'>");
+            html.AppendLine("<link rel='preconnect' href='https://fonts.googleapis.com'>");
+            html.AppendLine("<link href='https://fonts.googleapis.com/css2?family=Epilogue:wght@300;400;500;600&display=swap' rel='stylesheet'>");
             html.AppendLine("<style>");
-            html.AppendLine("body{font-family:'Segoe UI',Arial,sans-serif;margin:0;background:#f5f5f5;color:#111;}");
-            html.AppendLine(".header{background:#000;color:#f5f5f5;padding:1.5rem 2rem;letter-spacing:-0.02em;}");
-            html.AppendLine(".header h1{margin:0;font-size:1.4rem;font-weight:300;}");
-            html.AppendLine(".header p{margin:0.3rem 0 0;font-size:0.85rem;color:#ccc;font-weight:300;}");
-            html.AppendLine(".content{max-width:680px;margin:1.5rem auto;padding:0 2.5rem 3rem;}");
-            html.AppendLine("h2{font-size:0.78rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;margin:1.75rem 0 0.6rem;border-bottom:2px solid #0055cc;padding-bottom:0.35rem;color:#0055cc;}");
-            html.AppendLine(".q{font-weight:600;margin:0.9rem 0 0.2rem;font-size:0.95rem;color:#000;border-left:3px solid #0055cc;padding-left:0.5rem;}");
-            html.AppendLine(".a{color:#000;font-weight:300;line-height:1.6;margin:0 0 0.5rem 0;font-size:0.9rem;}");
-            html.AppendLine("code{background:#e8e8e8;padding:0.1rem 0.35rem;border-radius:3px;font-size:0.85em;color:#000;}");
-            html.AppendLine(".step{margin:0.4rem 0;font-size:0.9rem;color:#000;padding-left:1.8rem;text-indent:-1.8rem;}");
-            html.AppendLine(".step-num{font-weight:600;display:inline-block;width:1.8rem;}");
-            html.AppendLine("a{color:#0066cc;}");
+            html.AppendLine("*{box-sizing:border-box;margin:0;padding:0;}");
+            html.AppendLine("body{font-family:'Epilogue',Arial,sans-serif;font-weight:300;background:#f5f5f5;color:#000;font-size:14px;}");
+            html.AppendLine(".hdr-table{width:100%;background:#000;color:#f5f5f5;border-collapse:collapse;}");
+            html.AppendLine(".hdr-logo{width:90px;padding:18px 0 18px 62px;vertical-align:middle;}");
+            html.AppendLine(".hdr-center{text-align:center;vertical-align:middle;padding:18px 0;}");
+            html.AppendLine(".hdr-right{width:90px;padding:18px 64px 18px 0;vertical-align:middle;}");
+            html.AppendLine(".hdr-center h1{margin:0;font-size:1.1rem;font-weight:300;letter-spacing:-0.01em;}");
+            html.AppendLine(".hdr-center p{margin:3px 0 0;font-size:0.82rem;color:#ccc;font-weight:300;}");
+            html.AppendLine(".content{padding:20px 64px 48px 64px;}");
+            html.AppendLine("h2{font-size:1rem;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;margin:28px 0 10px;border-bottom:2px solid #000;padding-bottom:6px;color:#000;}");
+            html.AppendLine(".q{font-weight:600;margin:14px 0 3px;font-size:0.88rem;color:#000;}");
+            html.AppendLine(".q::before{content:'\\2014\\00A0';font-weight:300;color:#000;}");
+            html.AppendLine(".a{color:#000;font-weight:300;line-height:1.6;margin:0 0 8px 0;font-size:0.88rem;}");
+            html.AppendLine("code{background:#e0e0e0;padding:2px 5px;border-radius:3px;font-size:0.85em;color:#000;font-family:'Courier New',monospace;}");
+            html.AppendLine(".step{margin:5px 0 12px 0;font-size:0.88rem;color:#000;}");
+            html.AppendLine(".step-num{font-weight:600;margin-right:4px;}");
+            html.AppendLine("a{color:#0000EE;text-decoration:underline;}");
             html.AppendLine("</style></head><body>");
 
-            html.AppendLine("<div class='header'><h1>BIM Monkey</h1><p>Revit Plugin — Quick Start &amp; FAQ</p></div>");
+            html.AppendLine("<table class='hdr-table'><tr>");
+            html.AppendLine("<td class='hdr-logo'><img src='https://bimmonkey.ai/bimmonkey-mark.svg' height='54' alt=''></td>");
+            html.AppendLine("<td class='hdr-center'><h1>BIM Monkey — Frequently Asked Questions</h1><p>Construction documents, generated.</p></td>");
+            html.AppendLine("<td class='hdr-right'></td>");
+            html.AppendLine("</tr></table>");
             html.AppendLine("<div class='content'>");
 
             // ── Getting Started ────────────────────────────────────────────────
             html.AppendLine("<h2>Getting Started</h2>");
             html.AppendLine("<p class='step'><span class='step-num'>1.</span> Open Revit and your project file.</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>2.</span> Confirm the BIM Monkey installer has finished — it installs Node.js, Claude Code, Python, PyMuPDF, and Playwright automatically. Python 3.10 or later is required (the installer adds 3.12 if nothing compatible is found). Existing Python 3.10, 3.11, 3.12, or 3.13 installs are all compatible and will not be replaced. If Python shows as missing after install, check that <em>Add Python to PATH</em> was checked during installation.</p>");
+            html.AppendLine("<p class='step'><span class='step-num'>2.</span> Confirm the BIM Monkey installer has finished — it installs Node.js, Claude Code, Python, MCP Python package, PyMuPDF, and Playwright automatically. Python 3.10 or later is required (the installer adds 3.12 if nothing compatible is found). Existing Python 3.10, 3.11, 3.12, or 3.13 installs are all compatible and will not be replaced. If Python shows as missing after install, check that <em>Add Python to PATH</em> was checked during installation.</p>");
             html.AppendLine("<p class='step'><span class='step-num'>3.</span> In the <strong>BIM Monkey</strong> tab, click <strong>Start Server</strong>. The server does not start automatically — you must start it before generation. Once running, it restarts automatically whenever you open a new project file.</p>");
             html.AppendLine("<p class='step'><span class='step-num'>4.</span> Click <strong>Start Generation</strong> in the Documentation panel. Claude Code opens automatically, reads your model through the BIM Monkey plugin, calls the backend to build a CD plan from your firm's training library, and executes it directly in Revit.</p>");
             html.AppendLine("<p class='step'><span class='step-num'>5.</span> Claude executes the plan in three phases: <strong>Phase 1</strong> — sheets and view placements; <strong>Phase 2</strong> — section and assembly details; <strong>Phase 3</strong> — door schedule, window schedule, room finish schedule, and keynote legend.</p>");
@@ -87,12 +99,13 @@ namespace RevitMCPBridge.Commands
             html.AppendLine("<p class='q'>Start Server (Server Control panel)</p><p class='a'>Starts the MCP pipe server so Claude can communicate with Revit. Must be clicked manually before your first generation. The server restarts automatically whenever you open a new project file.</p>");
             html.AppendLine("<p class='q'>Stop Server (Server Control panel)</p><p class='a'>Stops the pipe server. Use this to reset a stale connection. Always Stop → Start after switching project files mid-session if auto-restart didn't fire.</p>");
             html.AppendLine("<p class='q'>Server Status (Server Control panel)</p><p class='a'>Shows whether the server is running, the pipe name (<code>RevitMCPBridge2026</code>), and active connection count.</p>");
+            html.AppendLine("<p class='q'>Check Model (Documentation panel)</p><p class='a'>Runs a pre-generation health check on your active Revit model — reviews room count and names, view types present, door and window counts, and title block. Returns a 0–100 health score, a pass/warning/fail checklist, and an estimated sheet count. Run this before Start Generation to catch issues that would produce incomplete output.</p>");
             html.AppendLine("<p class='q'>Start Generation (Documentation panel)</p><p class='a'>Launches Claude Code and starts a full CD generation run — reads your model, calls the BIM Monkey backend, and builds sheets, views, schedules, and details directly in Revit.</p>");
             html.AppendLine("<p class='q'>Stop Generation (Documentation panel)</p><p class='a'>Cancels a generation run in progress.</p>");
-            html.AppendLine("<p class='q'>Audit Plans (Documentation panel)</p><p class='a'>Tags all floor plans with room, door, and window tags in a single batch operation across all plan views.</p>");
+            html.AppendLine("<p class='q'>Place Tags (Documentation panel)</p><p class='a'>Tags all floor plans with room, door, and window tags in a single batch operation across all plan views. Run this after Phase 1 completes to populate schedules with accurate data before Phase 3 creates them.</p>");
             html.AppendLine("<p class='q'>Load (Redline Review panel)</p><p class='a'>Opens a file picker to load a redlined PDF. Claude analyzes the markup and extracts a structured list of changes, which become instructions for the next generation run.</p>");
             html.AppendLine("<p class='q'>Cancel / Clear (Redline Review panel)</p><p class='a'>Cancel stops an in-progress redline analysis. Clear removes all loaded redline context so the next generation runs clean.</p>");
-            html.AppendLine("<p class='q'>Standards (Additions panel)</p><p class='a'>Fetches your firm's library score from the BIM Monkey API — pages analyzed, projects uploaded, detail type coverage, and score breakdown.</p>");
+            html.AppendLine("<p class='q'>Standards (Additions panel)</p><p class='a'>Fetches your firm's library score from the BIM Monkey API — pages analyzed, projects uploaded, detail type coverage, and score breakdown. Also shows a <strong>Library Gaps</strong> list: detail types with missing or thin coverage (fewer than 5 examples), so you know exactly what to upload next to improve generation quality.</p>");
             html.AppendLine("<p class='q'>FAQ (Additions panel)</p><p class='a'>Opens this page.</p>");
 
             // ── Training Library ───────────────────────────────────────────────
@@ -100,7 +113,7 @@ namespace RevitMCPBridge.Commands
             html.AppendLine("<p class='q'>What should I upload?</p><p class='a'>100% completed Construction Document sets only — permit-ready drawings, not works in progress. The quality of uploads directly determines the quality of generated output. Works in progress degrade results.</p>");
             html.AppendLine("<p class='q'>How do I upload?</p><p class='a'>Go to <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a> → Upload tab. Drop in a PDF, select building type, click Analyze. Claude reads every page and adds it to your library automatically — no review step required.</p>");
             html.AppendLine("<p class='q'>Does generated output feed back into the library?</p><p class='a'>Not automatically. Your training library is built from the CD sets <em>you upload</em> — only permit-ready drawings you've approved. Every run is logged at app.bimmonkey.ai where you can add notes to sheets and details. Those notes are applied as direct instructions on the next generation for that project, but they do not enter the training library.</p>");
-            html.AppendLine("<p class='q'>How do I see my library health?</p><p class='a'>Click <strong>Standards</strong> in the ribbon or visit the Standards tab at app.bimmonkey.ai. Your library score (0–100) shows coverage, depth, and breadth across detail types.</p>");
+            html.AppendLine("<p class='q'>How do I see my library health?</p><p class='a'>Click <strong>Standards</strong> in the ribbon. Your library score (0–100) shows coverage, depth, and breadth. Below the score, the Library Gaps section lists every detail type that is missing or has fewer than 5 examples — with a badge showing Missing or Thin. Upload completed CD sets that include those detail types to fill the gaps.</p>");
 
             // ── Troubleshooting ────────────────────────────────────────────────
             html.AppendLine("<h2>Troubleshooting</h2>");
