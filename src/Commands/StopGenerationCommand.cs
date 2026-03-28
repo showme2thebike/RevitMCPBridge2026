@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
@@ -20,8 +21,21 @@ namespace RevitMCPBridge.Commands
                     return Result.Succeeded;
                 }
 
-                GenerationState.ActiveProcess.Kill();
+                var process = GenerationState.ActiveProcess;
+                var pid = process.Id;
                 GenerationState.ActiveProcess = null;
+
+                // Close the terminal window
+                process.CloseMainWindow();
+
+                // Force-kill the full process tree (cmd.exe + claude + all children)
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "taskkill",
+                    Arguments = $"/F /T /PID {pid}",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                })?.WaitForExit();
 
                 Log.Information("Generation stopped via ribbon button");
                 TaskDialog.Show("BIM Monkey", "Generation stopped.");

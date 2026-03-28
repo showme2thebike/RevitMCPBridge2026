@@ -17,13 +17,14 @@ namespace RevitMCPBridge.Commands
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         private const string AuditPrompt =
-            "Run Audit Plans: tag all floor plan views with best-practice annotations. " +
-            "Step 1: call getViews and filter to viewType=FloorPlan. " +
-            "Step 2: for each floor plan view, call batchTagRooms — place a generic room tag " +
-            "in the lower-left quadrant of each room boundary (not center — center gets covered). " +
-            "Step 3: call batchTagDoors on each floor plan view. " +
-            "Step 4: call batchTagWindows on each floor plan view. " +
-            "Report how many rooms, doors, and windows were tagged when complete.";
+            "Run Place Tags: tag floor plan views with room, door, and window tags. " +
+            "Step 1: call getViews filtered to viewType=FloorPlan. " +
+            "Step 2: filter that list to only views that are placed on a sheet (isOnSheet=true or equivalent). " +
+            "Skip any view whose name contains SITE, GRADE, CIVIL, AVERAGE, SURVEY, or DEMO — these are not architectural floor plans. " +
+            "Step 3: for each remaining view, call batchTagRooms — place the room tag in the lower-left quadrant of each room boundary, not the center. " +
+            "Step 4: call batchTagDoors on each view. " +
+            "Step 5: call batchTagWindows on each view. " +
+            "Report how many views were processed, and how many rooms, doors, and windows were tagged when complete.";
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
@@ -31,7 +32,7 @@ namespace RevitMCPBridge.Commands
             {
                 if (GenerationState.IsRunning)
                 {
-                    TaskDialog.Show("BIM Monkey", "A generation or audit is already running.");
+                    TaskDialog.Show("BIM Monkey", "A generation is already running.");
                     return Result.Succeeded;
                 }
 
@@ -55,13 +56,13 @@ namespace RevitMCPBridge.Commands
                 if (revitHandle != IntPtr.Zero)
                     SetForegroundWindow(revitHandle);
 
-                Log.Information("Audit Plans started via ribbon button");
+                Log.Information("Place Tags started via ribbon button");
                 return Result.Succeeded;
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "Audit Plans failed to start");
-                TaskDialog.Show("BIM Monkey", $"Could not start Audit Plans: {ex.Message}\n\nMake sure Claude Code is installed.");
+                Log.Error(ex, "Place Tags failed to start");
+                TaskDialog.Show("BIM Monkey", $"Could not start Place Tags: {ex.Message}\n\nMake sure Claude Code is installed.");
                 return Result.Succeeded;
             }
         }

@@ -233,6 +233,13 @@ namespace RevitMCPBridge
             // ── Documentation Control ──────────────────────────────────────
             var easyPanel = application.CreateRibbonPanel(_tabName, "Documentation");
 
+            var modelCheckButtonData = new PushButtonData("ModelCheck", "Check\nModel", asm,
+                "RevitMCPBridge.Commands.ModelCheckCommand")
+                { ToolTip = "Check your model's readiness before generating — shows health score, issues, and estimated sheet count" };
+            var modelCheckButton = easyPanel.AddItem(modelCheckButtonData) as PushButton;
+            modelCheckButton.LargeImage = CreateButtonIcon("modelcheck", 32);
+            modelCheckButton.Image      = CreateButtonIcon("modelcheck", 16);
+
             var startGenButtonData = new PushButtonData("StartGeneration", "Start\nGeneration", asm,
                 "RevitMCPBridge.Commands.StartGenerationCommand")
                 { ToolTip = "Start generating Construction Documents",
@@ -249,7 +256,7 @@ namespace RevitMCPBridge
             stopGenButton.LargeImage = CreateButtonIcon("stopgen", 32);
             stopGenButton.Image      = CreateButtonIcon("stopgen", 16);
 
-            var auditButtonData = new PushButtonData("AuditPlans", "Audit\nPlans", asm,
+            var auditButtonData = new PushButtonData("PlaceTags", "Place\nTags", asm,
                 "RevitMCPBridge.Commands.AuditPlansCommand")
                 { ToolTip = "Tag all floor plans with room, door, and window tags",
                   AvailabilityClassName = "RevitMCPBridge.Commands.GenerationNotRunningAvailability" };
@@ -546,6 +553,9 @@ namespace RevitMCPBridge
                             break;
                         case "redline-clear":
                             DrawRedlineClearIcon(dc, size);
+                            break;
+                        case "modelcheck":
+                            DrawModelCheckIcon(dc, size);
                             break;
                     }
                 }
@@ -1298,6 +1308,32 @@ namespace RevitMCPBridge
             dc.DrawLine(linePen, new Point(13*s, 14*s), new Point(12.5*s, 26*s));
             dc.DrawLine(linePen, new Point(16*s,  14*s), new Point(16*s,   26*s));
             dc.DrawLine(linePen, new Point(19*s,  14*s), new Point(19.5*s, 26*s));
+        }
+
+        private void DrawModelCheckIcon(DrawingContext dc, int size)
+        {
+            // Flat white clipboard with checkmark — BIM Monkey logo style
+            double s    = size / 32.0;
+            var fill    = new SolidColorBrush(Colors.White);
+            var pen     = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5*s));
+            var linePen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.7, 1.1*s));
+            var checkPen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 2*s))
+                { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+
+            // Clipboard body
+            dc.DrawRoundedRectangle(fill, pen, new Rect(5*s, 6*s, 22*s, 24*s), 1.5*s, 1.5*s);
+
+            // Clip tab (centered at top)
+            dc.DrawRoundedRectangle(fill, pen, new Rect(11*s, 3*s, 10*s, 5*s), 1*s, 1*s);
+
+            // Three text lines across the body
+            dc.DrawLine(linePen, new Point(9*s,  13*s), new Point(20*s, 13*s));
+            dc.DrawLine(linePen, new Point(9*s,  17*s), new Point(20*s, 17*s));
+            dc.DrawLine(linePen, new Point(9*s,  21*s), new Point(16*s, 21*s));
+
+            // Checkmark (bottom-right)
+            dc.DrawLine(checkPen, new Point(17*s, 24*s), new Point(20*s, 27*s));
+            dc.DrawLine(checkPen, new Point(20*s, 27*s), new Point(26*s, 19*s));
         }
 
         private void DrawStartGenIcon(DrawingContext dc, int size)

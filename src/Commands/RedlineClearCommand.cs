@@ -25,9 +25,17 @@ namespace RevitMCPBridge.Commands
                         File.Delete(f);
                         cleared++;
                     }
+                    // Delete session subfolders — redline_analysis.json lives inside
+                    // a timestamped subfolder, not directly in the base folder
+                    foreach (var d in Directory.GetDirectories(folder))
+                    {
+                        Directory.Delete(d, recursive: true);
+                        cleared++;
+                    }
                 }
 
-                Log.Information($"Redline folder cleared — {cleared} files removed");
+                RedlineState.CurrentSessionFolder = null;
+                Log.Information($"Redline folder cleared — {cleared} items removed");
 
                 TaskDialog.Show("Redline Review",
                     "Redline context cleared.\n\n" +

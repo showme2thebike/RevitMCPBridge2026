@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
@@ -18,22 +19,37 @@ namespace RevitMCPBridge.Commands
                 // Kill running analysis process
                 if (RedlineState.IsAnalyzing)
                 {
-                    try { RedlineState.AnalysisProcess.Kill(); } catch { }
+                    var process = RedlineState.AnalysisProcess;
+                    var pid = process.Id;
                     RedlineState.AnalysisProcess = null;
+
+                    try { process.CloseMainWindow(); } catch { }
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = "taskkill",
+                            Arguments = $"/F /T /PID {pid}",
+                            UseShellExecute = false,
+                            CreateNoWindow = true
+                        })?.WaitForExit();
+                    }
+                    catch { }
                     Log.Information("Redline analysis process killed");
                 }
 
-                // Remove the pending PDF so generation won't pick it up
+                // Remove the pending PDF and session subfolders so generation won't pick them up
                 var folder = RedlineState.RedlineFolder;
                 if (Directory.Exists(folder))
                 {
                     foreach (var f in Directory.GetFiles(folder))
                         File.Delete(f);
+                    foreach (var d in Directory.GetDirectories(folder))
+                        Directory.Delete(d, recursive: true);
                 }
+                RedlineState.CurrentSessionFolder = null;
 
-                TaskDialog.Show("Redline Review",
-                    "Analysis cancelled and redline files cleared.\n\n" +
-                    "If Claude is still running in the terminal, press Ctrl+C to stop it.");
+                TaskDialog.Show("Redline Review", "Analysis cancelled and redline files cleared.");
 
                 return Result.Succeeded;
             }
