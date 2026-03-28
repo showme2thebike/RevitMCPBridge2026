@@ -31,7 +31,7 @@ namespace RevitMCPBridge.Commands
                 server.Start();
 
                 var dialog = new TaskDialog("BIM Monkey");
-                dialog.MainContent = "BIM Monkey server started. You can now run Claude Code.";
+                dialog.MainContent = "BIM Monkey server starting. Click Server Status to confirm it's ready before running Claude Code.";
                 dialog.MainIcon = TaskDialogIcon.TaskDialogIconInformation;
                 dialog.Show();
                 

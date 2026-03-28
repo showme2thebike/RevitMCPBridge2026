@@ -6933,6 +6933,7 @@ namespace RevitMCPBridge2026
                 int dirMultiplier = (direction == "right-to-left" || direction == "bottom-to-top") ? -1 : 1;
                 var layerPositions = new List<object>(); // Track for dimension output
                 var missingRegionTypes = new List<string>(); // Hatch names requested but not found in project
+                var noHatchLayers = new List<string>(); // Layer names where hatch was null/empty — no fill drawn
                 // Fallback filled region type — used when a requested hatch name doesn't exist in the project
                 FilledRegionType fallbackRegionType = filledRegionTypeCache.Values.FirstOrDefault();
 
@@ -7025,7 +7026,11 @@ namespace RevitMCPBridge2026
                             var rightCurve2 = doc.Create.NewDetailCurve(view, rightLine2);
                             if (edgeStyle != null) rightCurve2.LineStyle = edgeStyle;
 
-                            if (!string.IsNullOrEmpty(hatch))
+                            if (string.IsNullOrEmpty(hatch))
+                            {
+                                noHatchLayers.Add(layerName);
+                            }
+                            else
                             {
                                 FilledRegionType frt = null;
                                 filledRegionTypeCache.TryGetValue(hatch, out frt);
@@ -7095,7 +7100,11 @@ namespace RevitMCPBridge2026
                             var bottomCurve2 = doc.Create.NewDetailCurve(view, bottomLine2);
                             if (edgeStyle != null) bottomCurve2.LineStyle = edgeStyle;
 
-                            if (!string.IsNullOrEmpty(hatch))
+                            if (string.IsNullOrEmpty(hatch))
+                            {
+                                noHatchLayers.Add(layerName);
+                            }
+                            else
                             {
                                 FilledRegionType frt = null;
                                 filledRegionTypeCache.TryGetValue(hatch, out frt);
@@ -7166,10 +7175,14 @@ namespace RevitMCPBridge2026
                     layerPositions,
                     createdElements,
                     // Hatch names that weren't found in the project — regions were drawn with fallback type instead.
-                    // Add these filled region types to the project (via Revit UI: Annotate > Region > Filled Region)
-                    // then re-run to get the correct hatching.
                     missingRegionTypes = missingRegionTypes.Distinct().ToList(),
                     hasMissingRegionTypes = missingRegionTypes.Count > 0,
+                    // Layers where hatch was omitted entirely — no filled region drawn for these.
+                    // Re-call drawLayerStack with a hatch value from availableHatchTypes for each layer.
+                    noHatchLayers = noHatchLayers.Distinct().ToList(),
+                    hasNoHatchLayers = noHatchLayers.Count > 0,
+                    // All filled region type names loaded in this project — use these as hatch values.
+                    availableHatchTypes = filledRegionTypeCache.Keys.OrderBy(k => k).ToList(),
                 });
             }
             catch (Exception ex)

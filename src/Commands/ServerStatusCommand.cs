@@ -1,4 +1,5 @@
 using System;
+using System.IO.Pipes;
 using System.Text;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
@@ -29,18 +30,29 @@ namespace RevitMCPBridge.Commands
                 }
                 else
                 {
-                    status.AppendLine($"Status: {(server.IsRunning ? "Running" : "Stopped")}");
+                    status.AppendLine($"Plugin state: {(server.IsRunning ? "Running" : "Stopped")}");
 
-                    if (server.IsRunning)
+                    // Probe the actual named pipe — plugin state and pipe readiness can diverge
+                    // during startup (IsRunning goes true before the pipe accepts connections)
+                    var pipeName = server.PipeName;
+                    bool pipeReady = false;
+                    try
                     {
-                        status.AppendLine();
-                        status.AppendLine("The BIM Monkey server is running and ready.");
+                        using (var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut))
+                            client.Connect(2000);
+                        pipeReady = true;
                     }
+                    catch { }
+
+                    status.AppendLine($"Pipe ({pipeName}): {(pipeReady ? "Ready — accepting connections" : "Not responding")}");
+                    status.AppendLine();
+
+                    if (pipeReady)
+                        status.AppendLine("The BIM Monkey server is ready. Claude can connect.");
+                    else if (server.IsRunning)
+                        status.AppendLine("Plugin reports Running but pipe is not yet accepting connections.\nWait a moment and recheck, or click Stop Server → Start Server.");
                     else
-                    {
-                        status.AppendLine();
                         status.AppendLine("Click 'Start Server' to start the BIM Monkey server.");
-                    }
                 }
 
                 status.AppendLine();
