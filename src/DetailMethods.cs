@@ -6907,6 +6907,29 @@ namespace RevitMCPBridge2026
                 double labelOffset = parameters["labelOffset"]?.ToObject<double>() ?? 0.5; // feet from stack
                 bool addDimensions = parameters["addDimensions"]?.ToObject<bool>() ?? true;
                 bool isVertical = direction == "top-to-bottom" || direction == "bottom-to-top";
+                bool clearExisting = parameters["clearExisting"]?.ToObject<bool>() ?? false;
+
+                // If clearExisting, delete all FilledRegions, TextNotes, and DetailCurves in the view
+                // before drawing new layers — prevents doubled/overlapping elements on redraw
+                int clearedCount = 0;
+                if (clearExisting)
+                {
+                    using (var clearTrans = new Transaction(doc, "MCP Clear Layer Stack"))
+                    {
+                        clearTrans.Start();
+                        var toDelete = new FilteredElementCollector(doc, view.Id)
+                            .WhereElementIsNotElementType()
+                            .Where(e => e is FilledRegion || e is TextNote || e is DetailCurve)
+                            .Select(e => e.Id)
+                            .ToList();
+                        foreach (var id in toDelete)
+                        {
+                            try { doc.Delete(id); clearedCount++; }
+                            catch { /* skip elements that can't be deleted */ }
+                        }
+                        clearTrans.Commit();
+                    }
+                }
 
                 // Cache lookups
                 var lineStyleCache = new Dictionary<string, GraphicsStyle>(StringComparer.OrdinalIgnoreCase);
@@ -7183,6 +7206,7 @@ namespace RevitMCPBridge2026
                     hasNoHatchLayers = noHatchLayers.Count > 0,
                     // All filled region type names loaded in this project — use these as hatch values.
                     availableHatchTypes = filledRegionTypeCache.Keys.OrderBy(k => k).ToList(),
+                    clearedCount,
                 });
             }
             catch (Exception ex)
