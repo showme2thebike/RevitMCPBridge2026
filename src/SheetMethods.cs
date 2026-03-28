@@ -324,6 +324,23 @@ namespace RevitMCPBridge
                         .Build();
                 }
 
+                // IDEMPOTENCY: if a sheet with this number already exists, return it — do not error
+                var existingSheet = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewSheet))
+                    .Cast<ViewSheet>()
+                    .FirstOrDefault(s => s.SheetNumber == sheetNumber);
+
+                if (existingSheet != null)
+                {
+                    return ResponseBuilder.Success()
+                        .With("sheetId", (int)existingSheet.Id.Value)
+                        .With("sheetNumber", existingSheet.SheetNumber)
+                        .With("sheetName", existingSheet.Name)
+                        .With("alreadyExisted", true)
+                        .With("note", $"Sheet {sheetNumber} already exists — returning existing sheet. No new sheet was created.")
+                        .Build();
+                }
+
                 using (var trans = new Transaction(doc, "Create Sheet"))
                 {
                     trans.Start();

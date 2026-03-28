@@ -374,6 +374,24 @@ namespace RevitMCPBridge
                     return ResponseBuilder.Error("View not found", "ELEMENT_NOT_FOUND").Build();
                 }
 
+                // LEGEND SHORTCUT: Legend views support multi-sheet placement natively.
+                // Duplicating them produces an empty view. Return the original ID directly.
+                if (view.ViewType == ViewType.Legend)
+                {
+                    var legendCount = new FilteredElementCollector(doc, viewId)
+                        .WhereElementIsNotElementType()
+                        .GetElementCount();
+                    return ResponseBuilder.Success()
+                        .With("originalViewId", (int)viewId.Value)
+                        .With("newViewId", (int)viewId.Value)
+                        .With("newViewName", view.Name)
+                        .With("duplicateOption", "skipped")
+                        .With("elementCount", legendCount)
+                        .With("canPlace", true)
+                        .With("note", "Legend views do not require duplication — Revit allows them on multiple sheets. Place the original view ID directly.")
+                        .Build();
+                }
+
                 using (var trans = new Transaction(doc, "Duplicate View"))
                 {
                     trans.Start();

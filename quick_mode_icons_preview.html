@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Quick Mode Icon Preview</title>
+<style>
+  body { font-family: 'Segoe UI', sans-serif; background: #1a1a1a; color: #eee; padding: 2rem; }
+  h1 { font-size: 1rem; font-weight: 400; letter-spacing: 0.1em; text-transform: uppercase; color: #888; margin-bottom: 2rem; }
+  .grid { display: flex; gap: 2rem; flex-wrap: wrap; }
+  .card { background: #2a2a2a; border: 1px solid #333; border-radius: 6px; padding: 1.5rem; width: 200px; text-align: center; }
+  .card h2 { font-size: 0.75rem; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: #888; margin: 0 0 1.25rem; }
+
+  /* Revit ribbon dark background simulation */
+  .ribbon-sim {
+    background: #3c3c3c;
+    border-radius: 4px;
+    padding: 12px 8px 8px;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 1rem;
+  }
+  .ribbon-sim span {
+    font-size: 9px;
+    color: #ddd;
+    text-align: center;
+    line-height: 1.2;
+    font-family: 'Segoe UI', sans-serif;
+  }
+
+  /* Also show at 32px actual size */
+  .sizes { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 0.75rem; }
+  .size-label { font-size: 0.65rem; color: #555; }
+
+  .light-bg {
+    background: #f0f0f0;
+    border-radius: 4px;
+    padding: 4px;
+    display: inline-flex;
+  }
+</style>
+</head>
+<body>
+
+<h1>Quick Mode — Icon Concepts</h1>
+<p style="font-size:0.8rem;color:#666;margin-bottom:2rem;">White fill + dark outline. Shown at ribbon size (32px) on dark background, and 64px for detail.</p>
+
+<div class="grid">
+
+  <!-- 1. Lightning Bolt -->
+  <div class="card">
+    <h2>1 — Lightning Bolt</h2>
+    <div class="ribbon-sim">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <polygon points="18,3 8,18 15,18 14,29 24,14 17,14" fill="white" stroke="white" stroke-width="0.5"/>
+        <polygon points="18,3 8,18 15,18 14,29 24,14 17,14" fill="none" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+      </svg>
+      <span>Quick<br>Mode</span>
+    </div>
+    <div class="sizes">
+      <div>
+        <svg width="64" height="64" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <polygon points="18,3 8,18 15,18 14,29 24,14 17,14" fill="white" stroke="white" stroke-width="0.5"/>
+          <polygon points="18,3 8,18 15,18 14,29 24,14 17,14" fill="none" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+        </svg>
+        <div class="size-label">64px dark</div>
+      </div>
+      <div class="light-bg">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <polygon points="18,3 8,18 15,18 14,29 24,14 17,14" fill="white" stroke="white" stroke-width="0.5"/>
+          <polygon points="18,3 8,18 15,18 14,29 24,14 17,14" fill="none" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. Double Chevron / Fast Forward -->
+  <div class="card">
+    <h2>2 — Fast Forward</h2>
+    <div class="ribbon-sim">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <!-- left triangle -->
+        <polygon points="5,8 5,24 15,16" fill="white" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+        <!-- right triangle -->
+        <polygon points="15,8 15,24 25,16" fill="white" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+        <!-- right bar -->
+        <rect x="25" y="8" width="3" height="16" rx="1" fill="white" stroke="#222" stroke-width="1"/>
+      </svg>
+      <span>Quick<br>Mode</span>
+    </div>
+    <div class="sizes">
+      <div>
+        <svg width="64" height="64" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <polygon points="5,8 5,24 15,16" fill="white" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+          <polygon points="15,8 15,24 25,16" fill="white" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+          <rect x="25" y="8" width="3" height="16" rx="1" fill="white" stroke="#222" stroke-width="1"/>
+        </svg>
+        <div class="size-label">64px dark</div>
+      </div>
+      <div class="light-bg">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <polygon points="5,8 5,24 15,16" fill="white" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+          <polygon points="15,8 15,24 25,16" fill="white" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+          <rect x="25" y="8" width="3" height="16" rx="1" fill="white" stroke="#222" stroke-width="1"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Rocket -->
+  <div class="card">
+    <h2>3 — Rocket</h2>
+    <div class="ribbon-sim">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <!-- body -->
+        <path d="M16 4 C16 4, 22 8, 22 18 L16 22 L10 18 C10 8, 16 4, 16 4Z" fill="white" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+        <!-- window -->
+        <circle cx="16" cy="14" r="2.5" fill="#888" stroke="#222" stroke-width="1"/>
+        <!-- left fin -->
+        <path d="M10 18 L7 24 L12 21Z" fill="white" stroke="#222" stroke-width="1.2" stroke-linejoin="round"/>
+        <!-- right fin -->
+        <path d="M22 18 L25 24 L20 21Z" fill="white" stroke="#222" stroke-width="1.2" stroke-linejoin="round"/>
+        <!-- flame -->
+        <path d="M13 22 Q16 28 19 22" fill="none" stroke="#aaa" stroke-width="1.2"/>
+      </svg>
+      <span>Quick<br>Mode</span>
+    </div>
+    <div class="sizes">
+      <div>
+        <svg width="64" height="64" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M16 4 C16 4, 22 8, 22 18 L16 22 L10 18 C10 8, 16 4, 16 4Z" fill="white" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+          <circle cx="16" cy="14" r="2.5" fill="#888" stroke="#222" stroke-width="1"/>
+          <path d="M10 18 L7 24 L12 21Z" fill="white" stroke="#222" stroke-width="1.2" stroke-linejoin="round"/>
+          <path d="M22 18 L25 24 L20 21Z" fill="white" stroke="#222" stroke-width="1.2" stroke-linejoin="round"/>
+          <path d="M13 22 Q16 28 19 22" fill="none" stroke="#aaa" stroke-width="1.2"/>
+        </svg>
+        <div class="size-label">64px dark</div>
+      </div>
+      <div class="light-bg">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M16 4 C16 4, 22 8, 22 18 L16 22 L10 18 C10 8, 16 4, 16 4Z" fill="white" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+          <circle cx="16" cy="14" r="2.5" fill="#888" stroke="#222" stroke-width="1"/>
+          <path d="M10 18 L7 24 L12 21Z" fill="white" stroke="#222" stroke-width="1.2" stroke-linejoin="round"/>
+          <path d="M22 18 L25 24 L20 21Z" fill="white" stroke="#222" stroke-width="1.2" stroke-linejoin="round"/>
+          <path d="M13 22 Q16 28 19 22" fill="none" stroke="#aaa" stroke-width="1.2"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. Stopwatch -->
+  <div class="card">
+    <h2>4 — Stopwatch</h2>
+    <div class="ribbon-sim">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <!-- crown buttons -->
+        <rect x="13" y="3" width="6" height="2.5" rx="1" fill="white" stroke="#222" stroke-width="1"/>
+        <!-- stem -->
+        <rect x="15.5" y="5" width="1" height="2.5" fill="white" stroke="#222" stroke-width="0.5"/>
+        <!-- circle body -->
+        <circle cx="16" cy="19" r="10" fill="white" stroke="#222" stroke-width="1.5"/>
+        <!-- tick marks -->
+        <line x1="16" y1="10" x2="16" y2="12.5" stroke="#222" stroke-width="1.2"/>
+        <line x1="16" y1="25.5" x2="16" y2="28" stroke="#222" stroke-width="1.2"/>
+        <line x1="7" y1="19" x2="9.5" y2="19" stroke="#222" stroke-width="1.2"/>
+        <line x1="22.5" y1="19" x2="25" y2="19" stroke="#222" stroke-width="1.2"/>
+        <!-- hand pointing to ~1 o'clock (fast) -->
+        <line x1="16" y1="19" x2="20" y2="13" stroke="#222" stroke-width="1.5" stroke-linecap="round"/>
+        <circle cx="16" cy="19" r="1.2" fill="#222"/>
+      </svg>
+      <span>Quick<br>Mode</span>
+    </div>
+    <div class="sizes">
+      <div>
+        <svg width="64" height="64" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="13" y="3" width="6" height="2.5" rx="1" fill="white" stroke="#222" stroke-width="1"/>
+          <rect x="15.5" y="5" width="1" height="2.5" fill="white" stroke="#222" stroke-width="0.5"/>
+          <circle cx="16" cy="19" r="10" fill="white" stroke="#222" stroke-width="1.5"/>
+          <line x1="16" y1="10" x2="16" y2="12.5" stroke="#222" stroke-width="1.2"/>
+          <line x1="16" y1="25.5" x2="16" y2="28" stroke="#222" stroke-width="1.2"/>
+          <line x1="7" y1="19" x2="9.5" y2="19" stroke="#222" stroke-width="1.2"/>
+          <line x1="22.5" y1="19" x2="25" y2="19" stroke="#222" stroke-width="1.2"/>
+          <line x1="16" y1="19" x2="20" y2="13" stroke="#222" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="16" cy="19" r="1.2" fill="#222"/>
+        </svg>
+        <div class="size-label">64px dark</div>
+      </div>
+      <div class="light-bg">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="13" y="3" width="6" height="2.5" rx="1" fill="white" stroke="#222" stroke-width="1"/>
+          <rect x="15.5" y="5" width="1" height="2.5" fill="white" stroke="#222" stroke-width="0.5"/>
+          <circle cx="16" cy="19" r="10" fill="white" stroke="#222" stroke-width="1.5"/>
+          <line x1="16" y1="10" x2="16" y2="12.5" stroke="#222" stroke-width="1.2"/>
+          <line x1="16" y1="25.5" x2="16" y2="28" stroke="#222" stroke-width="1.2"/>
+          <line x1="7" y1="19" x2="9.5" y2="19" stroke="#222" stroke-width="1.2"/>
+          <line x1="22.5" y1="19" x2="25" y2="19" stroke="#222" stroke-width="1.2"/>
+          <line x1="16" y1="19" x2="20" y2="13" stroke="#222" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="16" cy="19" r="1.2" fill="#222"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. Lightning bolt inside a play button -->
+  <div class="card">
+    <h2>5 — Play + Bolt</h2>
+    <div class="ribbon-sim">
+      <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <!-- play triangle -->
+        <polygon points="5,4 5,28 27,16" fill="white" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+        <!-- bolt inside -->
+        <polygon points="17,9 12,17 16,17 15,23 20,15 16,15" fill="#333" stroke="#333" stroke-width="0.3" stroke-linejoin="round"/>
+      </svg>
+      <span>Quick<br>Mode</span>
+    </div>
+    <div class="sizes">
+      <div>
+        <svg width="64" height="64" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <polygon points="5,4 5,28 27,16" fill="white" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+          <polygon points="17,9 12,17 16,17 15,23 20,15 16,15" fill="#333" stroke="#333" stroke-width="0.3" stroke-linejoin="round"/>
+        </svg>
+        <div class="size-label">64px dark</div>
+      </div>
+      <div class="light-bg">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <polygon points="5,4 5,28 27,16" fill="white" stroke="#222" stroke-width="1.5" stroke-linejoin="round"/>
+          <polygon points="17,9 12,17 16,17 15,23 20,15 16,15" fill="#333" stroke="#333" stroke-width="0.3" stroke-linejoin="round"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<p style="margin-top:2rem;font-size:0.75rem;color:#555;">Each shown on simulated Revit ribbon dark background (left) and at 64px detail view. Light bg thumbnail on right.</p>
+
+</body>
+</html>

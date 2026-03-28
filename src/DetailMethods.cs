@@ -6875,7 +6875,7 @@ namespace RevitMCPBridge2026
         /// Draws a layer stack (wall/floor/roof section) in a drafting view.
         /// Automatically creates lines, filled regions, and labels for each layer.
         /// </summary>
-        [MCPMethod("drawLayerStack", Category = "Detail", Description = "Draws a construction assembly layer stack with automatic lines, hatches, and labels")]
+        [MCPMethod("drawLayerStack", Category = "Detail", Description = "Draws a construction assembly layer stack with automatic lines, hatches, and labels. Requires a pre-existing drafting view — call createDraftingView first, then pass the returned viewId here.")]
         public static string DrawLayerStack(UIApplication uiApp, JObject parameters)
         {
             try

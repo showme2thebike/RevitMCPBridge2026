@@ -240,6 +240,13 @@ namespace RevitMCPBridge
             modelCheckButton.LargeImage = CreateButtonIcon("modelcheck", 32);
             modelCheckButton.Image      = CreateButtonIcon("modelcheck", 16);
 
+            var standardsButtonData = new PushButtonData("Standards", "Standards", asm,
+                "RevitMCPBridge.Commands.StandardsCommand")
+                { ToolTip = "View your BIM Monkey training library statistics" };
+            var standardsButton = easyPanel.AddItem(standardsButtonData) as PushButton;
+            standardsButton.LargeImage = CreateButtonIcon("standards", 32);
+            standardsButton.Image      = CreateButtonIcon("standards", 16);
+
             var startGenButtonData = new PushButtonData("StartGeneration", "Start\nGeneration", asm,
                 "RevitMCPBridge.Commands.StartGenerationCommand")
                 { ToolTip = "Start generating Construction Documents",
@@ -289,20 +296,20 @@ namespace RevitMCPBridge
             redlineClearButton.LargeImage = CreateButtonIcon("redline-clear", 32);
             redlineClearButton.Image      = CreateButtonIcon("redline-clear", 16);
 
-            // ── Additions (Standards + FAQ) ────────────────────────────────
-            var standardsPanel = application.CreateRibbonPanel(_tabName, "Additions");
+            // ── Additions (Quick Mode + FAQ) ───────────────────────────────
+            var additionsPanel = application.CreateRibbonPanel(_tabName, "Additions");
 
-            var standardsButtonData = new PushButtonData("Standards", "Standards", asm,
-                "RevitMCPBridge.Commands.StandardsCommand")
-                { ToolTip = "View your BIM Monkey training library statistics" };
-            var standardsButton = standardsPanel.AddItem(standardsButtonData) as PushButton;
-            standardsButton.LargeImage = CreateButtonIcon("standards", 32);
-            standardsButton.Image      = CreateButtonIcon("standards", 16);
+            var quickModeButtonData = new PushButtonData("QuickMode", "Quick\nMode", asm,
+                "RevitMCPBridge.Commands.QuickModeCommand")
+                { ToolTip = "Quick Mode — generate a full CD set in under 30 seconds (coming soon)" };
+            var quickModeButton = additionsPanel.AddItem(quickModeButtonData) as PushButton;
+            quickModeButton.LargeImage = CreateButtonIcon("quickmode", 32);
+            quickModeButton.Image      = CreateButtonIcon("quickmode", 16);
 
             var faqButtonData = new PushButtonData("FAQ", "FAQ", asm,
                 "RevitMCPBridge.Commands.BimMonkeyFaqCommand")
                 { ToolTip = "Frequently asked questions and troubleshooting tips" };
-            var faqButton = standardsPanel.AddItem(faqButtonData) as PushButton;
+            var faqButton = additionsPanel.AddItem(faqButtonData) as PushButton;
             faqButton.LargeImage = CreateButtonIcon("faq", 32);
             faqButton.Image      = CreateButtonIcon("faq", 16);
         }
@@ -556,6 +563,9 @@ namespace RevitMCPBridge
                             break;
                         case "modelcheck":
                             DrawModelCheckIcon(dc, size);
+                            break;
+                        case "quickmode":
+                            DrawQuickModeIcon(dc, size);
                             break;
                     }
                 }
@@ -1334,6 +1344,27 @@ namespace RevitMCPBridge
             // Checkmark (bottom-right)
             dc.DrawLine(checkPen, new Point(17*s, 24*s), new Point(20*s, 27*s));
             dc.DrawLine(checkPen, new Point(20*s, 27*s), new Point(26*s, 19*s));
+        }
+
+        private void DrawQuickModeIcon(DrawingContext dc, int size)
+        {
+            // Lightning bolt — flat white fill + dark outline, matches BIM Monkey icon style
+            double s = size / 32.0;
+            var fill = new SolidColorBrush(Colors.White);
+            var pen  = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, size * 0.04))
+                { LineJoin = PenLineJoin.Round };
+
+            var figure = new PathFigure { StartPoint = new Point(18 * s, 3 * s) };
+            figure.Segments.Add(new LineSegment(new Point(8  * s, 18 * s), true));
+            figure.Segments.Add(new LineSegment(new Point(15 * s, 18 * s), true));
+            figure.Segments.Add(new LineSegment(new Point(14 * s, 29 * s), true));
+            figure.Segments.Add(new LineSegment(new Point(24 * s, 14 * s), true));
+            figure.Segments.Add(new LineSegment(new Point(17 * s, 14 * s), true));
+            figure.IsClosed = true;
+
+            var geometry = new PathGeometry();
+            geometry.Figures.Add(figure);
+            dc.DrawGeometry(fill, pen, geometry);
         }
 
         private void DrawStartGenIcon(DrawingContext dc, int size)
