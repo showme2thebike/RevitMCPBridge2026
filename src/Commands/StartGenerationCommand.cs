@@ -39,7 +39,7 @@ namespace RevitMCPBridge.Commands
                 var process = Process.Start(new ProcessStartInfo
                 {
                     FileName = "cmd.exe",
-                    Arguments = $"/K cd /D \"{workingDir}\" && claude \"{GenerationPrompt}\"",
+                    Arguments = $"/C cd /D \"{workingDir}\" && claude \"{GenerationPrompt}\" & pause",
                     UseShellExecute = true,
                     WorkingDirectory = workingDir,
                     WindowStyle = ProcessWindowStyle.Normal,

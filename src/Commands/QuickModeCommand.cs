@@ -43,7 +43,7 @@ namespace RevitMCPBridge.Commands
                 var process = Process.Start(new ProcessStartInfo
                 {
                     FileName = "cmd.exe",
-                    Arguments = $"/K cd /D \"{workingDir}\" && claude \"{QuickModePrompt}\"",
+                    Arguments = $"/C cd /D \"{workingDir}\" && claude \"{QuickModePrompt}\" & pause",
                     UseShellExecute = true,
                     WorkingDirectory = workingDir,
                     WindowStyle = ProcessWindowStyle.Normal,

@@ -20,7 +20,8 @@ namespace RevitMCPBridge.Commands
             "Run Place Tags: tag floor plan views with room, door, and window tags. " +
             "Step 1: call getViews filtered to viewType=FloorPlan. " +
             "Step 2: filter that list to only views that are placed on a sheet (isOnSheet=true or equivalent). " +
-            "Skip any view whose name contains SITE, GRADE, CIVIL, AVERAGE, SURVEY, or DEMO — these are not architectural floor plans. " +
+            "Skip any view whose name contains SITE, GRADE, CIVIL, AVERAGE, SURVEY, DEMO, ELECTRICAL, or MECHANICAL — these are not architectural floor plans. " +
+            "Also skip ROOF PLAN views for door tags only (roof plans have no doors — do not call batchTagDoors on them). " +
             "Step 3: for each remaining view, call batchTagRooms — place the room tag in the lower-left quadrant of each room boundary, not the center. " +
             "Step 4: call batchTagDoors on each view. " +
             "Step 5: call batchTagWindows on each view. " +
@@ -44,7 +45,7 @@ namespace RevitMCPBridge.Commands
                 var process = Process.Start(new ProcessStartInfo
                 {
                     FileName = "cmd.exe",
-                    Arguments = $"/K cd /D \"{workingDir}\" && claude \"{AuditPrompt}\"",
+                    Arguments = $"/C cd /D \"{workingDir}\" && claude \"{AuditPrompt}\" & pause",
                     UseShellExecute = true,
                     WorkingDirectory = workingDir,
                     WindowStyle = ProcessWindowStyle.Normal,
