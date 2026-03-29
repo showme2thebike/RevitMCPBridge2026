@@ -149,10 +149,6 @@ namespace RevitMCPBridge
                 // Create panels
                 CreateServerPanel(application);
 
-                // Set KeyTips on ribbon buttons via WPF layer (Revit PushButton has no KeyTip property)
-                try { ApplyButtonKeyTips(); }
-                catch (Exception ex) { Log.Warning($"Could not set button KeyTips: {ex.Message}"); }
-
                 // Reposition tab before Add-Ins (after Manage)
                 try
                 {
@@ -176,6 +172,11 @@ namespace RevitMCPBridge
                 {
                     Log.Warning($"Could not reposition ribbon tab: {ex.Message}");
                 }
+
+                // Set KeyTips on ribbon buttons via WPF layer — must run AFTER tab reposition,
+                // because Remove+Insert above resets the WPF button objects.
+                try { ApplyButtonKeyTips(); }
+                catch (Exception ex) { Log.Warning($"Could not set button KeyTips: {ex.Message}"); }
 
                 // Server starts manually via Start Server button — not auto-started
 
