@@ -32,10 +32,14 @@ namespace RevitMCPBridge
 
             var log        = new List<object>();
             var errors     = new List<string>();
-            int sheetsCreated   = 0;
-            int viewsPlaced     = 0;
-            int detailsCreated  = 0;
-            int schedulesPlaced = 0;
+            var needsManualAction = new List<string>();
+            int sheetsCreated      = 0;
+            int sheetsExisted      = 0;
+            int viewsPlaced        = 0;
+            int viewsAlreadyPlaced = 0;
+            int viewsDuplicated    = 0;
+            int detailsCreated     = 0;
+            int schedulesPlaced    = 0;
 
             // ── PRE-BUILD: cache all views and placed viewport IDs once ────────
             var allViews = new FilteredElementCollector(doc)
@@ -95,7 +99,14 @@ namespace RevitMCPBridge
                     }
                     else
                     {
-                        log.Add(new { phase = 1, op = "createSheet", sheetNumber, status = "existed" });
+                        sheetsExisted++;
+                        // Count views already placed on this sheet from a prior run
+                        var alreadyOnSheet = new FilteredElementCollector(doc)
+                            .OfClass(typeof(Viewport))
+                            .Cast<Viewport>()
+                            .Count(vp => vp.SheetId == sheet.Id);
+                        viewsAlreadyPlaced += alreadyOnSheet;
+                        log.Add(new { phase = 1, op = "createSheet", sheetNumber, status = "existed", viewsAlreadyOnSheet = alreadyOnSheet });
                     }
                 }
                 catch (Exception ex)
@@ -144,6 +155,7 @@ namespace RevitMCPBridge
                                     newView.Name = newView.Name + " *";
                                 tx.Commit();
                             }
+                            viewsDuplicated++;
                         }
 
                         // Place
@@ -282,18 +294,34 @@ namespace RevitMCPBridge
 
                 try
                 {
-                    // Create schedule
-                    var createParams = JObject.FromObject(new { scheduleName = schedTitle, category = categoryName });
-                    var result = JObject.Parse(ScheduleMethods.CreateSchedule(uiApp, createParams));
+                    // Check if a schedule with this name already exists — use it rather than erroring
+                    int schedId = -1;
+                    var existingSched = new FilteredElementCollector(doc)
+                        .OfClass(typeof(ViewSchedule))
+                        .Cast<ViewSchedule>()
+                        .FirstOrDefault(s => string.Equals(s.Name, schedTitle, StringComparison.OrdinalIgnoreCase));
 
-                    if (result["success"]?.Value<bool>() != true)
+                    if (existingSched != null)
                     {
-                        errors.Add($"createSchedule {schedTitle}: {result["error"]}");
-                        continue;
+                        schedId = (int)existingSched.Id.Value;
+                        log.Add(new { phase = 3, op = "createSchedule", schedTitle, schedId, status = "existed" });
                     }
+                    else
+                    {
+                        var createParams = JObject.FromObject(new { scheduleName = schedTitle, category = categoryName });
+                        var result = JObject.Parse(ScheduleMethods.CreateSchedule(uiApp, createParams));
 
-                    int schedId = result["scheduleId"].Value<int>();
-                    log.Add(new { phase = 3, op = "createSchedule", schedTitle, schedId, status = "created" });
+                        if (result["success"]?.Value<bool>() != true)
+                        {
+                            var errMsg = result["error"]?.ToString() ?? "unknown";
+                            errors.Add($"createSchedule {schedTitle}: {errMsg}");
+                            needsManualAction.Add($"{schedTitle} — create manually then place on sheet {sheetNum}");
+                            continue;
+                        }
+
+                        schedId = result["scheduleId"].Value<int>();
+                        log.Add(new { phase = 3, op = "createSchedule", schedTitle, schedId, status = "created" });
+                    }
 
                     // Add fields if specified (one call per field)
                     var fields = schedSpec["fields"] as JArray;
@@ -326,7 +354,9 @@ namespace RevitMCPBridge
                         }
                         else
                         {
-                            log.Add(new { phase = 3, op = "placeSchedule", schedTitle, sheetNum, status = "error", error = placeResult["error"]?.ToString() });
+                            var placeErr = placeResult["error"]?.ToString() ?? "unknown";
+                            log.Add(new { phase = 3, op = "placeSchedule", schedTitle, sheetNum, status = "error", error = placeErr });
+                            needsManualAction.Add($"{schedTitle} — place manually on sheet {sheetNum} (placeScheduleOnSheet)");
                         }
                     }
                 }
@@ -338,15 +368,19 @@ namespace RevitMCPBridge
             }
 
             return ResponseBuilder.Success()
-                .With("sheetsCreated",   sheetsCreated)
-                .With("viewsPlaced",     viewsPlaced)
-                .With("detailsCreated",  detailsCreated)
-                .With("schedulesPlaced", schedulesPlaced)
-                .With("errorCount",      errors.Count)
-                .With("errors",          errors)
-                .With("log",             log)
+                .With("sheetsCreated",      sheetsCreated)
+                .With("sheetsExisted",      sheetsExisted)
+                .With("viewsPlaced",        viewsPlaced)
+                .With("viewsAlreadyPlaced", viewsAlreadyPlaced)
+                .With("viewsDuplicated",    viewsDuplicated)
+                .With("detailsCreated",     detailsCreated)
+                .With("schedulesPlaced",    schedulesPlaced)
+                .With("errorCount",         errors.Count)
+                .With("errors",             errors)
+                .With("needsManualAction",  needsManualAction)
+                .With("log",                log)
                 .With("availableHatchTypes", hatchNames)
-                .WithMessage($"executePlan complete — {sheetsCreated} sheets, {viewsPlaced} views, {detailsCreated} details, {schedulesPlaced} schedules. {errors.Count} error(s).")
+                .WithMessage($"executePlan complete — {sheetsCreated} new + {sheetsExisted} existing sheets; {viewsPlaced} views placed ({viewsAlreadyPlaced} already present, {viewsDuplicated} duplicated); {detailsCreated} details; {schedulesPlaced} schedules. {errors.Count} error(s). {needsManualAction.Count} need manual action.")
                 .Build();
         }
 

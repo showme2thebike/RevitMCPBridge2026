@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Windows;
 using System.IO;
 using System.Reflection;
@@ -148,6 +149,10 @@ namespace RevitMCPBridge
                 // Create panels
                 CreateServerPanel(application);
 
+                // Set KeyTips on ribbon buttons via WPF layer (Revit PushButton has no KeyTip property)
+                try { ApplyButtonKeyTips(); }
+                catch (Exception ex) { Log.Warning($"Could not set button KeyTips: {ex.Message}"); }
+
                 // Reposition tab before Add-Ins (after Manage)
                 try
                 {
@@ -158,6 +163,7 @@ namespace RevitMCPBridge
 
                     if (bimTab != null)
                     {
+                        bimTab.KeyTip = "BM";   // Alt → BM → activates BIM Monkey tab
                         ribbon.Tabs.Remove(bimTab);
                         int addInsIdx = -1;
                         for (int i = 0; i < ribbon.Tabs.Count; i++)
@@ -314,6 +320,55 @@ namespace RevitMCPBridge
             faqButton.Image      = CreateButtonIcon("faq", 16);
         }
 
+        /// <summary>
+        /// Sets KeyTip on each BIM Monkey ribbon button via the WPF layer.
+        /// Revit's PushButton wrapper does not expose KeyTip — must access Autodesk.Windows.RibbonButton directly.
+        /// </summary>
+        private static void ApplyButtonKeyTips()
+        {
+            // Map button name suffix → KeyTip letter
+            var keyTips = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "OpenClaude",        "C" },
+                { "BimMonkeyPlatform", "W" },
+                { "StartMCPServer",    "1" },
+                { "StopMCPServer",     "2" },
+                { "MCPServerStatus",   "3" },
+                { "ModelCheck",        "M" },
+                { "Standards",         "A" },
+                { "StartGeneration",   "G" },
+                { "StopGeneration",    "X" },
+                { "PlaceTags",         "T" },
+                { "RedlineLoad",       "L" },
+                { "RedlineCancel",     "N" },
+                { "RedlineClear",      "D" },
+                { "QuickMode",         "Q" },
+                { "FAQ",               "F" },
+                { "MCPSettings",       "E" },
+                { "MCPHelp",           "H" },
+            };
+
+            var ribbon = Autodesk.Windows.ComponentManager.Ribbon;
+            foreach (var tab in ribbon.Tabs)
+            {
+                if (tab.Title != "BIM Monkey") continue;
+                foreach (var panel in tab.Panels)
+                {
+                    foreach (var item in panel.Source.Items)
+                    {
+                        if (item is Autodesk.Windows.RibbonButton btn && btn.Id != null)
+                        {
+                            // Id format: "CustomCtrl_%BIM Monkey%PanelName%ButtonName"
+                            var lastPart = btn.Id.Split('%').LastOrDefault() ?? "";
+                            if (keyTips.TryGetValue(lastPart, out var tip))
+                                btn.KeyTip = tip;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+
         private void CreateToolsPanel(UIControlledApplication application)
         {
             var panel = application.CreateRibbonPanel(_tabName, "MCP Tools");
@@ -465,7 +520,7 @@ namespace RevitMCPBridge
             
             var settingsButton = panel.AddItem(settingsButtonData) as PushButton;
             settingsButton.LargeImage = CreateButtonIcon("settings", 32);
-            settingsButton.Image = CreateButtonIcon("settings", 16);
+            settingsButton.Image      = CreateButtonIcon("settings", 16);
             
             // Help button
             var helpButtonData = new PushButtonData(
@@ -480,7 +535,7 @@ namespace RevitMCPBridge
             
             var helpButton = panel.AddItem(helpButtonData) as PushButton;
             helpButton.LargeImage = CreateButtonIcon("help", 32);
-            helpButton.Image = CreateButtonIcon("help", 16);
+            helpButton.Image      = CreateButtonIcon("help", 16);
         }
         
         private BitmapSource CreateButtonIcon(string iconType, int size)
