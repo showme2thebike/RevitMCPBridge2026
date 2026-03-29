@@ -83,7 +83,11 @@ namespace RevitMCPBridge
 
                     if (sheet == null)
                     {
-                        var createParams = JObject.FromObject(new { sheetNumber, sheetName, switchTo = false });
+                        // Always mark generated sheets with " *" — applied at creation so post-gen tools
+                        // (audit, populate_titleblocks, apply_view_templates) can find them even if the
+                        // plan times out before the batch completes.
+                        var markedName = sheetName.EndsWith(" *") ? sheetName : sheetName + " *";
+                        var createParams = JObject.FromObject(new { sheetNumber, sheetName = markedName, switchTo = false });
                         var result = JObject.Parse(SheetMethods.CreateSheet(uiApp, createParams));
                         if (result["success"]?.Value<bool>() == true)
                         {
@@ -138,6 +142,18 @@ namespace RevitMCPBridge
                             continue;
                         }
 
+                        // Skip if this view (or a copy of it) is already on this sheet — idempotent retry
+                        bool alreadyOnThisSheet = new FilteredElementCollector(doc)
+                            .OfClass(typeof(Viewport))
+                            .Cast<Viewport>()
+                            .Any(vp => vp.SheetId == sheet.Id && vp.ViewId == matched.Id);
+                        if (alreadyOnThisSheet)
+                        {
+                            viewsAlreadyPlaced++;
+                            log.Add(new { phase = 1, op = "placeView", sheetNumber, viewName, status = "already_on_sheet" });
+                            continue;
+                        }
+
                         // Duplicate if already placed (Legend views skip duplication)
                         ElementId viewIdToPlace = matched.Id;
                         if (placedViewIds.Contains(matched.Id) && matched.ViewType != ViewType.Legend)
@@ -158,12 +174,19 @@ namespace RevitMCPBridge
                             viewsDuplicated++;
                         }
 
-                        // Place
+                        // Place — Schedules/Legends must use ScheduleSheetInstance, not Viewport.Create
+                        var viewToPlace = doc.GetElement(viewIdToPlace) as View;
+                        bool isSchedule = viewToPlace is ViewSchedule;
+                        bool isLegend   = viewToPlace?.ViewType == ViewType.Legend;
+
                         using (var tx = new Transaction(doc, "Place View on Sheet"))
                         {
                             tx.Start();
                             tx.GetFailureHandlingOptions().SetFailuresPreprocessor(new WarningSwallower());
-                            Viewport.Create(doc, sheet.Id, viewIdToPlace, pos);
+                            if (isSchedule)
+                                ScheduleSheetInstance.Create(doc, sheet.Id, viewIdToPlace, pos);
+                            else
+                                Viewport.Create(doc, sheet.Id, viewIdToPlace, pos);
                             tx.Commit();
                         }
 
