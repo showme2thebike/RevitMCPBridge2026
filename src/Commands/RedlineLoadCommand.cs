@@ -55,8 +55,8 @@ namespace RevitMCPBridge.Commands
 
                 // Launch Claude to analyze
                 var workingDir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                    "BIM Monkey");
+                    Environment.GetEnvironmentVariable("USERPROFILE") ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    "Documents", "BIM Monkey");
                 Directory.CreateDirectory(workingDir);
 
                 var prompt = BuildAnalysisPrompt(destPath);

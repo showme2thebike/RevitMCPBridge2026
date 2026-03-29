@@ -15,8 +15,8 @@ namespace RevitMCPBridge.Commands
         /// <summary>Base folder: ~/Documents/BIM Monkey/Redline Review</summary>
         public static string RedlineFolder =>
             Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                "BIM Monkey", "Redline Review");
+                Environment.GetEnvironmentVariable("USERPROFILE") ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "Documents", "BIM Monkey", "Redline Review");
 
         /// <summary>Session folder set when the user clicks Load. Each load gets its own timestamped subfolder.</summary>
         public static string CurrentSessionFolder { get; set; }
