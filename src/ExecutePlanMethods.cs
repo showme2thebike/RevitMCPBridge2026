@@ -48,6 +48,14 @@ namespace RevitMCPBridge
                 .Where(v => !v.IsTemplate && v.CanBePrinted)
                 .ToList();
 
+            // Cache existing drafting view names for detail deduplication.
+            // Key: view name (lower) → ViewDrafting. Prevents doubling on retry runs.
+            var existingDraftingViews = new FilteredElementCollector(doc)
+                .OfClass(typeof(ViewDrafting))
+                .Cast<ViewDrafting>()
+                .Where(v => !v.IsTemplate)
+                .ToDictionary(v => v.Name.ToLowerInvariant(), v => v, StringComparer.OrdinalIgnoreCase);
+
             var placedViewIds = new HashSet<ElementId>(
                 new FilteredElementCollector(doc)
                     .OfClass(typeof(Viewport))
@@ -213,30 +221,41 @@ namespace RevitMCPBridge
 
                 try
                 {
-                    // Create drafting view
+                    // Create drafting view — skip if one with the same name already exists (retry dedup)
+                    var targetViewName = description.EndsWith(" *") ? description : description + " *";
                     ViewDrafting draftView = null;
-                    using (var tx = new Transaction(doc, "Create Drafting View"))
-                    {
-                        tx.Start();
-                        tx.GetFailureHandlingOptions().SetFailuresPreprocessor(new WarningSwallower());
-                        var vft = new FilteredElementCollector(doc)
-                            .OfClass(typeof(ViewFamilyType))
-                            .Cast<ViewFamilyType>()
-                            .FirstOrDefault(t => t.ViewFamily == ViewFamily.Drafting);
-                        if (vft == null) { tx.RollBack(); errors.Add($"detail {detailNum}: No drafting view family type found"); continue; }
+                    bool viewAlreadyExisted = false;
 
-                        draftView = ViewDrafting.Create(doc, vft.Id);
-                        var viewName = (description.EndsWith(" *") ? description : description + " *");
-                        try { draftView.Name = viewName; } catch { }
-                        draftView.Scale = scale;
-                        tx.Commit();
+                    if (existingDraftingViews.TryGetValue(targetViewName, out var existing))
+                    {
+                        draftView = existing;
+                        viewAlreadyExisted = true;
+                        log.Add(new { phase = 2, op = "createDraftingView", detailNum, description, viewId = (int)draftView.Id.Value, status = "reused" });
+                    }
+                    else
+                    {
+                        using (var tx = new Transaction(doc, "Create Drafting View"))
+                        {
+                            tx.Start();
+                            tx.GetFailureHandlingOptions().SetFailuresPreprocessor(new WarningSwallower());
+                            var vft = new FilteredElementCollector(doc)
+                                .OfClass(typeof(ViewFamilyType))
+                                .Cast<ViewFamilyType>()
+                                .FirstOrDefault(t => t.ViewFamily == ViewFamily.Drafting);
+                            if (vft == null) { tx.RollBack(); errors.Add($"detail {detailNum}: No drafting view family type found"); continue; }
+
+                            draftView = ViewDrafting.Create(doc, vft.Id);
+                            try { draftView.Name = targetViewName; } catch { }
+                            draftView.Scale = scale;
+                            tx.Commit();
+                        }
+                        existingDraftingViews[targetViewName] = draftView; // register so subsequent details in same pass also dedup
+                        detailsCreated++;
+                        log.Add(new { phase = 2, op = "createDraftingView", detailNum, description, viewId = (int)draftView.Id.Value, status = "created" });
                     }
 
-                    detailsCreated++;
-                    log.Add(new { phase = 2, op = "createDraftingView", detailNum, description, viewId = (int)draftView.Id.Value, status = "created" });
-
-                    // Draw layer stack if layers present
-                    if (layers.Count > 0)
+                    // Draw layer stack if layers present — skip if reusing an existing view (already drawn)
+                    if (layers.Count > 0 && !viewAlreadyExisted)
                     {
                         // Resolve hatch names — substitute closest available name if needed
                         var resolvedLayers = ResolveHatchNames(layers, allHatchTypes, hatchNames);
@@ -271,6 +290,17 @@ namespace RevitMCPBridge
 
                         if (targetSheet != null)
                         {
+                            bool detailAlreadyOnSheet = new FilteredElementCollector(doc)
+                                .OfClass(typeof(Viewport))
+                                .Cast<Viewport>()
+                                .Any(vp => vp.SheetId == targetSheet.Id && vp.ViewId == draftView.Id);
+
+                            if (detailAlreadyOnSheet)
+                            {
+                                log.Add(new { phase = 2, op = "placeDetail", detailNum, sheetRef, status = "already_on_sheet" });
+                            }
+                            else
+                            {
                             var pos = GetDetailPosition(doc, targetSheet, detail["positionOnSheet"]?.Value<int>() ?? 1);
                             using (var tx = new Transaction(doc, "Place Detail on Sheet"))
                             {
@@ -280,6 +310,7 @@ namespace RevitMCPBridge
                                 tx.Commit();
                             }
                             log.Add(new { phase = 2, op = "placeDetail", detailNum, sheetRef, status = "placed" });
+                            }
                         }
                         else
                         {
@@ -292,6 +323,7 @@ namespace RevitMCPBridge
                     errors.Add($"detail {detailNum}: {ex.Message}");
                     log.Add(new { phase = 2, op = "detail", detailNum, status = "error", error = ex.Message });
                 }
+
             }
 
             // ── PHASE 3: Schedules ────────────────────────────────────────────

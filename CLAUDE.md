@@ -2,11 +2,27 @@
 
 ## Build & Deploy
 ```bash
-cd C:\Users\echra\CascadeProjects\RevitMCPBridge2026
+# 1. Build
 dotnet publish -c Release --no-self-contained
-# Then copy bin\Release\publish\*.dll to %APPDATA%\Autodesk\Revit\Addins\2026\
-# Revit must be fully closed before copying
+
+# 2. Build installer (Inno Setup)
+powershell.exe -Command "& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' 'C:\Users\echra\.bimmonkey\bimmonkey-ai-git\scripts\BimMonkeySetup.iss'"
+# Output: C:\Users\echra\.bimmonkey\bimmonkey-ai-git\dist\BimMonkeySetup.exe
+
+# 3. Zip
+powershell.exe -Command "Compress-Archive -Path 'dist/BimMonkeySetup.exe' -DestinationPath 'dist/BimMonkeySetup.zip' -Force"
+
+# 4. Commit dist/ to git
+git add dist/BimMonkeySetup.exe dist/BimMonkeySetup.zip && git commit -m "..." && git push
+
+# 5. *** CREATE GITHUB RELEASE — THIS IS WHAT app.bimmonkey.ai/install DOWNLOADS ***
+# The install page points to: github.com/showme2thebike/bimmonkeyai/releases/latest/download/BimMonkeySetup.zip
+# Committing dist/ to the repo does NOT update the download. You MUST create a release.
+gh release create "v0.1.$(date +%Y%m%d%H%M)" --title "..." --notes "..." dist/BimMonkeySetup.zip
 ```
+
+> **WARNING:** Steps 1–4 alone are NOT enough. Without step 5, app.bimmonkey.ai/install
+> still serves the old installer. Always create the GitHub release after every rebuild.
 
 ## BIM Monkey API
 ```

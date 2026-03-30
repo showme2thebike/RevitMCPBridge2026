@@ -415,7 +415,8 @@ namespace RevitMCPBridge
                 }
 
                 var taggedCount = 0;
-                var skippedCount = 0;
+                var skippedAlreadyTagged = 0;
+                var failedCount = 0;
                 var taggedIds = new List<long>();
 
                 using (var trans = new Transaction(doc, "Batch Tag Doors"))
@@ -429,7 +430,7 @@ namespace RevitMCPBridge
                     {
                         if (skipAlreadyTagged && alreadyTaggedIds.Contains(door.Id.Value))
                         {
-                            skippedCount++;
+                            skippedAlreadyTagged++;
                             continue;
                         }
                         try
@@ -442,6 +443,7 @@ namespace RevitMCPBridge
                         }
                         catch (Exception ex)
                         {
+                            failedCount++;
                             Log.Warning($"Failed to tag door {door.Id.Value}: {ex.Message}");
                         }
                     }
@@ -455,7 +457,8 @@ namespace RevitMCPBridge
                     totalElements = doors.Count,
                     totalDoors = doors.Count,
                     taggedCount,
-                    skippedCount,
+                    skippedCount = skippedAlreadyTagged + failedCount,
+                    skippedReasons = new { alreadyTagged = skippedAlreadyTagged, failed = failedCount },
                     tagIds = taggedIds,
                     viewId = viewId.Value
                 });
@@ -478,7 +481,10 @@ namespace RevitMCPBridge
                 var doc = uiApp.ActiveUIDocument.Document;
                 var viewId = new ElementId(int.Parse(parameters["viewId"].ToString()));
                 bool skipAlreadyTagged = parameters["skipAlreadyTagged"]?.ToObject<bool>() ?? true;
-                var tagPosition = parameters["tagPosition"]?.ToString() ?? "lower-left";
+                // Accept both "tagPosition" and "tagLocation" (tagLocation was the documented name in early versions)
+                var tagPosition = parameters["tagPosition"]?.ToString()
+                               ?? parameters["tagLocation"]?.ToString()
+                               ?? "lower-left";
 
                 var view = doc.GetElement(viewId) as View;
                 if (view == null)
@@ -507,7 +513,8 @@ namespace RevitMCPBridge
                 }
 
                 var taggedCount = 0;
-                var skippedCount = 0;
+                var skippedAlreadyTagged = 0;
+                var failedCount = 0;
                 var taggedIds = new List<long>();
 
                 using (var trans = new Transaction(doc, "Batch Tag Rooms"))
@@ -521,15 +528,17 @@ namespace RevitMCPBridge
                     {
                         if (skipAlreadyTagged && alreadyTaggedIds.Contains(room.Id.Value))
                         {
-                            skippedCount++;
+                            skippedAlreadyTagged++;
                             continue;
                         }
                         try
                         {
                             var bb = room.get_BoundingBox(view);
                             UV uv;
-                            if (tagPosition == "lower-left" && bb != null)
+                            if ((tagPosition == "lower-left" || tagPosition == "lower_left") && bb != null)
                                 uv = new UV(bb.Min.X + (bb.Max.X - bb.Min.X) * 0.2, bb.Min.Y + (bb.Max.Y - bb.Min.Y) * 0.2);
+                            else if ((tagPosition == "lower-right" || tagPosition == "lower_right") && bb != null)
+                                uv = new UV(bb.Min.X + (bb.Max.X - bb.Min.X) * 0.8, bb.Min.Y + (bb.Max.Y - bb.Min.Y) * 0.2);
                             else
                             {
                                 var loc = (room.Location as LocationPoint).Point;
@@ -542,6 +551,7 @@ namespace RevitMCPBridge
                         }
                         catch (Exception ex)
                         {
+                            failedCount++;
                             Log.Warning($"Failed to tag room {room.Id.Value}: {ex.Message}");
                         }
                     }
@@ -554,8 +564,10 @@ namespace RevitMCPBridge
                     success = true,
                     totalElements = rooms.Count,
                     totalRooms = rooms.Count,
+                    tagPosition,
                     taggedCount,
-                    skippedCount,
+                    skippedCount = skippedAlreadyTagged + failedCount,
+                    skippedReasons = new { alreadyTagged = skippedAlreadyTagged, failed = failedCount },
                     tagIds = taggedIds,
                     viewId = viewId.Value
                 });
@@ -603,7 +615,8 @@ namespace RevitMCPBridge
                 }
 
                 var taggedCount = 0;
-                var skippedCount = 0;
+                var skippedAlreadyTagged = 0;
+                var failedCount = 0;
                 var taggedIds = new List<long>();
 
                 using (var trans = new Transaction(doc, "Batch Tag Windows"))
@@ -617,7 +630,7 @@ namespace RevitMCPBridge
                     {
                         if (skipAlreadyTagged && alreadyTaggedIds.Contains(window.Id.Value))
                         {
-                            skippedCount++;
+                            skippedAlreadyTagged++;
                             continue;
                         }
                         try
@@ -630,6 +643,7 @@ namespace RevitMCPBridge
                         }
                         catch (Exception ex)
                         {
+                            failedCount++;
                             Log.Warning($"Failed to tag window {window.Id.Value}: {ex.Message}");
                         }
                     }
@@ -643,7 +657,8 @@ namespace RevitMCPBridge
                     totalElements = windows.Count,
                     totalWindows = windows.Count,
                     taggedCount,
-                    skippedCount,
+                    skippedCount = skippedAlreadyTagged + failedCount,
+                    skippedReasons = new { alreadyTagged = skippedAlreadyTagged, failed = failedCount },
                     tagIds = taggedIds,
                     viewId = viewId.Value
                 });
@@ -734,12 +749,17 @@ namespace RevitMCPBridge
 
                 var results = new List<object>();
 
+                var tagPosition = parameters["tagPosition"]?.ToString()
+                               ?? parameters["tagLocation"]?.ToString()
+                               ?? "lower-left";
+
                 foreach (var cat in categories)
                 {
                     var catParams = new JObject
                     {
                         ["viewId"] = viewId.Value,
-                        ["skipAlreadyTagged"] = skipAlreadyTagged
+                        ["skipAlreadyTagged"] = skipAlreadyTagged,
+                        ["tagPosition"] = tagPosition,
                     };
 
                     string result;

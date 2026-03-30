@@ -4989,6 +4989,7 @@ namespace RevitMCPBridge
                     var namePattern = parameters?["namePattern"]?.ToString();
                     var limit = parameters?["limit"]?.ToObject<int?>() ?? 0;
                     var offset = parameters?["offset"]?.ToObject<int?>() ?? 0;
+                    var excludeIfContains = parameters?["excludeIfContains"]?.ToObject<List<string>>() ?? new List<string>();
 
                     // Start with all non-template views
                     IEnumerable<View> collector = new FilteredElementCollector(doc)
@@ -5013,6 +5014,29 @@ namespace RevitMCPBridge
                             v.Name.IndexOf(namePattern, StringComparison.OrdinalIgnoreCase) >= 0);
                     }
 
+                    // Apply excludeIfContains filter
+                    if (excludeIfContains.Count > 0)
+                    {
+                        collector = collector.Where(v =>
+                            v.Name == null ||
+                            !excludeIfContains.Any(ex =>
+                                v.Name.IndexOf(ex, StringComparison.OrdinalIgnoreCase) >= 0));
+                    }
+
+                    // Build sheet placement index once — view ID → (sheetNumber, sheetName)
+                    var viewToSheet = new Dictionary<long, (string sheetNumber, string sheetName)>();
+                    foreach (var vp in new FilteredElementCollector(doc)
+                        .OfClass(typeof(Viewport))
+                        .Cast<Viewport>())
+                    {
+                        if (!viewToSheet.ContainsKey(vp.ViewId.Value))
+                        {
+                            var sheet = doc.GetElement(vp.SheetId) as ViewSheet;
+                            if (sheet != null)
+                                viewToSheet[vp.ViewId.Value] = (sheet.SheetNumber, sheet.Name);
+                        }
+                    }
+
                     // Get total count before pagination (for reporting)
                     var allMatching = collector.ToList();
                     int totalMatching = allMatching.Count;
@@ -5035,6 +5059,8 @@ namespace RevitMCPBridge
                         int scale = 0;
                         try { scale = view.Scale; } catch { }
 
+                        viewToSheet.TryGetValue(view.Id.Value, out var sheetInfo);
+
                         views.Add(new
                         {
                             id = view.Id.Value,
@@ -5042,7 +5068,10 @@ namespace RevitMCPBridge
                             viewType = view.ViewType.ToString(),
                             level = (view as ViewPlan)?.GenLevel?.Name,
                             scale = scale,
-                            isActive = view.Id == doc.ActiveView?.Id
+                            isActive = view.Id == doc.ActiveView?.Id,
+                            isOnSheet = sheetInfo.sheetNumber != null,
+                            sheetNumber = sheetInfo.sheetNumber,
+                            sheetName = sheetInfo.sheetName,
                         });
                     }
 
