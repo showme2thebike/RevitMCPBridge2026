@@ -107,7 +107,6 @@ namespace RevitMCPBridge.Commands
             html.AppendLine("<p class='q'>Place Tags (Documentation panel)</p><p class='a'>Tags all floor plans with room, door, and window tags in a single batch operation across all plan views. Run this after Phase 1 completes to populate schedules with accurate data before Phase 3 creates them.</p>");
             html.AppendLine("<p class='q'>Load (Redline Review panel)</p><p class='a'>Opens a file picker to load a redlined PDF. Claude analyzes the markup and extracts a structured list of changes, which become instructions for the next generation run.</p>");
             html.AppendLine("<p class='q'>Cancel / Clear (Redline Review panel)</p><p class='a'>Cancel stops an in-progress redline analysis. Clear removes all loaded redline context so the next generation runs clean.</p>");
-            html.AppendLine("<p class='q'>Quick Mode (Additions panel)</p><p class='a'>Coming soon — will generate a full CD set in under 30 seconds by submitting a single execution plan to Revit rather than step-by-step tool calls.</p>");
             html.AppendLine("<p class='q'>FAQ (Additions panel)</p><p class='a'>Opens this page.</p>");
 
             // ── Training Library ───────────────────────────────────────────────

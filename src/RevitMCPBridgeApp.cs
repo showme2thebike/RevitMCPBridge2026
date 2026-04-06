@@ -303,15 +303,8 @@ namespace RevitMCPBridge
             redlineClearButton.LargeImage = CreateButtonIcon("redline-clear", 32);
             redlineClearButton.Image      = CreateButtonIcon("redline-clear", 16);
 
-            // ── Additions (Quick Mode + FAQ) ───────────────────────────────
+            // ── Additions (FAQ) ────────────────────────────────────────────
             var additionsPanel = application.CreateRibbonPanel(_tabName, "Additions");
-
-            var quickModeButtonData = new PushButtonData("QuickMode", "Quick\nMode", asm,
-                "RevitMCPBridge.Commands.QuickModeCommand")
-                { ToolTip = "Quick Mode — generate a full CD set in under 30 seconds (coming soon)" };
-            var quickModeButton = additionsPanel.AddItem(quickModeButtonData) as PushButton;
-            quickModeButton.LargeImage = CreateButtonIcon("quickmode", 32);
-            quickModeButton.Image      = CreateButtonIcon("quickmode", 16);
 
             var faqButtonData = new PushButtonData("FAQ", "FAQ", asm,
                 "RevitMCPBridge.Commands.BimMonkeyFaqCommand")
@@ -343,7 +336,6 @@ namespace RevitMCPBridge
                 { "RedlineLoad",       "L" },
                 { "RedlineCancel",     "N" },
                 { "RedlineClear",      "D" },
-                { "QuickMode",         "Q" },
                 { "FAQ",               "F" },
                 { "MCPSettings",       "E" },
                 { "MCPHelp",           "H" },
