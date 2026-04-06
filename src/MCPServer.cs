@@ -375,7 +375,7 @@ namespace RevitMCPBridge
         /// <summary>
         /// Execute an action in Revit's main thread context using ExternalEvent
         /// </summary>
-        private async Task<string> ExecuteInRevitContext(Func<UIApplication, string> action)
+        private async Task<string> ExecuteInRevitContext(Func<UIApplication, string> action, int timeoutMs = 300_000)
         {
             // Per-request cancellation: if we time out, we cancel the queued action
             // so it gets skipped when MCPRequestHandler processes the queue
@@ -427,7 +427,7 @@ namespace RevitMCPBridge
                     }
 
                     // Wait for the result with timeout (5 minutes for batch operations)
-                    var completedTask = await Task.WhenAny(resultTask, Task.Delay(300000));
+                    var completedTask = await Task.WhenAny(resultTask, Task.Delay(timeoutMs));
 
                     if (completedTask == resultTask)
                     {
@@ -438,11 +438,11 @@ namespace RevitMCPBridge
                         // IMPORTANT: Cancel the queued request so it gets skipped
                         // when MCPRequestHandler eventually processes it
                         cts.Cancel();
-                        Log.Error("Request timed out after 5 minutes. Queued action has been cancelled.");
+                        Log.Error("Request timed out after {TimeoutMs}ms. Queued action has been cancelled.", timeoutMs);
                         return Helpers.ResponseBuilder.Error(
-                            "Request timed out after 5 minutes. Revit may be busy processing a long operation. The queued action has been cancelled.",
+                            $"Request timed out after {timeoutMs / 1000}s. Revit may be busy processing a long operation. The queued action has been cancelled.",
                             "TIMEOUT")
-                            .With("timeoutMs", 300000)
+                            .With("timeoutMs", timeoutMs)
                             .With("queueDepth", handler.QueueDepth)
                             .With("hint", "Check if Revit has a modal dialog open. Long operations (batch, export) may need more time.")
                             .Build();
@@ -3761,8 +3761,13 @@ namespace RevitMCPBridge
                         if (_methodRegistry.TryGetValue(method, out var registeredMethod))
                         {
                             Log.Information($"[MCPServer] Executing registered method via dispatch wrapper: {method}");
+                            // Heavy batch operations need more than the default 5 minutes
+                            var methodTimeoutMs = method == "executePlan" || method == "runFinishingPhase"
+                                ? 1_800_000   // 30 minutes
+                                : 300_000;    // 5 minutes (default)
                             return await ExecuteInRevitContext(uiApp =>
-                                Helpers.MethodDispatchWrapper.Execute(method, registeredMethod, uiApp, parameters));
+                                Helpers.MethodDispatchWrapper.Execute(method, registeredMethod, uiApp, parameters),
+                                methodTimeoutMs);
                         }
 
                         // Find closest matches by substring containment to help Claude recover without a full getMethods round-trip
@@ -4990,6 +4995,7 @@ namespace RevitMCPBridge
                     var limit = parameters?["limit"]?.ToObject<int?>() ?? 0;
                     var offset = parameters?["offset"]?.ToObject<int?>() ?? 0;
                     var excludeIfContains = parameters?["excludeIfContains"]?.ToObject<List<string>>() ?? new List<string>();
+                    var isOnSheetFilter = parameters?["isOnSheet"]?.ToObject<bool?>();
 
                     // Start with all non-template views
                     IEnumerable<View> collector = new FilteredElementCollector(doc)
@@ -5037,8 +5043,14 @@ namespace RevitMCPBridge
                         }
                     }
 
-                    // Get total count before pagination (for reporting)
+                    // Apply isOnSheet filter (after building viewToSheet index)
                     var allMatching = collector.ToList();
+                    if (isOnSheetFilter.HasValue)
+                    {
+                        allMatching = isOnSheetFilter.Value
+                            ? allMatching.Where(v => viewToSheet.ContainsKey(v.Id.Value)).ToList()
+                            : allMatching.Where(v => !viewToSheet.ContainsKey(v.Id.Value)).ToList();
+                    }
                     int totalMatching = allMatching.Count;
 
                     // Apply pagination
@@ -5061,11 +5073,25 @@ namespace RevitMCPBridge
 
                         viewToSheet.TryGetValue(view.Id.Value, out var sheetInfo);
 
+                        string planSubType = null;
+                        if (view is ViewPlan vp)
+                        {
+                            var vft = doc.GetElement(vp.GetTypeId()) as ViewFamilyType;
+                            if (vft != null)
+                            {
+                                planSubType = vft.ViewFamily.ToString();
+                                if (planSubType == "FloorPlan" &&
+                                    view.Name.IndexOf("roof", StringComparison.OrdinalIgnoreCase) >= 0)
+                                    planSubType = "RoofPlan";
+                            }
+                        }
+
                         views.Add(new
                         {
                             id = view.Id.Value,
                             name = view.Name,
                             viewType = view.ViewType.ToString(),
+                            planSubType,
                             level = (view as ViewPlan)?.GenLevel?.Name,
                             scale = scale,
                             isActive = view.Id == doc.ActiveView?.Id,
