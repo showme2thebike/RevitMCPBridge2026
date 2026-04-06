@@ -52,14 +52,39 @@ namespace RevitMCPBridge.Commands
                     "BIM Monkey");
                 Directory.CreateDirectory(workingDir);
 
-                var process = Process.Start(new ProcessStartInfo
+                // Prefer the Python daemon if it's present in the wrapper folder.
+                // Fall back to Claude Code if not found (first-run, old install, etc.).
+                var daemonPath = Path.Combine(workingDir, "wrapper", "bimmonkey_run.py");
+                ProcessStartInfo psi;
+
+                if (File.Exists(daemonPath))
                 {
-                    FileName = "cmd.exe",
-                    Arguments = $"/C cd /D \"{workingDir}\" && claude \"{GenerationPrompt}\" & pause",
-                    UseShellExecute = true,
-                    WorkingDirectory = workingDir,
-                    WindowStyle = ProcessWindowStyle.Normal,
-                });
+                    // ── Daemon path: Python runs generation autonomously ──────────────────
+                    Log.Information($"Launching daemon: {daemonPath}");
+                    psi = new ProcessStartInfo
+                    {
+                        FileName        = "cmd.exe",
+                        Arguments       = $"/K python \"{daemonPath}\"",
+                        UseShellExecute = true,
+                        WorkingDirectory = workingDir,
+                        WindowStyle     = ProcessWindowStyle.Normal,
+                    };
+                }
+                else
+                {
+                    // ── Claude Code fallback ──────────────────────────────────────────────
+                    Log.Information("Daemon not found — falling back to Claude Code");
+                    psi = new ProcessStartInfo
+                    {
+                        FileName        = "cmd.exe",
+                        Arguments       = $"/C cd /D \"{workingDir}\" && claude \"{GenerationPrompt}\" & pause",
+                        UseShellExecute = true,
+                        WorkingDirectory = workingDir,
+                        WindowStyle     = ProcessWindowStyle.Normal,
+                    };
+                }
+
+                var process = Process.Start(psi);
 
                 GenerationState.ActiveProcess = process;
 

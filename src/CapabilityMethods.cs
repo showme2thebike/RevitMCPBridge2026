@@ -1081,6 +1081,24 @@ namespace RevitMCPBridge
 
         #endregion
 
+        #region Keepalive
+
+        /// <summary>
+        /// Lightweight pipe keepalive. Claude calls this every ~10 sequential MCP operations
+        /// during heavy generation runs to prevent the named pipe from dropping under load.
+        /// Returns immediately — no Revit API calls.
+        /// </summary>
+        [MCPMethod("ping", Category = "Capability", Description = "Keepalive ping — call every 10-15 sequential MCP operations during generation to prevent pipe disconnect under load. Returns immediately.")]
+        public static string Ping(UIApplication uiApp, JObject parameters)
+        {
+            return Helpers.ResponseBuilder.Success()
+                .With("pong", true)
+                .With("timestamp", DateTime.UtcNow.ToString("o"))
+                .Build();
+        }
+
+        #endregion
+
         #region Helper Methods
 
         private static JObject GetCurrentContext(UIApplication uiApp)

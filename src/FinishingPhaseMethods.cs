@@ -67,8 +67,15 @@ namespace RevitMCPBridge
                     checkedBy = drawnBy;
 
                 var emptyFields = new List<string>();
+                var warnings    = new List<string>();
                 if (string.IsNullOrEmpty(projectNumber)) emptyFields.Add("projectNumber");
-                if (string.IsNullOrEmpty(drawnBy))       emptyFields.Add("drawnBy");
+                if (string.IsNullOrEmpty(drawnBy))
+                {
+                    emptyFields.Add("drawnBy");
+                    warnings.Add("drawnBy resolved to empty — Author not set in Project Information. DrawnBy titleblock fields will NOT be updated. Pass drawnBy: 'initials' explicitly to set them.");
+                }
+                if (string.IsNullOrEmpty(checkedBy))
+                    warnings.Add("checkedBy resolved to empty — CheckedBy titleblock fields will NOT be updated. Pass checkedBy: 'initials' explicitly to set them.");
 
                 // ── Collect target sheets (BM-generated = name ends with " *") ──
                 var allSheets = new FilteredElementCollector(doc)
@@ -88,7 +95,7 @@ namespace RevitMCPBridge
                 }
 
                 // ── Collect view templates (by name, keyed by ViewType) ───────
-                var templatesByType = BuildTemplateMap(doc);
+                var (templatesByType, interiorElevTemplateId) = BuildTemplateMap(doc);
 
                 // ── Phase A: Titleblocks ─────────────────────────────────────
                 int tbUpdated = 0, tbSkipped = 0;
@@ -148,8 +155,23 @@ namespace RevitMCPBridge
                             if (!templatesByType.TryGetValue(view.ViewType, out var tmplId))
                             {
                                 vtSkipped++;
-                                vtReasons.Add($"No template for {view.ViewType}");
+                                // Only report absence as a reason if it's a type where a template would be expected.
+                                // Legend / DraftingView / Detail / Section commonly have no templates — suppress that noise.
+                                var expectTemplate = view.ViewType == ViewType.FloorPlan
+                                    || view.ViewType == ViewType.CeilingPlan
+                                    || view.ViewType == ViewType.Elevation;
+                                if (expectTemplate)
+                                    vtReasons.Add($"No template found for {view.ViewType} — add a view template named '{view.ViewType}' to the model");
                                 continue;
+                            }
+
+                            // For elevation views, check if the view name indicates interior elevation
+                            // and switch to the interior elevation template when available
+                            if (view.ViewType == ViewType.Elevation &&
+                                interiorElevTemplateId != ElementId.InvalidElementId &&
+                                view.Name.IndexOf("interior", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                tmplId = interiorElevTemplateId;
                             }
 
                             // Skip if view already has this template applied
@@ -274,13 +296,16 @@ namespace RevitMCPBridge
                             int scale = view.Scale;
                             if (scale > 0 && !okScales.Contains(scale))
                             {
+                                bool isNewView = view.Name.EndsWith(" *");
                                 auditIssues.Add(new
                                 {
-                                    sheet    = sheetNum,
-                                    view     = view.Name,
-                                    type     = "wrong_scale",
-                                    scale    = $"1:{scale}",
-                                    expected = "1:" + string.Join(" or 1:", okScales),
+                                    sheet     = sheetNum,
+                                    view      = view.Name,
+                                    type      = "wrong_scale",
+                                    scale     = $"1:{scale}",
+                                    expected  = "1:" + string.Join(" or 1:", okScales),
+                                    isNewView = isNewView,
+                                    note      = isNewView ? null : "Pre-existing view — scale was not set by BIM Monkey",
                                 });
                             }
                         }
@@ -308,6 +333,7 @@ namespace RevitMCPBridge
 
                 return ResponseBuilder.Success()
                     .With("sheetsProcessed", targets.Count)
+                    .With("warnings", warnings)
                     .With("titleblocks", new
                     {
                         updated      = tbUpdated,
@@ -366,9 +392,12 @@ namespace RevitMCPBridge
         /// <summary>
         /// Build a ViewType → template ElementId map using keyword matching.
         /// FloorPlan/CeilingPlan → template with "floor plan" or "rcp"/"ceiling"
-        /// Elevation → "elevation", Section → "section", Detail/DraftingView → "detail"/"drafting"
+        /// Elevation → "elevation" (never "schematic", never "interior")
+        /// Section → "section" (never "schematic")
+        /// Detail/DraftingView → "detail"/"drafting"
+        /// Also returns a separate interior elevation template ID for views whose name contains "interior".
         /// </summary>
-        private static Dictionary<ViewType, ElementId> BuildTemplateMap(Document doc)
+        private static (Dictionary<ViewType, ElementId> map, ElementId interiorElevTemplateId) BuildTemplateMap(Document doc)
         {
             var templates = new FilteredElementCollector(doc)
                 .OfClass(typeof(View))
@@ -376,23 +405,30 @@ namespace RevitMCPBridge
                 .Where(v => v.IsTemplate)
                 .ToList();
 
-            ElementId Find(params string[] keywords)
+            // Find template matching any keyword, excluding all excludeKeywords from the name
+            ElementId Find(string[] excludeKeywords, params string[] keywords)
             {
                 foreach (var kw in keywords)
                 {
-                    var t = templates.FirstOrDefault(
-                        v => v.Name.IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0);
+                    var t = templates.FirstOrDefault(v =>
+                        v.Name.IndexOf(kw, StringComparison.OrdinalIgnoreCase) >= 0 &&
+                        !excludeKeywords.Any(ex => v.Name.IndexOf(ex, StringComparison.OrdinalIgnoreCase) >= 0));
                     if (t != null) return t.Id;
                 }
                 return ElementId.InvalidElementId;
             }
 
+            var none       = new string[0];
+            var noSchematic = new[] { "schematic" };
+            var noSchematicNoInterior = new[] { "schematic", "interior" };
+
             var map = new Dictionary<ViewType, ElementId>();
-            var fpId  = Find("floor plan");
-            var rcpId = Find("rcp", "ceiling plan", "ceiling");
-            var elId  = Find("elevation");
-            var secId = Find("section");
-            var detId = Find("detail", "drafting");
+            var fpId     = Find(none, "floor plan");
+            var rcpId    = Find(none, "rcp", "ceiling plan", "ceiling");
+            var elId     = Find(noSchematicNoInterior, "elevation");  // exterior only — exclude schematic and interior
+            var intElId  = Find(noSchematic, "interior elevation");   // interior elevation — exclude schematic
+            var secId    = Find(noSchematic, "section");
+            var detId    = Find(none, "detail", "drafting");
 
             if (fpId  != ElementId.InvalidElementId) map[ViewType.FloorPlan]    = fpId;
             if (rcpId != ElementId.InvalidElementId) map[ViewType.CeilingPlan]  = rcpId;
@@ -404,7 +440,7 @@ namespace RevitMCPBridge
                 map[ViewType.Detail]      = detId;
                 map[ViewType.DraftingView] = detId;
             }
-            return map;
+            return (map, intElId);
         }
 
         /// <summary>

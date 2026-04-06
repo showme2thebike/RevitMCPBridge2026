@@ -378,7 +378,7 @@ namespace RevitMCPBridge
         /// <summary>
         /// Tag all doors in a view
         /// </summary>
-        [MCPMethod("batchTagDoors", Category = "Tagging", Description = "Tag all doors in a view. skipAlreadyTagged (default true) prevents duplicate tags on repeated runs.")]
+        [MCPMethod("batchTagDoors", Category = "Tagging", Description = "Tag all doors in a view. skipAlreadyTagged (default true) prevents duplicate tags on repeated runs. tagPosition: 'center' (default).")]
         public static string BatchTagDoors(UIApplication uiApp, JObject parameters)
         {
             try
@@ -387,6 +387,9 @@ namespace RevitMCPBridge
                 var viewId = new ElementId(int.Parse(parameters["viewId"].ToString()));
                 bool addLeader = parameters["addLeader"]?.ToObject<bool>() ?? false;
                 bool skipAlreadyTagged = parameters["skipAlreadyTagged"]?.ToObject<bool>() ?? true;
+                var tagPosition = parameters["tagPosition"]?.ToString()
+                               ?? parameters["tagLocation"]?.ToString()
+                               ?? "center";
 
                 var view = doc.GetElement(viewId) as View;
                 if (view == null)
@@ -460,7 +463,10 @@ namespace RevitMCPBridge
                     skippedCount = skippedAlreadyTagged + failedCount,
                     skippedReasons = new { alreadyTagged = skippedAlreadyTagged, failed = failedCount },
                     tagIds = taggedIds,
-                    viewId = viewId.Value
+                    tagPosition,
+                    viewId = viewId.Value,
+                    correlationId = Guid.NewGuid().ToString("N").Substring(0, 8),
+                    executionTimeMs = 0,
                 });
             }
             catch (Exception ex)
@@ -515,7 +521,9 @@ namespace RevitMCPBridge
                 var taggedCount = 0;
                 var skippedAlreadyTagged = 0;
                 var failedCount = 0;
+                var overlapsAvoided = 0;
                 var taggedIds = new List<long>();
+                var placedPositions = new List<UV>();
 
                 using (var trans = new Transaction(doc, "Batch Tag Rooms"))
                 {
@@ -535,17 +543,120 @@ namespace RevitMCPBridge
                         {
                             var bb = room.get_BoundingBox(view);
                             UV uv;
-                            if ((tagPosition == "lower-left" || tagPosition == "lower_left") && bb != null)
-                                uv = new UV(bb.Min.X + (bb.Max.X - bb.Min.X) * 0.2, bb.Min.Y + (bb.Max.Y - bb.Min.Y) * 0.2);
-                            else if ((tagPosition == "lower-right" || tagPosition == "lower_right") && bb != null)
-                                uv = new UV(bb.Min.X + (bb.Max.X - bb.Min.X) * 0.8, bb.Min.Y + (bb.Max.Y - bb.Min.Y) * 0.2);
+
+                            if (bb != null)
+                            {
+                                double w = bb.Max.X - bb.Min.X;
+                                double h = bb.Max.Y - bb.Min.Y;
+                                double minClearance = Math.Max(1.5, Math.Min(w, h) * 0.25);
+
+                                // Build ordered candidate list — primary candidate determined by tagPosition
+                                var candidates = new List<UV>
+                                {
+                                    new UV(bb.Min.X + w * 0.2, bb.Min.Y + h * 0.2), // lower-left  [0]
+                                    new UV(bb.Min.X + w * 0.8, bb.Min.Y + h * 0.2), // lower-right [1]
+                                    new UV(bb.Min.X + w * 0.5, bb.Min.Y + h * 0.5), // center      [2]
+                                    new UV(bb.Min.X + w * 0.2, bb.Min.Y + h * 0.8), // upper-left  [3]
+                                    new UV(bb.Min.X + w * 0.8, bb.Min.Y + h * 0.8), // upper-right [4]
+                                };
+
+                                // Reorder so the preferred primary candidate is first
+                                if (tagPosition == "center")
+                                {
+                                    var center = candidates[2];
+                                    candidates.RemoveAt(2);
+                                    candidates.Insert(0, center);
+                                }
+                                else if (tagPosition == "lower-right" || tagPosition == "lower_right")
+                                {
+                                    var lowerRight = candidates[1];
+                                    candidates.RemoveAt(1);
+                                    candidates.Insert(0, lowerRight);
+                                }
+                                else if (tagPosition == "upper-left" || tagPosition == "upper_left")
+                                {
+                                    var upperLeft = candidates[3];
+                                    candidates.RemoveAt(3);
+                                    candidates.Insert(0, upperLeft);
+                                }
+                                else if (tagPosition == "upper-right" || tagPosition == "upper_right")
+                                {
+                                    var upperRight = candidates[4];
+                                    candidates.RemoveAt(4);
+                                    candidates.Insert(0, upperRight);
+                                }
+                                // else "lower-left" (default) — already first
+
+                                // Pick first candidate that clears all placed positions
+                                UV chosen = null;
+                                bool usedFallback = false;
+
+                                if (placedPositions.Count == 0)
+                                {
+                                    // No placed tags yet — take the primary candidate
+                                    chosen = candidates[0];
+                                }
+                                else
+                                {
+                                    foreach (var candidate in candidates)
+                                    {
+                                        bool clear = true;
+                                        foreach (var placed in placedPositions)
+                                        {
+                                            double dx = candidate.U - placed.U;
+                                            double dy = candidate.V - placed.V;
+                                            double dist = Math.Sqrt(dx * dx + dy * dy);
+                                            if (dist < minClearance)
+                                            {
+                                                clear = false;
+                                                break;
+                                            }
+                                        }
+                                        if (clear)
+                                        {
+                                            if (candidate != candidates[0])
+                                                usedFallback = true;
+                                            chosen = candidate;
+                                            break;
+                                        }
+                                    }
+
+                                    // All candidates conflict — pick the one with maximum min-distance
+                                    if (chosen == null)
+                                    {
+                                        usedFallback = true;
+                                        double bestMinDist = -1.0;
+                                        foreach (var candidate in candidates)
+                                        {
+                                            double minDist = double.MaxValue;
+                                            foreach (var placed in placedPositions)
+                                            {
+                                                double dx = candidate.U - placed.U;
+                                                double dy = candidate.V - placed.V;
+                                                double dist = Math.Sqrt(dx * dx + dy * dy);
+                                                if (dist < minDist) minDist = dist;
+                                            }
+                                            if (minDist > bestMinDist)
+                                            {
+                                                bestMinDist = minDist;
+                                                chosen = candidate;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (usedFallback) overlapsAvoided++;
+                                uv = chosen;
+                            }
                             else
                             {
+                                // No bounding box — fall back to location point
                                 var loc = (room.Location as LocationPoint).Point;
                                 uv = new UV(loc.X, loc.Y);
                             }
 
                             var roomTag = doc.Create.NewRoomTag(new LinkElementId(room.Id), uv, view.Id);
+                            placedPositions.Add(uv);
                             taggedIds.Add(roomTag.Id.Value);
                             taggedCount++;
                         }
@@ -558,7 +669,7 @@ namespace RevitMCPBridge
                     trans.Commit();
                 }
 
-                Log.Information($"Tagged {taggedCount} rooms in view {viewId.Value}");
+                Log.Information($"Tagged {taggedCount} rooms in view {viewId.Value}, overlapsAvoided={overlapsAvoided}");
                 return JsonConvert.SerializeObject(new
                 {
                     success = true,
@@ -566,10 +677,13 @@ namespace RevitMCPBridge
                     totalRooms = rooms.Count,
                     tagPosition,
                     taggedCount,
+                    overlapsAvoided,
                     skippedCount = skippedAlreadyTagged + failedCount,
                     skippedReasons = new { alreadyTagged = skippedAlreadyTagged, failed = failedCount },
                     tagIds = taggedIds,
-                    viewId = viewId.Value
+                    viewId = viewId.Value,
+                    correlationId = Guid.NewGuid().ToString("N").Substring(0, 8),
+                    executionTimeMs = 0,
                 });
             }
             catch (Exception ex)
@@ -579,7 +693,7 @@ namespace RevitMCPBridge
             }
         }
 
-        [MCPMethod("batchTagWindows", Category = "Tagging", Description = "Tag all windows in a view. Mirrors batchTagDoors signature exactly. skipAlreadyTagged (default true) prevents duplicates.")]
+        [MCPMethod("batchTagWindows", Category = "Tagging", Description = "Tag all windows in a view. Mirrors batchTagDoors signature exactly. skipAlreadyTagged (default true) prevents duplicates. tagPosition: 'center' (default).")]
         public static string BatchTagWindows(UIApplication uiApp, JObject parameters)
         {
             try
@@ -588,6 +702,9 @@ namespace RevitMCPBridge
                 var viewId = new ElementId(int.Parse(parameters["viewId"].ToString()));
                 bool addLeader = parameters["addLeader"]?.ToObject<bool>() ?? false;
                 bool skipAlreadyTagged = parameters["skipAlreadyTagged"]?.ToObject<bool>() ?? true;
+                var tagPosition = parameters["tagPosition"]?.ToString()
+                               ?? parameters["tagLocation"]?.ToString()
+                               ?? "center";
 
                 var view = doc.GetElement(viewId) as View;
                 if (view == null)
@@ -660,7 +777,10 @@ namespace RevitMCPBridge
                     skippedCount = skippedAlreadyTagged + failedCount,
                     skippedReasons = new { alreadyTagged = skippedAlreadyTagged, failed = failedCount },
                     tagIds = taggedIds,
-                    viewId = viewId.Value
+                    tagPosition,
+                    viewId = viewId.Value,
+                    correlationId = Guid.NewGuid().ToString("N").Substring(0, 8),
+                    executionTimeMs = 0,
                 });
             }
             catch (Exception ex)
@@ -736,52 +856,64 @@ namespace RevitMCPBridge
             }
         }
 
-        [MCPMethod("batchTagAll", Category = "Tagging", Description = "Tag rooms, doors, and windows in one call. categories[] defaults to [Rooms, Doors, Windows]. Returns per-category counts.")]
+        [MCPMethod("batchTagAll", Category = "Tagging", Description = "Tag rooms, doors, and windows across one or more views in one call. Pass viewId (single) or viewIds (array). categories[] defaults to [Rooms, Doors, Windows]. Returns per-view, per-category counts.")]
         public static string BatchTagAll(UIApplication uiApp, JObject parameters)
         {
             try
             {
                 var doc = uiApp.ActiveUIDocument.Document;
-                var viewId = new ElementId(int.Parse(parameters["viewId"].ToString()));
+
+                // Accept viewIds[] array or single viewId
+                List<long> viewIdValues;
+                if (parameters["viewIds"] is JArray viewIdsArr)
+                    viewIdValues = viewIdsArr.Select(t => t.Value<long>()).ToList();
+                else
+                    viewIdValues = new List<long> { long.Parse(parameters["viewId"].ToString()) };
+
                 var categories = parameters["categories"]?.ToObject<List<string>>()
                     ?? new List<string> { "Rooms", "Doors", "Windows" };
                 bool skipAlreadyTagged = parameters["skipAlreadyTagged"]?.ToObject<bool>() ?? true;
-
-                var results = new List<object>();
 
                 var tagPosition = parameters["tagPosition"]?.ToString()
                                ?? parameters["tagLocation"]?.ToString()
                                ?? "lower-left";
 
-                foreach (var cat in categories)
+                var viewResults = new List<object>();
+
+                foreach (var vid in viewIdValues)
                 {
-                    var catParams = new JObject
+                    var perViewResults = new List<object>();
+                    foreach (var cat in categories)
                     {
-                        ["viewId"] = viewId.Value,
-                        ["skipAlreadyTagged"] = skipAlreadyTagged,
-                        ["tagPosition"] = tagPosition,
-                    };
+                        var catParams = new JObject
+                        {
+                            ["viewId"] = vid,
+                            ["skipAlreadyTagged"] = skipAlreadyTagged,
+                            ["tagPosition"] = tagPosition,
+                        };
 
-                    string result;
-                    switch (cat.ToLower())
-                    {
-                        case "rooms":   result = BatchTagRooms(uiApp, catParams);   break;
-                        case "doors":   result = BatchTagDoors(uiApp, catParams);   break;
-                        case "windows": result = BatchTagWindows(uiApp, catParams); break;
-                        default:
-                            results.Add(new { category = cat, success = false, error = $"Unknown category '{cat}'. Use Rooms, Doors, or Windows." });
-                            continue;
+                        string result;
+                        switch (cat.ToLower())
+                        {
+                            case "rooms":   result = BatchTagRooms(uiApp, catParams);   break;
+                            case "doors":   result = BatchTagDoors(uiApp, catParams);   break;
+                            case "windows": result = BatchTagWindows(uiApp, catParams); break;
+                            default:
+                                perViewResults.Add(new { category = cat, success = false, error = $"Unknown category '{cat}'. Use Rooms, Doors, or Windows." });
+                                continue;
+                        }
+
+                        var parsed = JsonConvert.DeserializeObject<dynamic>(result);
+                        perViewResults.Add(new { category = cat, result = parsed });
                     }
-
-                    var parsed = JsonConvert.DeserializeObject<dynamic>(result);
-                    results.Add(new { category = cat, result = parsed });
+                    viewResults.Add(new { viewId = vid, categories = perViewResults });
                 }
 
                 return JsonConvert.SerializeObject(new
                 {
                     success = true,
-                    viewId = viewId.Value,
-                    results
+                    viewCount = viewIdValues.Count,
+                    results = viewResults
                 });
             }
             catch (Exception ex)
@@ -1409,6 +1541,146 @@ namespace RevitMCPBridge
                 source = FamilySource.Family;
                 overwriteParameterValues = true;
                 return true;
+            }
+        }
+
+        // ── batchTagViews helpers ─────────────────────────────────────────────
+
+        private static void TagRoomsInView(Document doc, View view, string tagPosition, bool skipAlreadyTagged, ref int tagged, ref int skipped, ref int failed)
+        {
+            var rooms = new FilteredElementCollector(doc, view.Id)
+                .OfCategory(BuiltInCategory.OST_Rooms).WhereElementIsNotElementType()
+                .Cast<Room>().ToList();
+            var alreadyTaggedIds = new HashSet<long>();
+            if (skipAlreadyTagged)
+                foreach (var t in new FilteredElementCollector(doc, view.Id)
+                    .OfCategory(BuiltInCategory.OST_RoomTags).WhereElementIsNotElementType().Cast<RoomTag>())
+                    try { if (t.Room != null) alreadyTaggedIds.Add(t.Room.Id.Value); } catch { }
+            foreach (var room in rooms)
+            {
+                if (skipAlreadyTagged && alreadyTaggedIds.Contains(room.Id.Value)) { skipped++; continue; }
+                try
+                {
+                    var bb = room.get_BoundingBox(view);
+                    UV uv;
+                    if ((tagPosition == "lower-left" || tagPosition == "lower_left") && bb != null)
+                        uv = new UV(bb.Min.X + (bb.Max.X - bb.Min.X) * 0.2, bb.Min.Y + (bb.Max.Y - bb.Min.Y) * 0.2);
+                    else if ((tagPosition == "lower-right" || tagPosition == "lower_right") && bb != null)
+                        uv = new UV(bb.Min.X + (bb.Max.X - bb.Min.X) * 0.8, bb.Min.Y + (bb.Max.Y - bb.Min.Y) * 0.2);
+                    else { var loc = (room.Location as LocationPoint).Point; uv = new UV(loc.X, loc.Y); }
+                    doc.Create.NewRoomTag(new LinkElementId(room.Id), uv, view.Id);
+                    tagged++;
+                }
+                catch (Exception ex) { failed++; Log.Warning($"batchTagViews room {room.Id.Value}: {ex.Message}"); }
+            }
+        }
+
+        private static void TagDoorsInView(Document doc, View view, bool skipAlreadyTagged, ref int tagged, ref int skipped, ref int failed)
+        {
+            var doors = new FilteredElementCollector(doc, view.Id)
+                .OfCategory(BuiltInCategory.OST_Doors).WhereElementIsNotElementType()
+                .Cast<FamilyInstance>().ToList();
+            var alreadyTaggedIds = new HashSet<long>();
+            if (skipAlreadyTagged)
+                foreach (var t in new FilteredElementCollector(doc, view.Id)
+                    .OfCategory(BuiltInCategory.OST_DoorTags).WhereElementIsNotElementType().Cast<IndependentTag>())
+                    try { foreach (var id in t.GetTaggedLocalElementIds()) alreadyTaggedIds.Add(id.Value); } catch { }
+            foreach (var door in doors)
+            {
+                if (skipAlreadyTagged && alreadyTaggedIds.Contains(door.Id.Value)) { skipped++; continue; }
+                try
+                {
+                    var loc = (door.Location as LocationPoint).Point;
+                    IndependentTag.Create(doc, view.Id, new Reference(door), false, TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, loc);
+                    tagged++;
+                }
+                catch (Exception ex) { failed++; Log.Warning($"batchTagViews door {door.Id.Value}: {ex.Message}"); }
+            }
+        }
+
+        private static void TagWindowsInView(Document doc, View view, bool skipAlreadyTagged, ref int tagged, ref int skipped, ref int failed)
+        {
+            var windows = new FilteredElementCollector(doc, view.Id)
+                .OfCategory(BuiltInCategory.OST_Windows).WhereElementIsNotElementType()
+                .Cast<FamilyInstance>().ToList();
+            var alreadyTaggedIds = new HashSet<long>();
+            if (skipAlreadyTagged)
+                foreach (var t in new FilteredElementCollector(doc, view.Id)
+                    .OfCategory(BuiltInCategory.OST_WindowTags).WhereElementIsNotElementType().Cast<IndependentTag>())
+                    try { foreach (var id in t.GetTaggedLocalElementIds()) alreadyTaggedIds.Add(id.Value); } catch { }
+            foreach (var window in windows)
+            {
+                if (skipAlreadyTagged && alreadyTaggedIds.Contains(window.Id.Value)) { skipped++; continue; }
+                try
+                {
+                    var loc = (window.Location as LocationPoint).Point;
+                    IndependentTag.Create(doc, view.Id, new Reference(window), false, TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, loc);
+                    tagged++;
+                }
+                catch (Exception ex) { failed++; Log.Warning($"batchTagViews window {window.Id.Value}: {ex.Message}"); }
+            }
+        }
+
+        [MCPMethod("batchTagViews", Category = "Tagging",
+            Description = "Tag rooms, doors, and/or windows across multiple views in a single call. " +
+                          "Pass viewIds[] (array of view element IDs) and tagTypes[] (['rooms','doors','windows']). " +
+                          "Runs one Transaction per view. tagLocation: 'lower-left' (default) or 'center'. " +
+                          "skipAlreadyTagged defaults true. Replaces N×3 separate batchTag calls.")]
+        public static string BatchTagViews(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var sw  = System.Diagnostics.Stopwatch.StartNew();
+                var viewIds  = parameters["viewIds"]?.ToObject<List<long>>() ?? new List<long>();
+                var tagTypes = (parameters["tagTypes"]?.ToObject<List<string>>()
+                                ?? new List<string> { "rooms", "doors", "windows" })
+                               .Select(t => t.ToLowerInvariant()).ToList();
+                bool skipAlreadyTagged = parameters["skipAlreadyTagged"]?.ToObject<bool>() ?? true;
+                var tagLocation = parameters["tagLocation"]?.ToString()
+                               ?? parameters["tagPosition"]?.ToString()
+                               ?? "lower-left";
+                bool doRooms   = tagTypes.Contains("rooms");
+                bool doDoors   = tagTypes.Contains("doors");
+                bool doWindows = tagTypes.Contains("windows");
+                var viewResults = new List<object>();
+                int totalTagged = 0, totalSkipped = 0, totalFailed = 0;
+                foreach (var viewIdLong in viewIds)
+                {
+                    var viewId = new ElementId((int)viewIdLong);
+                    var view   = doc.GetElement(viewId) as View;
+                    if (view == null) { viewResults.Add(new { viewId = viewIdLong, error = "View not found" }); continue; }
+                    int vTagged = 0, vSkipped = 0, vFailed = 0;
+                    using (var trans = new Transaction(doc, $"BM: Tag {view.Name}"))
+                    {
+                        trans.Start();
+                        var fo = trans.GetFailureHandlingOptions();
+                        fo.SetFailuresPreprocessor(new WarningSwallower());
+                        trans.SetFailureHandlingOptions(fo);
+                        if (doRooms)   TagRoomsInView  (doc, view, tagLocation, skipAlreadyTagged, ref vTagged, ref vSkipped, ref vFailed);
+                        if (doDoors)   TagDoorsInView  (doc, view, skipAlreadyTagged, ref vTagged, ref vSkipped, ref vFailed);
+                        if (doWindows) TagWindowsInView(doc, view, skipAlreadyTagged, ref vTagged, ref vSkipped, ref vFailed);
+                        trans.Commit();
+                    }
+                    totalTagged += vTagged; totalSkipped += vSkipped; totalFailed += vFailed;
+                    viewResults.Add(new { viewId = viewIdLong, viewName = view.Name, tagged = vTagged, skipped = vSkipped, failed = vFailed });
+                }
+                sw.Stop();
+                Log.Information($"batchTagViews: {viewIds.Count} views, {totalTagged} tagged");
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true, viewsProcessed = viewIds.Count,
+                    totalTagged, totalSkipped, totalFailed,
+                    tagTypes, tagLocation,
+                    executionTimeMs = sw.ElapsedMilliseconds,
+                    correlationId   = Guid.NewGuid().ToString("N").Substring(0, 8),
+                    views           = viewResults,
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error in batchTagViews");
+                return ResponseBuilder.FromException(ex).Build();
             }
         }
     }

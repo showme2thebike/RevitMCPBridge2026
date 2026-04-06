@@ -2,27 +2,31 @@
 
 ## Build & Deploy
 ```bash
-# 1. Build
+# 1. Build plugin
 dotnet publish -c Release --no-self-contained
 
-# 2. Build installer (Inno Setup)
-powershell.exe -Command "& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' 'C:\Users\echra\.bimmonkey\bimmonkey-ai-git\scripts\BimMonkeySetup.iss'"
-# Output: C:\Users\echra\.bimmonkey\bimmonkey-ai-git\dist\BimMonkeySetup.exe
+# 2. *** COPY DLL to installer staging — Inno Setup reads from here, NOT bin/Release/publish/ ***
+cp "C:/Users/echra/.bimmonkey/RevitMCPBridge2026/bin/Release/publish/RevitMCPBridge2026.dll" \
+   "C:/Users/echra/.bimmonkey/RevitMCPBridge2026/installer/files/2026/RevitMCPBridge2026.dll"
 
-# 3. Zip
+# 3. Build installer (Inno Setup)
+powershell.exe -Command "& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' 'C:\Users\echra\.bimmonkey\bimmonkey-ai-git\scripts\BimMonkeySetup.iss'"
 powershell.exe -Command "Compress-Archive -Path 'dist/BimMonkeySetup.exe' -DestinationPath 'dist/BimMonkeySetup.zip' -Force"
 
-# 4. Commit dist/ to git
-git add dist/BimMonkeySetup.exe dist/BimMonkeySetup.zip && git commit -m "..." && git push
+# 4. *** COPY ZIP to frontend/public/ — this is what bimmonkey.ai/install downloads ***
+cp "C:/Users/echra/.bimmonkey/bimmonkey-ai-git/dist/BimMonkeySetup.zip" \
+   "C:/Users/echra/.bimmonkey/bimmonkey-ai-git/frontend/public/BimMonkeySetup.zip"
 
-# 5. *** CREATE GITHUB RELEASE — THIS IS WHAT app.bimmonkey.ai/install DOWNLOADS ***
-# The install page points to: github.com/showme2thebike/bimmonkeyai/releases/latest/download/BimMonkeySetup.zip
-# Committing dist/ to the repo does NOT update the download. You MUST create a release.
-gh release create "v0.1.$(date +%Y%m%d%H%M)" --title "..." --notes "..." dist/BimMonkeySetup.zip
+# 5. Commit and push — Netlify auto-deploys and serves the new zip
+cd "C:/Users/echra/.bimmonkey/bimmonkey-ai-git"
+git add dist/BimMonkeySetup.exe dist/BimMonkeySetup.zip frontend/public/BimMonkeySetup.zip
+git commit -m "..." && git push
 ```
 
-> **WARNING:** Steps 1–4 alone are NOT enough. Without step 5, app.bimmonkey.ai/install
-> still serves the old installer. Always create the GitHub release after every rebuild.
+> **WARNING:** Steps 2 and 4 are both required on every build.
+> Skipping step 2 → installer packages the old DLL (plugin changes don't appear).
+> Skipping step 4 → bimmonkey.ai/install serves the old zip.
+> GitHub Releases are NOT used for the install download.
 
 ## BIM Monkey API
 ```
@@ -35,6 +39,10 @@ BIM_MONKEY_API_KEY=bm_...   # firm-specific key in CLAUDE.md in Documents\BimMon
 - C# .NET Framework 4.8, Revit 2026 add-in
 - All document modifications must be in Transaction blocks
 - Restart Revit after deploying new DLL
+
+## Named Pipe Keepalive
+The pipe can drop silently after ~15-20 sequential writes during heavy generation runs.
+Call `bim_monkey_ping()` every 10-15 MCP operations (e.g. inside `createSheet` / `placeViewOnSheet` loops) to keep the connection alive. The `ping` method returns immediately with no Revit API side effects — it is safe to call at any frequency.
 
 ## Revit API Notes
 - `ScheduleSheetInstance.Create()` for schedules — NOT `Viewport.Create()`

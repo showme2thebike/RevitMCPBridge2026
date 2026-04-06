@@ -13,11 +13,14 @@ namespace RevitMCPBridge
     public static class ExecutePlanMethods
     {
         /// <summary>
-        /// Execute a complete CD plan in one call — all three phases, no LLM round trips.
+        /// Execute a complete CD plan in one call — all phases, no LLM round trips.
         /// Input: the full plan object returned by bim_monkey_generate.
-        /// Phase 1: create sheets + place views
-        /// Phase 2: create drafting views + draw layer stacks + place on sheets
-        /// Phase 3: create schedules + place on sheets
+        /// Phase 1: create all sheets (ONE transaction)
+        /// Phase 2: pre-create view duplicates (ONE transaction)
+        /// Phase 3: build placement lists (no transactions)
+        /// Phase 4: place all viewports (ONE transaction + SubTransactions)
+        /// Phase 5: create drafting views + draw layer stacks + place on sheets
+        /// Phase 6: create schedules + place on sheets (two transactions)
         /// </summary>
         [MCPMethod("executePlan", Category = "Execution",
             Description = "Execute a complete CD plan in one batch call — creates all sheets, places all views, draws all details, and creates all schedules without LLM round trips. Pass the plan object returned by bim_monkey_generate.")]
@@ -26,12 +29,15 @@ namespace RevitMCPBridge
             var doc  = uiApp.ActiveUIDocument.Document;
             var plan = parameters["plan"] as JObject ?? parameters;
 
-            var sheets      = plan["sheets"]      as JArray ?? new JArray();
-            var detailPlan  = plan["detailPlan"]  as JArray ?? new JArray();
+            var sheets       = plan["sheets"]       as JArray ?? new JArray();
+            var detailPlan   = plan["detailPlan"]   as JArray ?? new JArray();
             var schedulePlan = plan["schedulePlan"] as JArray ?? new JArray();
 
-            var log        = new List<object>();
-            var errors     = new List<string>();
+            if (!sheets.Any() && !detailPlan.Any() && !schedulePlan.Any())
+                return ResponseBuilder.Error("executePlan received an empty plan — sheets, detailPlan, and schedulePlan are all empty. Verify that bim_monkey_generate returned a valid plan object and pass it in full.").Build();
+
+            var log               = new List<object>();
+            var errors            = new List<string>();
             var needsManualAction = new List<string>();
             int sheetsCreated      = 0;
             int sheetsExisted      = 0;
@@ -41,93 +47,192 @@ namespace RevitMCPBridge
             int detailsCreated     = 0;
             int schedulesPlaced    = 0;
 
-            // ── PRE-BUILD: cache all views and placed viewport IDs once ────────
+            // ── PRE-FLIGHT: build all caches before touching Revit ────────────
+
+            // All non-template, printable views
             var allViews = new FilteredElementCollector(doc)
                 .OfClass(typeof(View))
                 .Cast<View>()
                 .Where(v => !v.IsTemplate && v.CanBePrinted)
                 .ToList();
 
-            // Cache existing drafting view names for detail deduplication.
-            // Key: view name (lower) → ViewDrafting. Prevents doubling on retry runs.
+            // viewByName: name → first matching view (case-insensitive)
+            var viewByName = new Dictionary<string, View>(StringComparer.OrdinalIgnoreCase);
+            foreach (var v in allViews)
+            {
+                if (!viewByName.ContainsKey(v.Name))
+                    viewByName[v.Name] = v;
+            }
+
+            // sheetsByNumber: pre-load all existing sheets
+            var sheetsByNumber = new FilteredElementCollector(doc)
+                .OfClass(typeof(ViewSheet))
+                .Cast<ViewSheet>()
+                .ToDictionary(s => s.SheetNumber, s => s, StringComparer.OrdinalIgnoreCase);
+
+            // placedViewportSet: (sheetId.Value, viewId.Value) for all existing Viewports
+            var placedViewportSet = new HashSet<(long, long)>(
+                new FilteredElementCollector(doc)
+                    .OfClass(typeof(Viewport))
+                    .Cast<Viewport>()
+                    .Select(vp => ((long)vp.SheetId.Value, (long)vp.ViewId.Value))
+            );
+
+            // placedScheduleSet: (ownerViewId.Value, scheduleId.Value) for all existing ScheduleSheetInstances
+            var placedScheduleSet = new HashSet<(long, long)>(
+                new FilteredElementCollector(doc)
+                    .OfClass(typeof(ScheduleSheetInstance))
+                    .Cast<ScheduleSheetInstance>()
+                    .Select(ssi => ((long)ssi.OwnerViewId.Value, (long)ssi.ScheduleId.Value))
+            );
+
+            // titleBlockId: first FamilySymbol with OST_TitleBlocks category
+            ElementId titleBlockId = null;
+            {
+                var tbSymbol = new FilteredElementCollector(doc)
+                    .OfClass(typeof(FamilySymbol))
+                    .OfCategory(BuiltInCategory.OST_TitleBlocks)
+                    .Cast<FamilySymbol>()
+                    .FirstOrDefault();
+                if (tbSymbol != null)
+                    titleBlockId = tbSymbol.Id;
+                else if (sheets.Any())
+                    errors.Add("No title block family symbol found — sheets will be created without title block");
+            }
+
+            // Cache existing drafting view names for detail deduplication
             var existingDraftingViews = new FilteredElementCollector(doc)
                 .OfClass(typeof(ViewDrafting))
                 .Cast<ViewDrafting>()
                 .Where(v => !v.IsTemplate)
                 .ToDictionary(v => v.Name.ToLowerInvariant(), v => v, StringComparer.OrdinalIgnoreCase);
 
-            var placedViewIds = new HashSet<ElementId>(
-                new FilteredElementCollector(doc)
-                    .OfClass(typeof(Viewport))
-                    .Cast<Viewport>()
-                    .Select(vp => vp.ViewId)
-            );
-
             // Cache all available FilledRegionTypes for hatch resolution
             var allHatchTypes = new FilteredElementCollector(doc)
                 .OfClass(typeof(FilledRegionType))
                 .Cast<FilledRegionType>()
                 .ToDictionary(f => f.Name, f => f, StringComparer.OrdinalIgnoreCase);
-
             var hatchNames = allHatchTypes.Keys.OrderBy(k => k).ToList();
 
-            // ── PHASE 1: Sheets + View Placements ─────────────────────────────
+            // Scan all sheets[].views[].viewName — find views that appear on more than one sheet
+            var viewNameAppearanceCount = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             foreach (var sheetSpec in sheets.Cast<JObject>())
             {
-                var sheetNumber = sheetSpec["sheetNumber"]?.ToString();
-                var sheetName   = sheetSpec["sheetName"]?.ToString() ?? "Sheet";
-                var viewType    = sheetSpec["viewType"]?.ToString() ?? "";
-
-                if (string.IsNullOrEmpty(sheetNumber)) continue;
-
-                // Create or retrieve sheet (idempotent)
-                ViewSheet sheet = null;
-                try
+                var viewSpecs = sheetSpec["views"] as JArray ?? new JArray();
+                foreach (var viewSpec in viewSpecs.Cast<JObject>())
                 {
-                    sheet = new FilteredElementCollector(doc)
-                        .OfClass(typeof(ViewSheet))
-                        .Cast<ViewSheet>()
-                        .FirstOrDefault(s => s.SheetNumber == sheetNumber);
+                    var vn = viewSpec["viewName"]?.ToString();
+                    if (string.IsNullOrEmpty(vn)) continue;
+                    viewNameAppearanceCount[vn] = viewNameAppearanceCount.TryGetValue(vn, out var c) ? c + 1 : 1;
+                }
+            }
+            var viewsNeedingDuplicate = new HashSet<string>(
+                viewNameAppearanceCount.Where(kvp => kvp.Value > 1).Select(kvp => kvp.Key),
+                StringComparer.OrdinalIgnoreCase);
 
-                    if (sheet == null)
+            // sourceToDuplicateMap: sourceId → duplicateId (built during phases 2 and runtime-dup)
+            var sourceToDuplicateMap = new Dictionary<ElementId, ElementId>();
+
+            // ── PHASE 1: Create all sheets (ONE transaction) ──────────────────
+            if (sheets.Any())
+            {
+                using (var tx = new Transaction(doc, "BIM Monkey — Create Sheets"))
+                {
+                    var fho = tx.GetFailureHandlingOptions();
+                    fho.SetFailuresPreprocessor(new WarningSwallower());
+                    tx.SetFailureHandlingOptions(fho);
+                    tx.Start();
+
+                    foreach (var sheetSpec in sheets.Cast<JObject>())
                     {
-                        // Always mark generated sheets with " *" — applied at creation so post-gen tools
-                        // (audit, populate_titleblocks, apply_view_templates) can find them even if the
-                        // plan times out before the batch completes.
-                        var markedName = sheetName.EndsWith(" *") ? sheetName : sheetName + " *";
-                        var createParams = JObject.FromObject(new { sheetNumber, sheetName = markedName, switchTo = false });
-                        var result = JObject.Parse(SheetMethods.CreateSheet(uiApp, createParams));
-                        if (result["success"]?.Value<bool>() == true)
+                        var sheetNumber = sheetSpec["sheetNumber"]?.ToString();
+                        var sheetName   = sheetSpec["sheetName"]?.ToString() ?? "Sheet";
+                        if (string.IsNullOrEmpty(sheetNumber)) continue;
+
+                        if (sheetsByNumber.ContainsKey(sheetNumber))
                         {
-                            sheet = doc.GetElement(new ElementId(result["sheetId"].Value<int>())) as ViewSheet;
+                            sheetsExisted++;
+                            log.Add(new { phase = 1, op = "createSheet", sheetNumber, status = "existed" });
+                            continue;
+                        }
+
+                        try
+                        {
+                            var tbId = titleBlockId ?? ElementId.InvalidElementId;
+                            var newSheet = ViewSheet.Create(doc, tbId);
+                            newSheet.SheetNumber = sheetNumber;
+                            var markedName = sheetName.EndsWith(" *") ? sheetName : sheetName + " *";
+                            newSheet.Name = markedName;
+                            sheetsByNumber[sheetNumber] = newSheet;
                             sheetsCreated++;
                             log.Add(new { phase = 1, op = "createSheet", sheetNumber, status = "created" });
                         }
-                        else
+                        catch (Exception ex)
                         {
-                            errors.Add($"createSheet {sheetNumber}: {result["error"]}");
-                            continue;
+                            errors.Add($"createSheet {sheetNumber}: {ex.Message}");
+                            log.Add(new { phase = 1, op = "createSheet", sheetNumber, status = "error", error = ex.Message });
                         }
                     }
-                    else
-                    {
-                        sheetsExisted++;
-                        // Count views already placed on this sheet from a prior run
-                        var alreadyOnSheet = new FilteredElementCollector(doc)
-                            .OfClass(typeof(Viewport))
-                            .Cast<Viewport>()
-                            .Count(vp => vp.SheetId == sheet.Id);
-                        viewsAlreadyPlaced += alreadyOnSheet;
-                        log.Add(new { phase = 1, op = "createSheet", sheetNumber, status = "existed", viewsAlreadyOnSheet = alreadyOnSheet });
-                    }
-                }
-                catch (Exception ex)
-                {
-                    errors.Add($"createSheet {sheetNumber}: {ex.Message}");
-                    continue;
-                }
 
-                // Place views on this sheet
+                    tx.Commit(); // regeneration #1
+                }
+            }
+
+            // ── PHASE 2: Pre-create view duplicates (ONE transaction) ─────────
+            if (viewsNeedingDuplicate.Count > 0)
+            {
+                using (var tx = new Transaction(doc, "BIM Monkey — Pre-create Duplicates"))
+                {
+                    var fho = tx.GetFailureHandlingOptions();
+                    fho.SetFailuresPreprocessor(new WarningSwallower());
+                    tx.SetFailureHandlingOptions(fho);
+                    tx.Start();
+
+                    foreach (var viewName in viewsNeedingDuplicate)
+                    {
+                        if (!viewByName.TryGetValue(viewName, out var sourceView)) continue;
+                        if (sourceView is ViewSchedule) continue;
+                        if (sourceView.ViewType == ViewType.Legend) continue;
+                        if (sourceToDuplicateMap.ContainsKey(sourceView.Id)) continue;
+
+                        try
+                        {
+                            var opt = (sourceView.ViewType == ViewType.DraftingView || sourceView.ViewType == ViewType.Detail)
+                                ? ViewDuplicateOption.WithDetailing
+                                : ViewDuplicateOption.Duplicate;
+                            var dupId = sourceView.Duplicate(opt);
+
+                            if (dupId != sourceView.Id)
+                            {
+                                var dupView = doc.GetElement(dupId) as View;
+                                if (dupView != null && !dupView.Name.EndsWith(" *"))
+                                    try { dupView.Name = dupView.Name + " *"; } catch { }
+                                sourceToDuplicateMap[sourceView.Id] = dupId;
+                                viewsDuplicated++;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            errors.Add($"pre-createDuplicate {viewName}: {ex.Message}");
+                        }
+                    }
+
+                    tx.Commit(); // regeneration #2
+                }
+            }
+
+            // ── PHASE 3: Build placement lists (no transactions) ──────────────
+            var viewportPlacements = new List<(ViewSheet sheet, ElementId viewId, XYZ pos, string sheetNumber, string viewName)>();
+            var schedulePlacements = new List<(ViewSheet sheet, ElementId schedId, XYZ pos, string sheetNumber, string schedName)>();
+            var runtimeDupNeeded   = new List<ElementId>();
+
+            foreach (var sheetSpec in sheets.Cast<JObject>())
+            {
+                var sheetNumber = sheetSpec["sheetNumber"]?.ToString();
+                var viewType    = sheetSpec["viewType"]?.ToString() ?? "";
+                if (string.IsNullOrEmpty(sheetNumber)) continue;
+                if (!sheetsByNumber.TryGetValue(sheetNumber, out var sheet)) continue;
+
                 var viewSpecs = sheetSpec["views"] as JArray ?? new JArray();
                 var positions = GetAutoLayoutPositions(sheet, viewSpecs.Count);
 
@@ -140,77 +245,151 @@ namespace RevitMCPBridge
 
                     var pos = positions.Length > vi ? positions[vi] : new XYZ(0.85, 0.55, 0);
 
-                    try
-                    {
-                        // Match view
-                        View matched = FindBestView(allViews, placedViewIds, viewName, levelName, viewType);
-                        if (matched == null)
-                        {
-                            log.Add(new { phase = 1, op = "placeView", sheetNumber, viewName, status = "no_match" });
-                            continue;
-                        }
+                    // Use existing placedViewIds-equivalent set for FindBestView compatibility
+                    // Build a HashSet<ElementId> view of placedViewportSet for FindBestView
+                    var placedViewIdsForFinder = new HashSet<ElementId>(
+                        placedViewportSet.Select(p => new ElementId(p.Item2))
+                    );
 
-                        // Skip if this view (or a copy of it) is already on this sheet — idempotent retry
-                        bool alreadyOnThisSheet = new FilteredElementCollector(doc)
-                            .OfClass(typeof(Viewport))
-                            .Cast<Viewport>()
-                            .Any(vp => vp.SheetId == sheet.Id && vp.ViewId == matched.Id);
-                        if (alreadyOnThisSheet)
+                    View matched = FindBestView(allViews, placedViewIdsForFinder, viewName, levelName, viewType);
+                    if (matched == null)
+                    {
+                        log.Add(new { phase = 3, op = "buildPlacements", sheetNumber, viewName, status = "no_match" });
+                        continue;
+                    }
+
+                    // Schedules: separate placement path
+                    if (matched is ViewSchedule)
+                    {
+                        var schedKey = ((long)sheet.Id.Value, (long)matched.Id.Value);
+                        if (placedScheduleSet.Contains(schedKey))
                         {
                             viewsAlreadyPlaced++;
-                            log.Add(new { phase = 1, op = "placeView", sheetNumber, viewName, status = "already_on_sheet" });
-                            continue;
+                            log.Add(new { phase = 3, op = "buildPlacements", sheetNumber, viewName, status = "already_on_sheet" });
                         }
-
-                        // Duplicate if already placed (Legend views skip duplication)
-                        ElementId viewIdToPlace = matched.Id;
-                        if (placedViewIds.Contains(matched.Id) && matched.ViewType != ViewType.Legend)
+                        else
                         {
-                            using (var tx = new Transaction(doc, "Duplicate View"))
-                            {
-                                tx.Start();
-                                tx.GetFailureHandlingOptions().SetFailuresPreprocessor(new WarningSwallower());
-                                var opt = (matched.ViewType == ViewType.DraftingView || matched.ViewType == ViewType.Detail)
-                                    ? ViewDuplicateOption.WithDetailing
-                                    : ViewDuplicateOption.Duplicate;
-                                viewIdToPlace = matched.Duplicate(opt);
-                                var newView = doc.GetElement(viewIdToPlace) as View;
-                                if (newView != null && !newView.Name.EndsWith(" *"))
-                                    newView.Name = newView.Name + " *";
-                                tx.Commit();
-                            }
-                            viewsDuplicated++;
+                            schedulePlacements.Add((sheet, matched.Id, pos, sheetNumber, viewName));
                         }
-
-                        // Place — Schedules/Legends must use ScheduleSheetInstance, not Viewport.Create
-                        var viewToPlace = doc.GetElement(viewIdToPlace) as View;
-                        bool isSchedule = viewToPlace is ViewSchedule;
-                        bool isLegend   = viewToPlace?.ViewType == ViewType.Legend;
-
-                        using (var tx = new Transaction(doc, "Place View on Sheet"))
-                        {
-                            tx.Start();
-                            tx.GetFailureHandlingOptions().SetFailuresPreprocessor(new WarningSwallower());
-                            if (isSchedule)
-                                ScheduleSheetInstance.Create(doc, sheet.Id, viewIdToPlace, pos);
-                            else
-                                Viewport.Create(doc, sheet.Id, viewIdToPlace, pos);
-                            tx.Commit();
-                        }
-
-                        placedViewIds.Add(viewIdToPlace);
-                        viewsPlaced++;
-                        log.Add(new { phase = 1, op = "placeView", sheetNumber, viewName, status = "placed", viewId = (int)viewIdToPlace.Value });
+                        continue;
                     }
-                    catch (Exception ex)
+
+                    // Check if already on this sheet
+                    var vpKey = ((long)sheet.Id.Value, (long)matched.Id.Value);
+                    if (placedViewportSet.Contains(vpKey))
                     {
-                        errors.Add($"placeView {sheetNumber}/{viewName}: {ex.Message}");
-                        log.Add(new { phase = 1, op = "placeView", sheetNumber, viewName, status = "error", error = ex.Message });
+                        viewsAlreadyPlaced++;
+                        continue;
                     }
+
+                    // Resolve viewId
+                    ElementId viewIdToPlace;
+                    if (sourceToDuplicateMap.TryGetValue(matched.Id, out var preDup))
+                    {
+                        viewIdToPlace = preDup;
+                    }
+                    else if (matched.ViewType != ViewType.Legend &&
+                             placedViewportSet.Any(p => p.Item2 == (long)matched.Id.Value))
+                    {
+                        // Already placed elsewhere — needs runtime duplicate
+                        if (!runtimeDupNeeded.Contains(matched.Id))
+                            runtimeDupNeeded.Add(matched.Id);
+                        viewIdToPlace = matched.Id; // placeholder — will be replaced after runtime dup tx
+                    }
+                    else
+                    {
+                        viewIdToPlace = matched.Id;
+                    }
+
+                    viewportPlacements.Add((sheet, viewIdToPlace, pos, sheetNumber, viewName));
                 }
             }
 
-            // ── PHASE 2: Drafting Views + Layer Stacks ────────────────────────
+            // ── Handle runtime duplicates (before placement transaction) ──────
+            if (runtimeDupNeeded.Count > 0)
+            {
+                using (var tx = new Transaction(doc, "BIM Monkey — Runtime Duplicates"))
+                {
+                    var fho = tx.GetFailureHandlingOptions();
+                    fho.SetFailuresPreprocessor(new WarningSwallower());
+                    tx.SetFailureHandlingOptions(fho);
+                    tx.Start();
+
+                    foreach (var srcId in runtimeDupNeeded)
+                    {
+                        if (sourceToDuplicateMap.ContainsKey(srcId)) continue;
+                        try
+                        {
+                            var srcView = doc.GetElement(srcId) as View;
+                            if (srcView == null) continue;
+                            var opt = (srcView.ViewType == ViewType.DraftingView || srcView.ViewType == ViewType.Detail)
+                                ? ViewDuplicateOption.WithDetailing
+                                : ViewDuplicateOption.Duplicate;
+                            var dupId = srcView.Duplicate(opt);
+                            if (dupId != srcId)
+                            {
+                                var dupView = doc.GetElement(dupId) as View;
+                                if (dupView != null && !dupView.Name.EndsWith(" *"))
+                                    try { dupView.Name = dupView.Name + " *"; } catch { }
+                                sourceToDuplicateMap[srcId] = dupId;
+                                viewsDuplicated++;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            errors.Add($"runtimeDuplicate {srcId.Value}: {ex.Message}");
+                        }
+                    }
+
+                    tx.Commit();
+                }
+
+                // Update viewportPlacements: replace placeholder IDs with their duplicates
+                for (int i = 0; i < viewportPlacements.Count; i++)
+                {
+                    var entry = viewportPlacements[i];
+                    if (sourceToDuplicateMap.TryGetValue(entry.viewId, out var resolvedId))
+                        viewportPlacements[i] = (entry.sheet, resolvedId, entry.pos, entry.sheetNumber, entry.viewName);
+                }
+            }
+
+            // ── PHASE 4: Place all viewports (ONE transaction + SubTransactions)
+            if (viewportPlacements.Count > 0)
+            {
+                using (var tx = new Transaction(doc, "BIM Monkey — Place All Views"))
+                {
+                    var fho = tx.GetFailureHandlingOptions();
+                    fho.SetFailuresPreprocessor(new WarningSwallower());
+                    tx.SetFailureHandlingOptions(fho);
+                    tx.Start();
+
+                    foreach (var (sheet, viewId, pos, sheetNumber, viewName) in viewportPlacements)
+                    {
+                        using (var sub = new SubTransaction(doc))
+                        {
+                            try
+                            {
+                                sub.Start();
+                                Viewport.Create(doc, sheet.Id, viewId, pos);
+                                sub.Commit();
+                                placedViewportSet.Add(((long)sheet.Id.Value, (long)viewId.Value));
+                                viewsPlaced++;
+                                log.Add(new { phase = 4, op = "placeView", sheetNumber, viewName, status = "placed", viewId = (long)viewId.Value });
+                            }
+                            catch (Exception ex)
+                            {
+                                sub.RollBack();
+                                errors.Add($"placeView {sheetNumber}/{viewName}: {ex.Message}");
+                                log.Add(new { phase = 4, op = "placeView", sheetNumber, viewName, status = "error", error = ex.Message });
+                            }
+                        }
+                    }
+
+                    tx.Commit(); // regeneration #3
+                }
+            }
+
+            // ── PHASE 5: Drafting Views + Layer Stacks ────────────────────────
             foreach (var detail in detailPlan.Cast<JObject>())
             {
                 var detailNum   = detail["detailNumber"]?.Value<int>() ?? 0;
@@ -230,7 +409,7 @@ namespace RevitMCPBridge
                     {
                         draftView = existing;
                         viewAlreadyExisted = true;
-                        log.Add(new { phase = 2, op = "createDraftingView", detailNum, description, viewId = (int)draftView.Id.Value, status = "reused" });
+                        log.Add(new { phase = 5, op = "createDraftingView", detailNum, description, viewId = (long)draftView.Id.Value, status = "reused" });
                     }
                     else
                     {
@@ -249,9 +428,9 @@ namespace RevitMCPBridge
                             draftView.Scale = scale;
                             tx.Commit();
                         }
-                        existingDraftingViews[targetViewName] = draftView; // register so subsequent details in same pass also dedup
+                        existingDraftingViews[targetViewName] = draftView;
                         detailsCreated++;
-                        log.Add(new { phase = 2, op = "createDraftingView", detailNum, description, viewId = (int)draftView.Id.Value, status = "created" });
+                        log.Add(new { phase = 5, op = "createDraftingView", detailNum, description, viewId = (long)draftView.Id.Value, status = "created" });
                     }
 
                     // Draw layer stack if layers present — skip if reusing an existing view (already drawn)
@@ -262,7 +441,7 @@ namespace RevitMCPBridge
 
                         var drawParams = JObject.FromObject(new
                         {
-                            viewId = (int)draftView.Id.Value,
+                            viewId = (long)draftView.Id.Value,
                             layers = resolvedLayers,
                             orientation = detail["orientation"]?.ToString() ?? "vertical",
                             startX = 0.0,
@@ -275,9 +454,9 @@ namespace RevitMCPBridge
 
                         var drawResult = JObject.Parse(DetailMethods.DrawLayerStack(uiApp, drawParams));
                         if (drawResult["success"]?.Value<bool>() == true)
-                            log.Add(new { phase = 2, op = "drawLayerStack", detailNum, status = "drawn" });
+                            log.Add(new { phase = 5, op = "drawLayerStack", detailNum, status = "drawn" });
                         else
-                            log.Add(new { phase = 2, op = "drawLayerStack", detailNum, status = "partial", error = drawResult["error"]?.ToString() });
+                            log.Add(new { phase = 5, op = "drawLayerStack", detailNum, status = "partial", error = drawResult["error"]?.ToString() });
                     }
 
                     // Place on target sheet
@@ -297,43 +476,52 @@ namespace RevitMCPBridge
 
                             if (detailAlreadyOnSheet)
                             {
-                                log.Add(new { phase = 2, op = "placeDetail", detailNum, sheetRef, status = "already_on_sheet" });
+                                log.Add(new { phase = 5, op = "placeDetail", detailNum, sheetRef, status = "already_on_sheet" });
                             }
                             else
                             {
-                            var pos = GetDetailPosition(doc, targetSheet, detail["positionOnSheet"]?.Value<int>() ?? 1);
-                            using (var tx = new Transaction(doc, "Place Detail on Sheet"))
-                            {
-                                tx.Start();
-                                tx.GetFailureHandlingOptions().SetFailuresPreprocessor(new WarningSwallower());
-                                Viewport.Create(doc, targetSheet.Id, draftView.Id, pos);
-                                tx.Commit();
-                            }
-                            log.Add(new { phase = 2, op = "placeDetail", detailNum, sheetRef, status = "placed" });
+                                var pos = GetDetailPosition(doc, targetSheet, detail["positionOnSheet"]?.Value<int>() ?? 1);
+                                using (var tx = new Transaction(doc, "Place Detail on Sheet"))
+                                {
+                                    tx.Start();
+                                    tx.GetFailureHandlingOptions().SetFailuresPreprocessor(new WarningSwallower());
+                                    Viewport.Create(doc, targetSheet.Id, draftView.Id, pos);
+                                    tx.Commit();
+                                }
+                                log.Add(new { phase = 5, op = "placeDetail", detailNum, sheetRef, status = "placed" });
                             }
                         }
                         else
                         {
-                            log.Add(new { phase = 2, op = "placeDetail", detailNum, sheetRef, status = "sheet_not_found" });
+                            log.Add(new { phase = 5, op = "placeDetail", detailNum, sheetRef, status = "sheet_not_found" });
                         }
                     }
                 }
                 catch (Exception ex)
                 {
                     errors.Add($"detail {detailNum}: {ex.Message}");
-                    log.Add(new { phase = 2, op = "detail", detailNum, status = "error", error = ex.Message });
+                    log.Add(new { phase = 5, op = "detail", detailNum, status = "error", error = ex.Message });
                 }
-
             }
 
-            // ── PHASE 3: Schedules ────────────────────────────────────────────
+            // ── PHASE 6: Create + Place Schedules ─────────────────────────────
             var typeToCategory = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                { "door",       "Doors"  },
+                { "door",       "Doors"   },
                 { "window",     "Windows" },
-                { "roomFinish", "Rooms"  },
-                { "keynote",    "Rooms"  }, // keynote legend — best-effort
+                { "roomFinish", "Rooms"   },
+                { "keynote",    "Rooms"   },
             };
+
+            // Pre-load existing ViewSchedules by name
+            var scheduleIdsByTitle = new FilteredElementCollector(doc)
+                .OfClass(typeof(ViewSchedule))
+                .Cast<ViewSchedule>()
+                .GroupBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+
+            // schedulePlan_placements: all schedule placements from schedulePlan[] + Phase 3 schedule placements
+            var allSchedulePlacements = new List<(ViewSheet sheet, ElementId schedId, XYZ pos, string sheetNumber, string schedName)>();
 
             foreach (var schedSpec in schedulePlan.Cast<JObject>())
             {
@@ -343,23 +531,17 @@ namespace RevitMCPBridge
 
                 if (!typeToCategory.TryGetValue(schedType ?? "", out var categoryName))
                 {
-                    log.Add(new { phase = 3, op = "createSchedule", schedType, status = "unsupported_type" });
+                    log.Add(new { phase = 6, op = "createSchedule", schedType, status = "unsupported_type" });
                     continue;
                 }
 
                 try
                 {
-                    // Check if a schedule with this name already exists — use it rather than erroring
-                    int schedId = -1;
-                    var existingSched = new FilteredElementCollector(doc)
-                        .OfClass(typeof(ViewSchedule))
-                        .Cast<ViewSchedule>()
-                        .FirstOrDefault(s => string.Equals(s.Name, schedTitle, StringComparison.OrdinalIgnoreCase));
-
-                    if (existingSched != null)
+                    ElementId schedId;
+                    if (scheduleIdsByTitle.TryGetValue(schedTitle, out var existingId))
                     {
-                        schedId = (int)existingSched.Id.Value;
-                        log.Add(new { phase = 3, op = "createSchedule", schedTitle, schedId, status = "existed" });
+                        schedId = existingId;
+                        log.Add(new { phase = 6, op = "createSchedule", schedTitle, schedId = (long)schedId.Value, status = "existed" });
                     }
                     else
                     {
@@ -374,11 +556,12 @@ namespace RevitMCPBridge
                             continue;
                         }
 
-                        schedId = result["scheduleId"].Value<int>();
-                        log.Add(new { phase = 3, op = "createSchedule", schedTitle, schedId, status = "created" });
+                        schedId = new ElementId(result["scheduleId"].Value<int>());
+                        scheduleIdsByTitle[schedTitle] = schedId;
+                        log.Add(new { phase = 6, op = "createSchedule", schedTitle, schedId = (long)schedId.Value, status = "created" });
                     }
 
-                    // Add fields if specified (one call per field)
+                    // Add fields if specified (one call per field — keep as-is)
                     var fields = schedSpec["fields"] as JArray;
                     if (fields != null && fields.Count > 0)
                     {
@@ -388,8 +571,8 @@ namespace RevitMCPBridge
                             {
                                 var fieldParams = JObject.FromObject(new
                                 {
-                                    scheduleId = schedId,
-                                    fieldName = field.ToString()
+                                    scheduleId = (int)schedId.Value,
+                                    fieldName  = field.ToString()
                                 });
                                 ScheduleMethods.AddScheduleField(uiApp, fieldParams);
                             }
@@ -397,43 +580,77 @@ namespace RevitMCPBridge
                         }
                     }
 
-                    // Place on sheet
-                    if (!string.IsNullOrEmpty(sheetNum))
+                    // Queue for batch placement
+                    if (!string.IsNullOrEmpty(sheetNum) && sheetsByNumber.TryGetValue(sheetNum, out var targetSheet))
                     {
-                        var placeParams = JObject.FromObject(new { scheduleId = schedId, sheetNumber = sheetNum, x = 0.3, y = 0.3 });
-                        var placeResult = JObject.Parse(SheetMethods.PlaceScheduleOnSheet(uiApp, placeParams));
-                        if (placeResult["success"]?.Value<bool>() == true)
-                        {
-                            schedulesPlaced++;
-                            log.Add(new { phase = 3, op = "placeSchedule", schedTitle, sheetNum, status = "placed" });
-                        }
-                        else
-                        {
-                            var placeErr = placeResult["error"]?.ToString() ?? "unknown";
-                            log.Add(new { phase = 3, op = "placeSchedule", schedTitle, sheetNum, status = "error", error = placeErr });
-                            needsManualAction.Add($"{schedTitle} — place manually on sheet {sheetNum} (placeScheduleOnSheet)");
-                        }
+                        allSchedulePlacements.Add((targetSheet, schedId, new XYZ(0.3, 0.3, 0), sheetNum, schedTitle));
+                    }
+                    else if (!string.IsNullOrEmpty(sheetNum))
+                    {
+                        needsManualAction.Add($"{schedTitle} — place manually on sheet {sheetNum} (sheet not found)");
                     }
                 }
                 catch (Exception ex)
                 {
                     errors.Add($"schedule {schedTitle}: {ex.Message}");
-                    log.Add(new { phase = 3, op = "schedule", schedTitle, status = "error", error = ex.Message });
+                    log.Add(new { phase = 6, op = "schedule", schedTitle, status = "error", error = ex.Message });
+                }
+            }
+
+            // Add Phase 3 schedule placements (views that are schedules from the sheets[] spec)
+            allSchedulePlacements.AddRange(schedulePlacements);
+
+            // Place all schedules in ONE transaction + SubTransactions
+            if (allSchedulePlacements.Count > 0)
+            {
+                using (var tx = new Transaction(doc, "BIM Monkey — Place Schedules"))
+                {
+                    var fho = tx.GetFailureHandlingOptions();
+                    fho.SetFailuresPreprocessor(new WarningSwallower());
+                    tx.SetFailureHandlingOptions(fho);
+                    tx.Start();
+
+                    foreach (var (sheet, schedId, pos, sheetNumber, schedName) in allSchedulePlacements)
+                    {
+                        var schedKey = ((long)sheet.Id.Value, (long)schedId.Value);
+                        if (placedScheduleSet.Contains(schedKey)) continue;
+
+                        using (var sub = new SubTransaction(doc))
+                        {
+                            try
+                            {
+                                sub.Start();
+                                ScheduleSheetInstance.Create(doc, sheet.Id, schedId, pos);
+                                sub.Commit();
+                                placedScheduleSet.Add(schedKey);
+                                schedulesPlaced++;
+                                log.Add(new { phase = 6, op = "placeSchedule", schedName, sheetNumber, status = "placed" });
+                            }
+                            catch (Exception ex)
+                            {
+                                sub.RollBack();
+                                errors.Add($"placeSchedule {sheetNumber}/{schedName}: {ex.Message}");
+                                log.Add(new { phase = 6, op = "placeSchedule", schedName, sheetNumber, status = "error", error = ex.Message });
+                            }
+                        }
+                    }
+
+                    tx.Commit(); // regeneration #4
                 }
             }
 
             return ResponseBuilder.Success()
-                .With("sheetsCreated",      sheetsCreated)
-                .With("sheetsExisted",      sheetsExisted)
-                .With("viewsPlaced",        viewsPlaced)
-                .With("viewsAlreadyPlaced", viewsAlreadyPlaced)
-                .With("viewsDuplicated",    viewsDuplicated)
-                .With("detailsCreated",     detailsCreated)
-                .With("schedulesPlaced",    schedulesPlaced)
-                .With("errorCount",         errors.Count)
-                .With("errors",             errors)
-                .With("needsManualAction",  needsManualAction)
-                .With("log",                log)
+                .With("sheetsCreated",       sheetsCreated)
+                .With("sheetsExisted",       sheetsExisted)
+                .With("viewsPlaced",         viewsPlaced)
+                .With("viewsAlreadyPlaced",  viewsAlreadyPlaced)
+                .With("viewsDuplicated",     viewsDuplicated)
+                .With("detailsCreated",      detailsCreated)
+                .With("schedulesPlaced",     schedulesPlaced)
+                .With("errorCount",          errors.Count)
+                .With("errors",              errors)
+                .With("needsManualAction",   needsManualAction)
+                .With("log",                 log)
                 .With("availableHatchTypes", hatchNames)
                 .WithMessage($"executePlan complete — {sheetsCreated} new + {sheetsExisted} existing sheets; {viewsPlaced} views placed ({viewsAlreadyPlaced} already present, {viewsDuplicated} duplicated); {detailsCreated} details; {schedulesPlaced} schedules. {errors.Count} error(s). {needsManualAction.Count} need manual action.")
                 .Build();
@@ -459,7 +676,7 @@ namespace RevitMCPBridge
             {
                 ViewType? revitType = sheetViewType switch
                 {
-                    "floorPlan"  => ViewType.FloorPlan,
+                    "floorPlan"   => ViewType.FloorPlan,
                     "ceilingPlan" => ViewType.CeilingPlan,
                     _ => null
                 };
@@ -565,6 +782,55 @@ namespace RevitMCPBridge
                 resolved.Add(layer);
             }
             return resolved;
+        }
+
+        // ── Async dispatch entry point ──────────────────────────────────────────
+        //
+        // When the Python daemon sends executePlan with "async": true, this method
+        // is called instead of ExecutePlan directly.  It queues the work in
+        // BackgroundJobHandler (which runs on the Revit main thread via ExternalEvent)
+        // and returns a jobId immediately so the pipe thread is unblocked.
+        //
+        // The daemon then polls getExecutionStatus until status = Complete or Failed.
+        //
+        [MCPMethod("executePlan", Category = "Execution",
+            Description = "Execute a complete CD plan in one batch call. Pass the plan object returned by bim_monkey_generate. Set 'async':true for non-blocking execution (returns jobId; poll getExecutionStatus for result).")]
+        public static string ExecutePlanDispatch(UIApplication uiApp, JObject parameters)
+        {
+            bool isAsync = parameters["async"]?.Value<bool>() ?? false;
+
+            if (!isAsync)
+            {
+                // Synchronous path — backwards-compatible with direct Claude Code calls
+                return ExecutePlan(uiApp, parameters);
+            }
+
+            // Async path — queue job and return immediately
+            var handler = RevitMCPBridgeApp.GetBackgroundJobHandler();
+            var bgEvent = RevitMCPBridgeApp.GetBackgroundJobEvent();
+
+            if (handler == null || bgEvent == null)
+            {
+                // Fallback: run synchronously if background infrastructure not ready
+                Serilog.Log.Warning("[ExecutePlanDispatch] Background job infrastructure not initialized — running synchronously");
+                return ExecutePlan(uiApp, parameters);
+            }
+
+            // Serialize the full parameters (plan) as JSON for the background handler
+            var planJson = parameters.ToString(Newtonsoft.Json.Formatting.None);
+            var jobId = AsyncJobRegistry.CreateJob(planJson);
+            handler.EnqueueJob(jobId);
+            bgEvent.Raise();
+
+            Serilog.Log.Information($"[ExecutePlanDispatch] Queued async job {jobId}");
+
+            return new Newtonsoft.Json.Linq.JObject
+            {
+                ["success"] = true,
+                ["async"]   = true,
+                ["jobId"]   = jobId,
+                ["status"]  = "Queued",
+            }.ToString(Newtonsoft.Json.Formatting.None);
         }
     }
 }

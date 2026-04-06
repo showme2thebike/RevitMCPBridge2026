@@ -3751,6 +3751,37 @@ namespace RevitMCPBridge
 
                     
 
+                    case "getExecutionStatus":
+                    {
+                        // ── INLINE — no ExternalEvent needed; pure dict read ──────────────────
+                        // This must NOT go through ExecuteInRevitContext, because the Revit main
+                        // thread is blocked running the background job.  The registry uses
+                        // ConcurrentDictionary so reading here (pipe thread) is thread-safe.
+                        var jobId = parameters?["jobId"]?.Value<string>();
+                        if (string.IsNullOrEmpty(jobId))
+                            return "{\"success\":false,\"error\":\"getExecutionStatus requires jobId\"}";
+
+                        if (!AsyncJobRegistry.TryGet(jobId, out var job))
+                            return $"{{\"success\":false,\"error\":\"Job {jobId} not found\"}}";
+
+                        var statusObj = new Newtonsoft.Json.Linq.JObject
+                        {
+                            ["success"] = true,
+                            ["jobId"]   = job.JobId,
+                            ["status"]  = job.Status.ToString(),
+                        };
+                        if (job.Status == AsyncJobRegistry.JobStatus.Complete)
+                            statusObj["result"] = Newtonsoft.Json.Linq.JToken.Parse(job.ResultJson ?? "{}");
+                        if (job.Status == AsyncJobRegistry.JobStatus.Failed)
+                            statusObj["error"] = job.Error;
+                        if (job.StartedAt.HasValue)
+                            statusObj["startedAt"] = job.StartedAt.Value.ToString("o");
+                        if (job.CompletedAt.HasValue)
+                            statusObj["completedAt"] = job.CompletedAt.Value.ToString("o");
+
+                        return statusObj.ToString(Newtonsoft.Json.Formatting.None);
+                    }
+
                     default:
                         // Check registry for dynamically registered methods (BMO, CIPS, etc.)
                         if (_methodRegistry.Count == 0)

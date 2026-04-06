@@ -20,6 +20,8 @@ namespace RevitMCPBridge
         private static string _tabName = "BIM Monkey";
         private static MCPRequestHandler _requestHandler;
         private static ExternalEvent _externalEvent;
+        private static BackgroundJobHandler _backgroundJobHandler;
+        private static ExternalEvent _backgroundJobEvent;
 
         // Dialog handling - disabled by default to allow normal user interaction
         private static bool _autoHandleDialogs = false;
@@ -130,6 +132,11 @@ namespace RevitMCPBridge
                 _requestHandler = new MCPRequestHandler();
                 _externalEvent = ExternalEvent.Create(_requestHandler);
                 Log.Information("MCP Request Handler and ExternalEvent initialized");
+
+                // Initialize background job handler for async executePlan
+                _backgroundJobHandler = new BackgroundJobHandler();
+                _backgroundJobEvent = ExternalEvent.Create(_backgroundJobHandler);
+                Log.Information("Background Job Handler and ExternalEvent initialized");
 
                 // Subscribe to dialog events for automatic handling
                 application.DialogBoxShowing += OnDialogBoxShowing;
@@ -1614,6 +1621,16 @@ namespace RevitMCPBridge
         internal static ExternalEvent GetExternalEvent()
         {
             return _externalEvent;
+        }
+
+        internal static BackgroundJobHandler GetBackgroundJobHandler()
+        {
+            return _backgroundJobHandler;
+        }
+
+        internal static ExternalEvent GetBackgroundJobEvent()
+        {
+            return _backgroundJobEvent;
         }
     }
 }
