@@ -6959,6 +6959,10 @@ namespace RevitMCPBridge2026
                 var noHatchLayers = new List<string>(); // Layer names where hatch was null/empty — no fill drawn
                 // Fallback filled region type — used when a requested hatch name doesn't exist in the project
                 FilledRegionType fallbackRegionType = filledRegionTypeCache.Values.FirstOrDefault();
+                // Track layer boundary curves for chain dimension creation (indexed in stack order)
+                var dimensionEdgeCurves = new List<DetailCurve>();
+                bool firstNonOverlayLayer = true;
+                int dimensionCount = 0; // declared here so it's in scope for the response object
 
                 using (var trans = new Transaction(doc, "MCP Draw Layer Stack"))
                 {
@@ -7037,6 +7041,11 @@ namespace RevitMCPBridge2026
                                 var bottomLine = Line.CreateBound(new XYZ(originX, bottomY, 0), new XYZ(originX + spanWidth, bottomY, 0));
                                 var bottomCurve = doc.Create.NewDetailCurve(view, bottomLine);
                                 if (edgeStyle != null) bottomCurve.LineStyle = edgeStyle;
+
+                                // Track boundaries for chain dimension (horizontal lines → vertical dimension)
+                                if (firstNonOverlayLayer) dimensionEdgeCurves.Add(bottomCurve);
+                                dimensionEdgeCurves.Add(topCurve);
+                                firstNonOverlayLayer = false;
                             }
 
                             // Left edge
@@ -7084,6 +7093,16 @@ namespace RevitMCPBridge2026
                                 string labelText = $"{layerName} ({thicknessStr})";
                                 var textNote = TextNote.Create(doc, view.Id, new XYZ(labelX, labelY2, 0), labelText, defaultTextTypeId);
                                 textId = (long)textNote.Id.Value;
+                                // Add leader with arrowhead pointing to the layer centroid
+                                try
+                                {
+                                    double layerMidX = originX + spanWidth / 2;
+                                    double layerMidY = (bottomY + topY) / 2;
+                                    var leader = textNote.AddLeader(TextNoteLeaderTypes.TNLT_STRAIGHT_L);
+                                    leader.End = new XYZ(layerMidX, layerMidY, 0);
+                                    leader.Elbow = new XYZ((labelX + layerMidX) / 2, (labelY2 + layerMidY) / 2, 0);
+                                }
+                                catch { /* AddLeader unavailable in this view type — label remains without arrow */ }
                             }
 
                             layerPositions.Add(new { name = layerName, bottomY, topY, thickness, thicknessInches = Math.Round(thickness * 12, 3), unitNote = thicknessAutoConverted ? "auto-converted from inches to feet" : null });
@@ -7111,6 +7130,11 @@ namespace RevitMCPBridge2026
                                 var rightLine = Line.CreateBound(new XYZ(rightX, originY, 0), new XYZ(rightX, originY + height, 0));
                                 var rightCurve = doc.Create.NewDetailCurve(view, rightLine);
                                 if (edgeStyle != null) rightCurve.LineStyle = edgeStyle;
+
+                                // Track boundaries for chain dimension (vertical lines → horizontal dimension)
+                                if (firstNonOverlayLayer) dimensionEdgeCurves.Add(leftCurve);
+                                dimensionEdgeCurves.Add(rightCurve);
+                                firstNonOverlayLayer = false;
                             }
 
                             // Top line
@@ -7158,18 +7182,16 @@ namespace RevitMCPBridge2026
                                 string labelText = $"{layerName} ({thicknessStr})";
                                 var textNote = TextNote.Create(doc, view.Id, new XYZ(labelX, labelY, 0), labelText, defaultTextTypeId);
                                 textId = (long)textNote.Id.Value;
-
-                                double layerMidX = (leftX + rightX) / 2;
-                                double layerMidY = originY + height / 2;
-                                var leaderStart = new XYZ(labelX - 0.05, labelY, 0);
-                                var leaderEnd = new XYZ(layerMidX, layerMidY, 0);
-                                if (!leaderStart.IsAlmostEqualTo(leaderEnd))
+                                // Add leader with arrowhead pointing to the layer centroid
+                                try
                                 {
-                                    var leaderLine = doc.Create.NewDetailCurve(view, Line.CreateBound(leaderStart, leaderEnd));
-                                    GraphicsStyle thinStyle = null;
-                                    lineStyleCache.TryGetValue("Thin Lines", out thinStyle);
-                                    if (thinStyle != null) leaderLine.LineStyle = thinStyle;
+                                    double layerMidX = (leftX + rightX) / 2;
+                                    double layerMidY = originY + height / 2;
+                                    var leader = textNote.AddLeader(TextNoteLeaderTypes.TNLT_STRAIGHT_L);
+                                    leader.End = new XYZ(layerMidX, layerMidY, 0);
+                                    leader.Elbow = new XYZ((labelX + layerMidX) / 2, (labelY + layerMidY) / 2, 0);
                                 }
+                                catch { /* AddLeader unavailable in this view type — label remains without arrow */ }
                             }
 
                             layerPositions.Add(new { name = layerName, leftX, rightX, thickness, thicknessInches = Math.Round(thickness * 12, 3), unitNote = thicknessAutoConverted ? "auto-converted from inches to feet" : null });
@@ -7178,6 +7200,40 @@ namespace RevitMCPBridge2026
                             if (!isOverlay)
                                 currentX += thickness * dirMultiplier;
                         }
+                    }
+
+                    // ── Chain dimension showing each layer's thickness ─────────────
+                    if (addDimensions && dimensionEdgeCurves.Count >= 2)
+                    {
+                        try
+                        {
+                            var refArray = new ReferenceArray();
+                            foreach (var ec in dimensionEdgeCurves)
+                                refArray.Append(ec.GeometryCurve.Reference);
+
+                            Line dimLine;
+                            if (isVertical)
+                            {
+                                // Vertical dimension to the right of the stack
+                                // 'height' param doubles as horizontal span width in vertical mode
+                                double dimX = originX + height + 0.5;
+                                double dimY1 = Math.Min(originY, currentY);
+                                double dimY2 = Math.Max(originY, currentY);
+                                dimLine = Line.CreateBound(new XYZ(dimX, dimY1, 0), new XYZ(dimX, dimY2, 0));
+                            }
+                            else
+                            {
+                                // Horizontal dimension below the stack
+                                double dimY = originY - 0.5;
+                                double dimX1 = Math.Min(originX, currentX);
+                                double dimX2 = Math.Max(originX, currentX);
+                                dimLine = Line.CreateBound(new XYZ(dimX1, dimY, 0), new XYZ(dimX2, dimY, 0));
+                            }
+
+                            var dim = doc.Create.NewDimension(view, dimLine, refArray);
+                            if (dim != null) dimensionCount++;
+                        }
+                        catch { /* dimension creation failed — detail is still complete without it */ }
                     }
 
                     trans.Commit();
@@ -7207,6 +7263,7 @@ namespace RevitMCPBridge2026
                     // All filled region type names loaded in this project — use these as hatch values.
                     availableHatchTypes = filledRegionTypeCache.Keys.OrderBy(k => k).ToList(),
                     clearedCount,
+                    dimensionCount,
                 });
             }
             catch (Exception ex)

@@ -86,16 +86,49 @@ namespace RevitMCPBridge
                     .Select(ssi => ((long)ssi.OwnerViewId.Value, (long)ssi.ScheduleId.Value))
             );
 
-            // titleBlockId: first FamilySymbol with OST_TitleBlocks category
+            // titleBlockId: prefer the most-used titleblock on existing sheets;
+            // fall back to first available symbol if no sheets exist yet.
             ElementId titleBlockId = null;
             {
-                var tbSymbol = new FilteredElementCollector(doc)
-                    .OfClass(typeof(FamilySymbol))
-                    .OfCategory(BuiltInCategory.OST_TitleBlocks)
-                    .Cast<FamilySymbol>()
-                    .FirstOrDefault();
-                if (tbSymbol != null)
-                    titleBlockId = tbSymbol.Id;
+                var existingSheetList = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewSheet))
+                    .Cast<ViewSheet>()
+                    .Where(s => !s.IsPlaceholder)
+                    .ToList();
+
+                var usageCount = new Dictionary<ElementId, int>();
+                FamilySymbol preferredSymbol = null;
+
+                foreach (var existingSheet in existingSheetList)
+                {
+                    var tbInstance = new FilteredElementCollector(doc, existingSheet.Id)
+                        .OfClass(typeof(FamilyInstance))
+                        .OfCategory(BuiltInCategory.OST_TitleBlocks)
+                        .Cast<FamilyInstance>()
+                        .FirstOrDefault();
+                    if (tbInstance == null) continue;
+                    var symId = tbInstance.Symbol.Id;
+                    usageCount[symId] = usageCount.TryGetValue(symId, out var cnt) ? cnt + 1 : 1;
+                }
+
+                if (usageCount.Count > 0)
+                {
+                    var mostUsedId = usageCount.OrderByDescending(kv => kv.Value).First().Key;
+                    preferredSymbol = doc.GetElement(mostUsedId) as FamilySymbol;
+                }
+
+                if (preferredSymbol == null)
+                {
+                    // No existing sheets — fall back to first loaded titleblock
+                    preferredSymbol = new FilteredElementCollector(doc)
+                        .OfClass(typeof(FamilySymbol))
+                        .OfCategory(BuiltInCategory.OST_TitleBlocks)
+                        .Cast<FamilySymbol>()
+                        .FirstOrDefault();
+                }
+
+                if (preferredSymbol != null)
+                    titleBlockId = preferredSymbol.Id;
                 else if (sheets.Any())
                     errors.Add("No title block family symbol found — sheets will be created without title block");
             }
@@ -400,16 +433,40 @@ namespace RevitMCPBridge
 
                 try
                 {
-                    // Create drafting view — skip if one with the same name already exists (retry dedup)
+                    // Create drafting view — skip if one with the same name already exists (retry dedup).
+                    // Check both "Description *" (BIM Monkey generated) and "Description" (Barrett's pre-drawn)
+                    // so existing unplaced views are reused without re-creating or re-drawing them.
                     var targetViewName = description.EndsWith(" *") ? description : description + " *";
+                    var bareDescription = description.TrimEnd('*').TrimEnd();
+
+                    // Also check if plan specifies an explicit existing view ID
+                    var existingViewId = detail["existingViewId"]?.Value<long>() ?? 0;
+
                     ViewDrafting draftView = null;
                     bool viewAlreadyExisted = false;
 
-                    if (existingDraftingViews.TryGetValue(targetViewName, out var existing))
+                    if (existingViewId > 0 && doc.GetElement(new ElementId(existingViewId)) is ViewDrafting byId)
                     {
+                        // Exact ID match — highest priority (Claude resolved against unplacedDraftingViews list)
+                        draftView = byId;
+                        viewAlreadyExisted = true;
+                        log.Add(new { phase = 5, op = "createDraftingView", detailNum, description,
+                                      viewId = (long)draftView.Id.Value, status = "reused_by_id" });
+                    }
+                    else if (existingDraftingViews.TryGetValue(targetViewName, out var existing))
+                    {
+                        // BIM Monkey generated view name (with " *")
                         draftView = existing;
                         viewAlreadyExisted = true;
                         log.Add(new { phase = 5, op = "createDraftingView", detailNum, description, viewId = (long)draftView.Id.Value, status = "reused" });
+                    }
+                    else if (existingDraftingViews.TryGetValue(bareDescription, out var existingBare))
+                    {
+                        // Barrett's pre-drawn view (no " *" suffix) — this is the unplaced detail library case
+                        draftView = existingBare;
+                        viewAlreadyExisted = true;
+                        log.Add(new { phase = 5, op = "createDraftingView", detailNum, description,
+                                      viewId = (long)draftView.Id.Value, status = "reused_existing" });
                     }
                     else
                     {
@@ -433,8 +490,79 @@ namespace RevitMCPBridge
                         log.Add(new { phase = 5, op = "createDraftingView", detailNum, description, viewId = (long)draftView.Id.Value, status = "created" });
                     }
 
-                    // Draw layer stack if layers present — skip if reusing an existing view (already drawn)
-                    if (layers.Count > 0 && !viewAlreadyExisted)
+                    // ── Prefer library view copy over drawLayerStack ───────────────
+                    // If the plan specifies a libraryViewName (and optionally libraryFilePath),
+                    // attempt to copy from the detail library. Fall back to drawLayerStack if:
+                    //   - libraryFilePath is not specified or file doesn't exist
+                    //   - the named view isn't found in the library
+                    //   - the copy throws (e.g. permission, corrupt file)
+                    bool drawnFromLibrary = false;
+
+                    if (!viewAlreadyExisted)
+                    {
+                        var libraryViewName = detail["libraryViewName"]?.ToString();
+                        var libraryFilePath = detail["libraryFilePath"]?.ToString()
+                                           ?? parameters["libraryFilePath"]?.ToString(); // plan-level default
+
+                        if (!string.IsNullOrEmpty(libraryViewName) && !string.IsNullOrEmpty(libraryFilePath)
+                            && System.IO.File.Exists(libraryFilePath))
+                        {
+                            // Delete the empty placeholder view we just created — library copy will replace it
+                            using (var tx = new Transaction(doc, "Remove Placeholder Detail View"))
+                            {
+                                tx.Start();
+                                doc.Delete(draftView.Id);
+                                existingDraftingViews.Remove(targetViewName);
+                                tx.Commit();
+                            }
+                            draftView = null;
+
+                            var copyParams = new JObject
+                            {
+                                ["sourceFilePath"] = libraryFilePath,
+                                ["viewName"]       = libraryViewName,
+                                ["targetName"]     = description,
+                            };
+
+                            var copyResult = JObject.Parse(DetailLibraryMethods.CopyDetailViewFromFile(uiApp, copyParams));
+
+                            if (copyResult["success"]?.Value<bool>() == true)
+                            {
+                                var copiedViewId = new ElementId(copyResult["viewId"]?.Value<long>() ?? -1);
+                                draftView = doc.GetElement(copiedViewId) as ViewDrafting;
+                                drawnFromLibrary = true;
+                                existingDraftingViews[targetViewName] = draftView;
+                                log.Add(new { phase = 5, op = "copyFromLibrary", detailNum, libraryViewName,
+                                              viewId = copyResult["viewId"], status = "copied" });
+                            }
+                            else
+                            {
+                                // Library copy failed — recreate the placeholder and fall through to drawLayerStack
+                                log.Add(new { phase = 5, op = "copyFromLibrary", detailNum, libraryViewName,
+                                              status = "fallback", reason = copyResult["error"]?.ToString() });
+
+                                using (var tx = new Transaction(doc, "Recreate Placeholder Detail View"))
+                                {
+                                    tx.Start();
+                                    var vft = new FilteredElementCollector(doc)
+                                        .OfClass(typeof(ViewFamilyType))
+                                        .Cast<ViewFamilyType>()
+                                        .FirstOrDefault(t => t.ViewFamily == ViewFamily.Drafting);
+                                    if (vft != null)
+                                    {
+                                        draftView = ViewDrafting.Create(doc, vft.Id);
+                                        try { draftView.Name = targetViewName; } catch { }
+                                        draftView.Scale = scale;
+                                        existingDraftingViews[targetViewName] = draftView;
+                                    }
+                                    tx.Commit();
+                                }
+                            }
+                        }
+                    }
+
+                    // Draw layer stack if layers present and library copy didn't run
+                    if (layers.Count > 0 && !viewAlreadyExisted && !drawnFromLibrary && draftView != null)
                     {
                         // Resolve hatch names — substitute closest available name if needed
                         var resolvedLayers = ResolveHatchNames(layers, allHatchTypes, hatchNames);
