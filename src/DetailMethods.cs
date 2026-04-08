@@ -6978,7 +6978,8 @@ namespace RevitMCPBridge2026
                     foreach (JObject layer in layers)
                     {
                         string layerName = layer["name"]?.ToString() ?? "Unknown";
-                        double thickness = layer["thickness"]?.ToObject<double>() ?? 0;
+                        // ToObject<double?>() handles JSON null safely; ToObject<double>() throws on JNull
+                        double thickness = layer["thickness"]?.ToObject<double?>() ?? 0;
                         // Auto-convert inches → feet if value looks like inches (no wall layer is > 2 ft thick)
                         bool thicknessAutoConverted = false;
                         if (thickness > 2.0)
