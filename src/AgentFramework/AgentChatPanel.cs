@@ -39,6 +39,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private string _apiKey;
         private string _bimMonkeyApiKey;
         private string _selectedModel;
+        private string _firmStandardsDoc;   // fetched from Railway on init, injected into every prompt
         private bool _isProcessing;
 
         // Available models
@@ -1031,6 +1032,38 @@ namespace RevitMCPBridge2026.AgentFramework
             });
 
             _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
+
+            // Fetch firm standards in the background — injected into every prompt once loaded
+            if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
+                _ = FetchFirmStandardsAsync();
+        }
+
+        private async Task FetchFirmStandardsAsync()
+        {
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    client.Timeout = TimeSpan.FromSeconds(10);
+                    var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/firms/standards");
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        var body = await resp.Content.ReadAsStringAsync();
+                        var obj  = JObject.Parse(body);
+                        var doc  = obj["doc"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(doc))
+                        {
+                            _firmStandardsDoc = doc;
+                            System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Firm standards loaded ({doc.Length} chars)");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Failed to load firm standards: {ex.Message}");
+            }
         }
 
         private string GetModelDisplayName(string modelId)
@@ -2283,7 +2316,11 @@ namespace RevitMCPBridge2026.AgentFramework
                 // Agent can use getKnowledgeFile tool to load additional files on demand
                 var knowledgeBase = LoadCoreKnowledge();
 
-                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.
+                var firmBlock = string.IsNullOrWhiteSpace(_firmStandardsDoc)
+                    ? ""
+                    : $"\n\nFIRM STANDARDS (learned from this firm's history — follow these closely):\n{_firmStandardsDoc}\n";
+
+                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}
 
 CURRENT PROJECT: {projectName}
 
