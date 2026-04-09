@@ -623,6 +623,21 @@ namespace RevitMCPBridge
                         int scale = 0;
                         try { scale = v.Scale; } catch { }
 
+                        string discipline = null;
+                        try { discipline = v.Discipline.ToString(); } catch { }
+
+                        string phaseName = null;
+                        try
+                        {
+                            var phaseParam = v.get_Parameter(BuiltInParameter.VIEW_PHASE);
+                            if (phaseParam != null)
+                            {
+                                var phaseElem = doc.GetElement(phaseParam.AsElementId()) as Phase;
+                                phaseName = phaseElem?.Name;
+                            }
+                        }
+                        catch { }
+
                         string sheetNumber = null;
                         bool isOnSheet = false;
                         if (includeSheetInfo && viewToSheetMap.TryGetValue(v.Id, out string sn))
@@ -639,6 +654,8 @@ namespace RevitMCPBridge
                             name = v.Name ?? "",           // Alias
                             viewName = v.Name ?? "",
                             viewType = v.ViewType.ToString(),
+                            discipline = discipline,
+                            phase = phaseName,
                             isTemplate = v.IsTemplate,
                             scale = scale,
                             isOnSheet = isOnSheet,
