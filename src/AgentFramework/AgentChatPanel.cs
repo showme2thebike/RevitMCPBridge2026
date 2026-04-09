@@ -37,15 +37,16 @@ namespace RevitMCPBridge2026.AgentFramework
         private AgentCore _agent;
         private UIApplication _uiApp;
         private string _apiKey;
+        private string _bimMonkeyApiKey;
         private string _selectedModel;
         private bool _isProcessing;
 
-        // Available models with pricing info
+        // Available models
         private static readonly Dictionary<string, string> AvailableModels = new Dictionary<string, string>
         {
-            { "claude-opus-4-5-20251101", "Opus 4.5 - Smartest ($15/$75 per 1M tokens)" },
-            { "claude-sonnet-4-20250514", "Sonnet 4 - Balanced ($3/$15 per 1M tokens)" },
-            { "claude-3-5-haiku-20241022", "Haiku 3.5 - Cheapest ($0.80/$4 per 1M tokens)" }
+            { "claude-sonnet-4-6",          "Sonnet 4.6 - Recommended ($3/$15 per 1M tokens)" },
+            { "claude-opus-4-6",            "Opus 4.6 - Smartest ($15/$75 per 1M tokens)" },
+            { "claude-haiku-4-5-20251001",  "Haiku 4.5 - Fast & cheap ($0.80/$4 per 1M tokens)" },
         };
 
         // Persistent MCP connection
@@ -348,7 +349,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private static readonly string ConfigDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops");
         private static readonly string ConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "config.json");
         private static readonly string SessionPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "session.json");
-        private static readonly string DefaultModel = "claude-sonnet-4-20250514"; // Default to Sonnet for cost-effectiveness
+        private static readonly string DefaultModel = "claude-sonnet-4-6";
 
         // Session data for persistence
         private List<ChatMessage> _sessionMessages = new List<ChatMessage>();
@@ -356,11 +357,13 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private void LoadConfig()
         {
-            // Try environment variable for API key
+            // Anthropic key: env var takes precedence, then config file
             _apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
             _selectedModel = DefaultModel;
 
-            // Try config file
+            // BIM Monkey key: read from installer-written CLAUDE.md, then config file
+            _bimMonkeyApiKey = ReadBimMonkeyKeyFromClaudeMd();
+
             try
             {
                 if (File.Exists(ConfigPath))
@@ -369,21 +372,42 @@ namespace RevitMCPBridge2026.AgentFramework
 
                     var savedKey = config["anthropic_api_key"]?.ToString();
                     if (!string.IsNullOrEmpty(savedKey))
-                    {
                         _apiKey = savedKey;
-                    }
+
+                    var savedBmKey = config["bim_monkey_api_key"]?.ToString();
+                    if (!string.IsNullOrEmpty(savedBmKey))
+                        _bimMonkeyApiKey = savedBmKey;
 
                     var savedModel = config["selected_model"]?.ToString();
                     if (!string.IsNullOrEmpty(savedModel) && AvailableModels.ContainsKey(savedModel))
-                    {
                         _selectedModel = savedModel;
-                    }
                 }
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error loading config: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Read BIM_MONKEY_API_KEY from the installer-written CLAUDE.md in Documents\BIM Monkey\
+        /// </summary>
+        private string ReadBimMonkeyKeyFromClaudeMd()
+        {
+            try
+            {
+                var claudeMdPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                    "BIM Monkey", "CLAUDE.md");
+                if (!File.Exists(claudeMdPath)) return null;
+                foreach (var line in File.ReadAllLines(claudeMdPath))
+                {
+                    if (line.StartsWith("BIM_MONKEY_API_KEY="))
+                        return line.Substring("BIM_MONKEY_API_KEY=".Length).Trim();
+                }
+            }
+            catch { }
+            return null;
         }
 
         private void SaveConfig()
@@ -416,6 +440,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
                 // Update settings
                 config["anthropic_api_key"] = _apiKey;
+                config["bim_monkey_api_key"] = _bimMonkeyApiKey;
                 config["selected_model"] = _selectedModel;
                 config["last_updated"] = DateTime.Now.ToString("o");
 
@@ -738,9 +763,9 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             var dialog = new Window
             {
-                Title = "AI Assistant Settings",
+                Title = "BIM Monkey AI Settings",
                 Width = 500,
-                Height = 320,
+                Height = 430,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Owner = this,
                 Background = new SolidColorBrush(Color.FromRgb(30, 30, 30))
@@ -748,10 +773,10 @@ namespace RevitMCPBridge2026.AgentFramework
 
             var stack = new StackPanel { Margin = new Thickness(20) };
 
-            // API Key section
+            // Anthropic API Key section
             stack.Children.Add(new TextBlock
             {
-                Text = "Anthropic API Key:",
+                Text = "Anthropic API Key (claude.ai account):",
                 Foreground = Brushes.White,
                 Margin = new Thickness(0, 0, 0, 5)
             });
@@ -765,6 +790,33 @@ namespace RevitMCPBridge2026.AgentFramework
                 Text = _apiKey ?? ""
             };
             stack.Children.Add(apiKeyBox);
+
+            // BIM Monkey API Key section
+            stack.Children.Add(new TextBlock
+            {
+                Text = "BIM Monkey API Key (from your installer):",
+                Foreground = Brushes.White,
+                Margin = new Thickness(0, 15, 0, 5)
+            });
+
+            var bmKeyBox = new System.Windows.Controls.TextBox
+            {
+                Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
+                Foreground = Brushes.White,
+                Padding = new Thickness(10),
+                FontSize = 14,
+                Text = _bimMonkeyApiKey ?? ""
+            };
+            stack.Children.Add(bmKeyBox);
+
+            stack.Children.Add(new TextBlock
+            {
+                Text = "BIM Monkey key is pre-filled from your installer. Only change if re-subscribing.",
+                Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
+                FontSize = 11,
+                Margin = new Thickness(0, 4, 0, 0),
+                TextWrapping = TextWrapping.Wrap
+            });
 
             // Model selection section
             stack.Children.Add(new TextBlock
@@ -809,11 +861,10 @@ namespace RevitMCPBridge2026.AgentFramework
             button.Click += (s, e) =>
             {
                 _apiKey = apiKeyBox.Text.Trim();
+                _bimMonkeyApiKey = bmKeyBox.Text.Trim();
                 var selectedItem = modelCombo.SelectedItem as System.Windows.Controls.ComboBoxItem;
                 if (selectedItem != null)
-                {
                     _selectedModel = selectedItem.Tag.ToString();
-                }
 
                 if (!string.IsNullOrEmpty(_apiKey))
                 {
@@ -939,7 +990,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private void InitializeAgent()
         {
-            _agent = new AgentCore(_apiKey, _selectedModel);
+            _agent = new AgentCore(_apiKey, _selectedModel, _bimMonkeyApiKey);
             _agent.RegisterTools(ToolDefinitions.GetAllTools());
             _agent.SetToolExecutor(ExecuteMCPMethodAsync);
 
@@ -958,17 +1009,10 @@ namespace RevitMCPBridge2026.AgentFramework
             // LOCAL MODEL event - show when qwen2.5:7b is processing
             _agent.OnLocalModel += (msg) => Dispatcher.Invoke(() => {
                 UpdateProgress(msg);
-                // Update status to show local model is active
                 if (msg.Contains("Processing with local"))
-                {
                     _statusText.Text = "Using Local (qwen2.5:7b)";
-                }
                 else if (msg.Contains("using Anthropic"))
-                {
-                    var modelName = _selectedModel.Contains("opus") ? "Opus 4.5" :
-                                   _selectedModel.Contains("sonnet") ? "Sonnet 4" : "Haiku 3.5";
-                    _statusText.Text = $"Connected ({modelName})";
-                }
+                    _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
             });
 
             // VERIFICATION event - show if commands actually worked
@@ -986,10 +1030,15 @@ namespace RevitMCPBridge2026.AgentFramework
                 }
             });
 
-            // Show which model is active (with local model indicator)
-            var modelName = _selectedModel.Contains("opus") ? "Opus 4.5" :
-                           _selectedModel.Contains("sonnet") ? "Sonnet 4" : "Haiku 3.5";
-            _statusText.Text = $"Connected ({modelName} + Local)";
+            _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
+        }
+
+        private string GetModelDisplayName(string modelId)
+        {
+            if (modelId.Contains("opus"))   return "Opus 4.6";
+            if (modelId.Contains("sonnet")) return "Sonnet 4.6";
+            if (modelId.Contains("haiku"))  return "Haiku 4.5";
+            return modelId;
         }
 
         private void EnsureMCPConnection()
@@ -1025,6 +1074,88 @@ namespace RevitMCPBridge2026.AgentFramework
             }
         }
 
+        /// <summary>
+        /// Launch bimmonkey_run.py to start a generation run (same as clicking Start Generation).
+        /// Optional scope parameter (e.g. "bathrooms") for targeted generation — future use.
+        /// </summary>
+        private string HandleTriggerGeneration(JObject parameters)
+        {
+            try
+            {
+                // Find bimmonkey_run.py relative to the known Documents folder
+                var scriptPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                    "BIM Monkey", "scripts", "bimmonkey_run.py");
+
+                // Fallback: look next to the DLL
+                if (!File.Exists(scriptPath))
+                {
+                    var asmDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                    scriptPath = Path.Combine(asmDir, "bimmonkey_run.py");
+                }
+
+                if (!File.Exists(scriptPath))
+                    return JsonConvert.SerializeObject(new { success = false, error = $"bimmonkey_run.py not found at {scriptPath}" });
+
+                var scope = parameters?["scope"]?.ToString() ?? "";
+                var args = string.IsNullOrEmpty(scope) ? $"\"{scriptPath}\"" : $"\"{scriptPath}\" --scope \"{scope}\"";
+
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "python",
+                    Arguments = args,
+                    UseShellExecute = true,
+                    CreateNoWindow = false
+                });
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    message = string.IsNullOrEmpty(scope)
+                        ? "Generation started — check the terminal window for progress."
+                        : $"Scoped generation started (scope: {scope}) — check the terminal for progress."
+                });
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { success = false, error = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Query the BIM Monkey approved library on Railway using the firm's API key.
+        /// </summary>
+        private async Task<string> HandleQueryLibraryAsync(JObject parameters)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+                return JsonConvert.SerializeObject(new { success = false, error = "BIM Monkey API key not configured. Open Settings and enter your key." });
+
+            try
+            {
+                var endpoint = parameters?["endpoint"]?.ToString() ?? "sheets";
+                var projectName = parameters?["projectName"]?.ToString();
+
+                var url = string.IsNullOrEmpty(projectName)
+                    ? $"https://bimmonkey-production.up.railway.app/api/training/{endpoint}"
+                    : $"https://bimmonkey-production.up.railway.app/api/training/project/{Uri.EscapeDataString(projectName)}/{endpoint}";
+
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    client.Timeout = TimeSpan.FromSeconds(15);
+                    var resp = await client.GetAsync(url);
+                    var body = await resp.Content.ReadAsStringAsync();
+                    if (!resp.IsSuccessStatusCode)
+                        return JsonConvert.SerializeObject(new { success = false, error = $"Library API returned {(int)resp.StatusCode}: {body}" });
+                    return JsonConvert.SerializeObject(new { success = true, data = JToken.Parse(body) });
+                }
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { success = false, error = ex.Message });
+            }
+        }
+
         private async Task<string> ExecuteMCPMethodAsync(string methodName, JObject parameters)
         {
             // Handle local tools (knowledge base) - don't need MCP
@@ -1057,6 +1188,18 @@ namespace RevitMCPBridge2026.AgentFramework
                     ["params"] = parameters
                 };
                 return await ExecuteMCPWithRetryAsync("analyzeView", parameters);
+            }
+
+            // BIM Monkey: trigger a generation run (launches bimmonkey_run.py)
+            if (methodName == "triggerGeneration")
+            {
+                return await Task.Run(() => HandleTriggerGeneration(parameters));
+            }
+
+            // BIM Monkey: query the approved library on Railway
+            if (methodName == "queryLibrary")
+            {
+                return await HandleQueryLibraryAsync(parameters);
             }
 
             // Handle file operation tools locally

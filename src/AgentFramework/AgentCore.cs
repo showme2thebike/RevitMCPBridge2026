@@ -52,10 +52,10 @@ namespace RevitMCPBridge2026.AgentFramework
         // Workflow planner - handles multi-step requests and project context
         private WorkflowPlanner _workflowPlanner;
 
-        // COST PROTECTION - Prevents expensive models during testing
+        // Model tier control (can be used to restrict cost if needed)
         public enum ModelTier { LocalOnly, LocalPlusHaiku, IncludeSonnet, IncludeOpus }
-        private ModelTier _maxAllowedTier = ModelTier.LocalPlusHaiku; // DEFAULT: Only free + cheap
-        private bool _budgetMode = true; // When true, blocks expensive models
+        private ModelTier _maxAllowedTier = ModelTier.IncludeOpus; // Allow all models
+        private bool _budgetMode = false;
 
         // Events for UI updates
         public event Action<string> OnThinking;
@@ -67,11 +67,13 @@ namespace RevitMCPBridge2026.AgentFramework
         public event Action<string> OnLocalModel; // New event for local model usage
         public event Action<VerificationResult> OnVerification; // Result verification events
 
-        // Using Claude Opus 4.5 for maximum intelligence (same as Claude Code)
-        public AgentCore(string apiKey, string model = "claude-opus-4-5-20251101")
+        private string _bimMonkeyApiKey;
+
+        public AgentCore(string apiKey, string model = "claude-sonnet-4-6", string bimMonkeyApiKey = null)
         {
             _apiKey = apiKey;
             _model = model;
+            _bimMonkeyApiKey = bimMonkeyApiKey;
             _tools = new List<ToolDefinition>();
             _conversationHistory = new List<Message>();
 
@@ -263,16 +265,11 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             switch (_maxAllowedTier)
             {
-                case ModelTier.LocalOnly:
-                    return null; // Will force local-only mode
-                case ModelTier.LocalPlusHaiku:
-                    return "claude-3-5-haiku-20241022";
-                case ModelTier.IncludeSonnet:
-                    return "claude-sonnet-4-20250514";
-                case ModelTier.IncludeOpus:
-                    return "claude-opus-4-5-20251101";
-                default:
-                    return "claude-3-5-haiku-20241022";
+                case ModelTier.LocalOnly:      return null;
+                case ModelTier.LocalPlusHaiku: return "claude-haiku-4-5-20251001";
+                case ModelTier.IncludeSonnet:  return "claude-sonnet-4-6";
+                case ModelTier.IncludeOpus:    return "claude-opus-4-6";
+                default:                       return "claude-haiku-4-5-20251001";
             }
         }
 
@@ -833,10 +830,27 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private string GetDefaultSystemPrompt()
         {
-            return @"You are an expert Revit automation assistant integrated directly into Autodesk Revit.
-You have access to powerful tools that let you read and modify the Revit model.
-Your capabilities include reading project information, placing elements, spatial intelligence,
-and organizing sheets and views. Be concise but informative.";
+            return @"You are BIM Monkey — an on-call BIM manager and Revit expert embedded directly inside Autodesk Revit.
+
+You have two modes:
+
+1. ADVISOR — Answer questions about code compliance, drawing standards, Revit workflow, detailing, specifications, and best practices. Be direct and specific. When Barrett asks a code question, give the actual code citation and the practical answer, not a generic overview.
+
+2. OPERATOR — Execute tasks in the active Revit model using the tools available to you. You can read any model data (rooms, views, walls, levels, schedules, conditions), place and modify elements, manage sheets and views, trigger generation runs, and query the firm's approved drawing library.
+
+Key capabilities:
+- Call ANY of the 700+ Revit MCP methods via callMCPMethod (use listAllMethods to discover them)
+- Trigger a full or scoped CD generation run via triggerGeneration
+- Query the firm's approved drawing library via queryLibrary
+- Run code compliance checks by calling detectBuildingConditions then reasoning about the results
+- Identify missing details by comparing model conditions against the approved library
+
+Rules:
+- Always call the model first before answering questions about the current project (use getModelInfo, getRooms, getViews, detectBuildingConditions as needed)
+- Be concise. Barrett is a licensed architect — skip preamble, give the answer
+- When executing multi-step tasks, narrate what you're doing step by step
+- If a task would modify the model, confirm scope with Barrett before proceeding
+- Sheet names always end with ' *' when created by BIM Monkey";
         }
     }
 

@@ -16,7 +16,10 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             var tools = new List<ToolDefinition>();
 
-            // UNIVERSAL ACCESS: These tools give access to ALL 437+ MCP methods
+            // BIM MONKEY: Generation and library tools
+            tools.AddRange(GetBimMonkeyTools());
+
+            // UNIVERSAL ACCESS: These tools give access to ALL 700+ MCP methods
             tools.AddRange(GetUniversalTools());
 
             // FILE OPERATIONS: Read, write, browse files like Claude Code
@@ -35,6 +38,55 @@ namespace RevitMCPBridge2026.AgentFramework
 
             return tools;
         }
+
+        #region BIM Monkey Tools
+
+        public static List<ToolDefinition> GetBimMonkeyTools()
+        {
+            return new List<ToolDefinition>
+            {
+                new ToolDefinition
+                {
+                    Name = "triggerGeneration",
+                    Description = @"Launch a BIM Monkey CD generation run for the active Revit model.
+Use this when Barrett asks to generate construction documents, create sheets, or run BIM Monkey.
+Optionally pass a scope to limit generation to a specific part of the project.
+Examples of scope: 'bathrooms', 'wall sections', 'elevations', 'schedules'.
+Leave scope empty for a full CD set run (same as clicking Start Generation in the ribbon).
+Returns immediately — the generation runs in a separate terminal window.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            scope = new { type = "string", description = "Optional: limit generation to a specific scope (e.g. 'bathrooms', 'wall sections'). Leave empty for full run." }
+                        },
+                        required = new string[] { }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "queryLibrary",
+                    Description = @"Query the firm's approved BIM Monkey drawing library on the server.
+Use this to look up approved reference sheets, check what drawings exist for a project, or find examples for gap analysis.
+Requires the BIM Monkey API key (set in Settings).
+Common endpoints: 'sheets' (list all approved sheets), 'projects' (list all library projects).
+Pass projectName to filter to a specific project (e.g. '24 02 1710 NE 70th').",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            endpoint = new { type = "string", description = "API endpoint to call: 'sheets', 'projects'. Default: 'sheets'." },
+                            projectName = new { type = "string", description = "Optional project name to filter results (e.g. '24 02 1710 NE 70th')." }
+                        },
+                        required = new string[] { }
+                    }
+                }
+            };
+        }
+
+        #endregion
 
         #region Universal MCP Access Tools
 
