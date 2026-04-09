@@ -1683,5 +1683,68 @@ namespace RevitMCPBridge
                 return ResponseBuilder.FromException(ex).Build();
             }
         }
+
+        [MCPMethod("tagAllFloorPlanViews", Category = "Tagging", Description = "Tags rooms, doors, and windows in every non-template floor plan view in the active document")]
+        public static string TagAllFloorPlanViews(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var sw  = System.Diagnostics.Stopwatch.StartNew();
+                var tagTypes = (parameters["tagTypes"]?.ToObject<List<string>>()
+                                ?? new List<string> { "rooms", "doors", "windows" })
+                               .Select(t => t.ToLowerInvariant()).ToList();
+                bool skipAlreadyTagged = parameters["skipAlreadyTagged"]?.ToObject<bool>() ?? true;
+                var tagLocation = parameters["tagLocation"]?.ToString() ?? "center";
+                bool doRooms   = tagTypes.Contains("rooms");
+                bool doDoors   = tagTypes.Contains("doors");
+                bool doWindows = tagTypes.Contains("windows");
+
+                // All non-template floor plan views
+                var floorPlanViews = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewPlan))
+                    .Cast<ViewPlan>()
+                    .Where(v => !v.IsTemplate && v.ViewType == ViewType.FloorPlan)
+                    .ToList();
+
+                var viewResults = new List<object>();
+                int totalTagged = 0, totalSkipped = 0, totalFailed = 0;
+
+                foreach (var view in floorPlanViews)
+                {
+                    int vTagged = 0, vSkipped = 0, vFailed = 0;
+                    using (var trans = new Transaction(doc, $"BM: Tag {view.Name}"))
+                    {
+                        trans.Start();
+                        var fo = trans.GetFailureHandlingOptions();
+                        fo.SetFailuresPreprocessor(new WarningSwallower());
+                        trans.SetFailureHandlingOptions(fo);
+                        if (doRooms)   TagRoomsInView  (doc, view, tagLocation, skipAlreadyTagged, ref vTagged, ref vSkipped, ref vFailed);
+                        if (doDoors)   TagDoorsInView  (doc, view, skipAlreadyTagged, ref vTagged, ref vSkipped, ref vFailed);
+                        if (doWindows) TagWindowsInView(doc, view, skipAlreadyTagged, ref vTagged, ref vSkipped, ref vFailed);
+                        trans.Commit();
+                    }
+                    totalTagged += vTagged; totalSkipped += vSkipped; totalFailed += vFailed;
+                    viewResults.Add(new { viewId = (long)view.Id.Value, viewName = view.Name, tagged = vTagged, skipped = vSkipped, failed = vFailed });
+                }
+
+                sw.Stop();
+                Log.Information($"tagAllFloorPlanViews: {floorPlanViews.Count} views, {totalTagged} tagged");
+                return JsonConvert.SerializeObject(new
+                {
+                    success        = true,
+                    viewsProcessed = floorPlanViews.Count,
+                    totalTagged, totalSkipped, totalFailed,
+                    tagTypes, tagLocation,
+                    executionTimeMs = sw.ElapsedMilliseconds,
+                    views = viewResults,
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error in tagAllFloorPlanViews");
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
     }
 }

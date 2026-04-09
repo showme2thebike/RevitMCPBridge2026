@@ -1825,6 +1825,78 @@ namespace RevitMCPBridge
         }
 
         /// <summary>
+        /// Audits section and elevation view placement.
+        /// Returns which views are placed (with sheet + detail number) and which are not.
+        /// Used for post-generation callout validation — unplaced views show blank callout bubbles on floor plans.
+        /// </summary>
+        [MCPMethod("auditCalloutPlacement", Category = "Sheet", Description = "Audits section/elevation view placement: returns unplaced views (callout shows blanks) and placed views with their actual sheet + detail number")]
+        public static string AuditCalloutPlacement(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                // Build: viewId → (sheetNumber, detailNumber) from all placed viewports
+                var viewToSheet = new Dictionary<long, (string sheetNumber, string sheetName, string detailNumber)>();
+                foreach (var vp in new FilteredElementCollector(doc)
+                    .OfClass(typeof(Viewport))
+                    .Cast<Viewport>())
+                {
+                    var sheet = doc.GetElement(vp.SheetId) as ViewSheet;
+                    if (sheet == null) continue;
+                    var detailNum = vp.get_Parameter(BuiltInParameter.VIEWPORT_DETAIL_NUMBER)?.AsString() ?? "";
+                    viewToSheet[(long)vp.ViewId.Value] = (sheet.SheetNumber, sheet.Name, detailNum);
+                }
+
+                var unplaced = new List<object>();
+                var placed   = new List<object>();
+
+                foreach (var view in new FilteredElementCollector(doc)
+                    .OfClass(typeof(View))
+                    .Cast<View>()
+                    .Where(v => !v.IsTemplate
+                        && (v.ViewType == ViewType.Section
+                         || v.ViewType == ViewType.Elevation
+                         || v.ViewType == ViewType.Detail)))
+                {
+                    long id = (long)view.Id.Value;
+                    if (viewToSheet.TryGetValue(id, out var loc))
+                    {
+                        placed.Add(new
+                        {
+                            viewId       = id,
+                            name         = view.Name,
+                            viewType     = view.ViewType.ToString(),
+                            sheetNumber  = loc.sheetNumber,
+                            sheetName    = loc.sheetName,
+                            detailNumber = loc.detailNumber,
+                        });
+                    }
+                    else
+                    {
+                        unplaced.Add(new
+                        {
+                            viewId   = id,
+                            name     = view.Name,
+                            viewType = view.ViewType.ToString(),
+                        });
+                    }
+                }
+
+                return ResponseBuilder.Success()
+                    .With("unplacedCount", unplaced.Count)
+                    .With("placedCount",   placed.Count)
+                    .With("unplaced",      unplaced)
+                    .With("placed",        placed)
+                    .Build();
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
         /// Analyze sheet layout for overlaps and boundary issues
         /// </summary>
         [MCPMethod("analyzeSheetLayout", Category = "Sheet", Description = "Analyze a sheet layout for viewport overlaps and boundary issues")]
@@ -5902,6 +5974,515 @@ namespace RevitMCPBridge
             {
                 return ResponseBuilder.FromException(ex).Build();
             }
+        }
+
+        #endregion
+
+        #region BIM Monkey sheet cleanup
+
+        [MCPMethod("deleteBimMonkeySheets", Category = "Sheet",
+            Description = "Delete all BIM Monkey generated sheets (name ends with ' *') and their viewports/schedule instances. " +
+                          "Call this at the start of a fresh generation run to clear previous output before creating new sheets.")]
+        public static string DeleteBimMonkeySheets(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                var bmSheets = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewSheet))
+                    .Cast<ViewSheet>()
+                    .Where(s => s.Name.EndsWith(" *"))
+                    .ToList();
+
+                if (bmSheets.Count == 0)
+                    return ResponseBuilder.Success()
+                        .With("deleted", 0)
+                        .WithMessage("No BIM Monkey sheets found — nothing to delete.")
+                        .Build();
+
+                var toDelete = new List<ElementId>();
+                foreach (var sheet in bmSheets)
+                {
+                    // Collect viewports on this sheet
+                    toDelete.AddRange(
+                        new FilteredElementCollector(doc, sheet.Id)
+                            .OfClass(typeof(Viewport))
+                            .ToElementIds()
+                    );
+                    // Collect schedule sheet instances on this sheet
+                    toDelete.AddRange(
+                        new FilteredElementCollector(doc, sheet.Id)
+                            .OfClass(typeof(ScheduleSheetInstance))
+                            .ToElementIds()
+                    );
+                    toDelete.Add(sheet.Id);
+                }
+
+                // Deduplicate
+                toDelete = toDelete.Distinct().ToList();
+
+                int deleted = 0;
+                using (var tx = new Transaction(doc, "BM: Delete Previous Generation Sheets"))
+                {
+                    var fho = tx.GetFailureHandlingOptions();
+                    fho.SetFailuresPreprocessor(new WarningSwallower());
+                    tx.SetFailureHandlingOptions(fho);
+                    tx.Start();
+
+                    var result = doc.Delete(toDelete);
+                    deleted = result?.Count ?? toDelete.Count;
+
+                    tx.Commit();
+                }
+
+                return ResponseBuilder.Success()
+                    .With("deleted", bmSheets.Count)
+                    .With("elementsRemoved", deleted)
+                    .WithMessage($"Deleted {bmSheets.Count} BIM Monkey sheet(s) and {deleted} total elements.")
+                    .Build();
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        #endregion
+
+        #region PNG export for quality review
+
+        /// <summary>
+        /// Export all BIM Monkey generated sheets (name ends with " *") to individual PNG files.
+        /// Each sheet gets its own file: "{SheetNumber} - {SheetName}.png"
+        /// Revit 2026 appends " - Sheet - {Name}" to the FilePath prefix, so we use a per-sheet
+        /// prefix and then rename to the canonical clean format.
+        /// </summary>
+        [MCPMethod("exportBimMonkeySheetsToPNG", Category = "Sheet",
+            Description = "Export all BIM Monkey generated sheets to PNG files in the specified folder. " +
+                          "Named '{SheetNumber} - {SheetName}.png'. Used after generation for quality review.")]
+        public static string ExportBimMonkeySheetsToPNG(UIApplication uiApp, JObject parameters)
+        {
+            // Save original app background colour before the try block so the catch can restore it.
+            // Application.BackgroundColor (Revit 2016+) is the session-level background for all
+            // model views — the cleanest native approach to getting white-background exports without
+            // any per-view API manipulation or post-processing.
+            Color origBackground = null;
+            try { origBackground = uiApp.Application.BackgroundColor; } catch { }
+
+            try
+            {
+                uiApp.Application.BackgroundColor = new Color(255, 255, 255);
+
+                var doc         = uiApp.ActiveUIDocument.Document;
+                var outputFolder = parameters["outputFolder"]?.ToString();
+                var dpi         = parameters["dpi"]?.ToObject<int>() ?? 150;
+                var pixelSize   = parameters["pixelSize"]?.ToObject<int>() ?? 2048;
+
+                if (string.IsNullOrEmpty(outputFolder))
+                    return ResponseBuilder.Error("outputFolder is required").Build();
+
+                System.IO.Directory.CreateDirectory(outputFolder);
+
+                var bmSheets = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewSheet))
+                    .Cast<ViewSheet>()
+                    .Where(s => s.Name.EndsWith(" *") && s.CanBePrinted)
+                    .OrderBy(s => s.SheetNumber)
+                    .ToList();
+
+                if (!bmSheets.Any())
+                    return ResponseBuilder.Success()
+                        .With("exportedCount", 0)
+                        .With("outputFolder", outputFolder)
+                        .With("sheets", new List<object>())
+                        .WithMessage("No BIM Monkey sheets found to export")
+                        .Build();
+
+                var imageResolution = dpi >= 300 ? ImageResolution.DPI_300
+                                    : dpi >= 150 ? ImageResolution.DPI_150
+                                    : ImageResolution.DPI_72;
+
+                var sheetResults  = new List<object>();
+                int exportedCount = 0;
+
+                foreach (var sheet in bmSheets)
+                {
+                    var sheetNum  = sheet.SheetNumber;
+                    // Strip " *" suffix for display and file naming
+                    var sheetName = sheet.Name.Length > 2
+                        ? sheet.Name.Substring(0, sheet.Name.Length - 2).Trim()
+                        : sheet.Name.Trim();
+
+                    // Build a clean target filename
+                    var cleanBase = $"{sheetNum} - {sheetName}";
+                    foreach (var c in System.IO.Path.GetInvalidFileNameChars())
+                        cleanBase = cleanBase.Replace(c, '_');
+                    var finalPath = System.IO.Path.Combine(outputFolder, cleanBase + ".png");
+
+                    // If already exported (re-run), skip
+                    if (System.IO.File.Exists(finalPath))
+                    {
+                        sheetResults.Add(new { sheetNumber = sheetNum, sheetName, pngFile = cleanBase + ".png", status = "already_exists" });
+                        exportedCount++;
+                        continue;
+                    }
+
+                    try
+                    {
+                        // Use a GUID-based prefix so Revit can't misinterpret dots in sheet numbers
+                        // (e.g. "A4.01" → Revit treats ".01" as extension → glob never matches).
+                        var tmpId  = System.Guid.NewGuid().ToString("N").Substring(0, 8);
+                        var prefix = System.IO.Path.Combine(outputFolder, $"_bm_{tmpId}");
+
+                        var opts = new ImageExportOptions
+                        {
+                            ExportRange           = ExportRange.SetOfViews,
+                            FilePath              = prefix,
+                            HLRandWFViewsFileType = ImageFileType.PNG,
+                            ShadowViewsFileType   = ImageFileType.PNG,
+                            ImageResolution       = imageResolution,
+                            ZoomType              = ZoomFitType.FitToPage,
+                            FitDirection          = FitDirectionType.Horizontal,
+                            PixelSize             = pixelSize,
+                            ShouldCreateWebSite   = false,
+                        };
+                        opts.SetViewsAndSheets(new List<ElementId> { sheet.Id });
+                        doc.ExportImage(opts);
+
+                        // Find the file Revit created (matches our prefix)
+                        var safePfx   = System.IO.Path.GetFileName(prefix);
+                        var generated = System.IO.Directory
+                            .GetFiles(outputFolder, safePfx + "*.png")
+                            .FirstOrDefault();
+
+                        if (generated != null)
+                        {
+                            System.IO.File.Move(generated, finalPath);
+                            sheetResults.Add(new { sheetNumber = sheetNum, sheetName, pngFile = cleanBase + ".png", status = "exported" });
+                            exportedCount++;
+                        }
+                        else
+                        {
+                            sheetResults.Add(new { sheetNumber = sheetNum, sheetName, pngFile = "(not found after export)", status = "missing" });
+                        }
+                    }
+                    catch (Exception sheetEx)
+                    {
+                        sheetResults.Add(new { sheetNumber = sheetNum, sheetName, pngFile = "(failed)", status = "error", error = sheetEx.Message });
+                    }
+                }
+
+                return ResponseBuilder.Success()
+                    .With("exportedCount", exportedCount)
+                    .With("totalSheets",   bmSheets.Count)
+                    .With("outputFolder",  outputFolder)
+                    .With("sheets",        sheetResults)
+                    .Build();
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+            finally
+            {
+                if (origBackground != null)
+                    try { uiApp.Application.BackgroundColor = origBackground; } catch { }
+            }
+        }
+
+        /// <summary>
+        /// BFS flood-fill from all 4 corners of a PNG, replacing the contiguous background colour
+        /// (sampled from the top-left pixel) with white.  Works universally across all Revit view
+        /// types (floor plans, elevations, schedules) regardless of the active UI theme.
+        /// Operates directly on the raw BGRA bytes via LockBits + Marshal.Copy — no unsafe code.
+        /// </summary>
+        private static void ReplaceBackgroundWithWhite(string pngPath, int threshold = 35)
+        {
+            try
+            {
+                System.Drawing.Bitmap bmp;
+                using (var fs = System.IO.File.OpenRead(pngPath))
+                    bmp = new System.Drawing.Bitmap(fs);
+
+                int w = bmp.Width, h = bmp.Height;
+                var rect = new System.Drawing.Rectangle(0, 0, w, h);
+                var bits = bmp.LockBits(rect,
+                    System.Drawing.Imaging.ImageLockMode.ReadWrite,
+                    System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+                int stride  = Math.Abs(bits.Stride);
+                int byteLen = stride * h;
+                var px = new byte[byteLen];
+                System.Runtime.InteropServices.Marshal.Copy(bits.Scan0, px, 0, byteLen);
+
+                // Background colour sampled from top-left pixel (bytes in BGRA order)
+                int bgB = px[0], bgG = px[1], bgR = px[2];
+
+                bool[] visited = new bool[w * h];
+                var queue = new Queue<int>(w * h / 4);
+
+                void Enqueue(int x, int y)
+                {
+                    int i = y * w + x;
+                    if (visited[i]) return;
+                    visited[i] = true;
+                    queue.Enqueue(i);
+                }
+                Enqueue(0, 0);        Enqueue(w - 1, 0);
+                Enqueue(0, h - 1);   Enqueue(w - 1, h - 1);
+
+                while (queue.Count > 0)
+                {
+                    int idx = queue.Dequeue();
+                    int x   = idx % w, y = idx / w;
+                    int off = y * stride + x * 4;
+                    if (System.Math.Abs(px[off]   - bgB) > threshold ||
+                        System.Math.Abs(px[off+1] - bgG) > threshold ||
+                        System.Math.Abs(px[off+2] - bgR) > threshold) continue;
+
+                    // Set to white (BGRA)
+                    px[off] = 255; px[off+1] = 255; px[off+2] = 255; px[off+3] = 255;
+
+                    if (x > 0)   Enqueue(x - 1, y);
+                    if (x < w-1) Enqueue(x + 1, y);
+                    if (y > 0)   Enqueue(x, y - 1);
+                    if (y < h-1) Enqueue(x, y + 1);
+                }
+
+                System.Runtime.InteropServices.Marshal.Copy(px, 0, bits.Scan0, byteLen);
+                bmp.UnlockBits(bits);
+                bmp.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
+                bmp.Dispose();
+            }
+            catch { } // never fail the export for post-processing errors
+        }
+
+        #endregion
+
+        #region Visual standards
+
+        [MCPMethod("applyVisualStandards", Category = "Sheet",
+            Description = "Apply visual standards to all views on BIM Monkey sheets (* suffix): " +
+                          "auto-match Barrett's View Templates by viewType+scale, set DetailLevel by scale, " +
+                          "set DisplayStyle to HiddenLine. Call once after Phase 1 sheet placement, before export.")]
+        public static string ApplyVisualStandards(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                // ── 1. Index all View Templates by name (upper) ───────────────────────
+                var templatesByName = new FilteredElementCollector(doc)
+                    .OfClass(typeof(View))
+                    .Cast<View>()
+                    .Where(v => v.IsTemplate)
+                    .ToDictionary(v => v.Name.ToUpperInvariant(), v => v);
+
+                // ── 2. Collect all viewports on BM sheets ─────────────────────────────
+                var bmSheets = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewSheet))
+                    .Cast<ViewSheet>()
+                    .Where(s => s.Name.EndsWith(" *"))
+                    .ToList();
+
+                var viewIds = new HashSet<ElementId>();
+                foreach (var sheet in bmSheets)
+                    foreach (var vpId in sheet.GetAllViewports())
+                    {
+                        var vp = doc.GetElement(vpId) as Viewport;
+                        if (vp != null) viewIds.Add(vp.ViewId);
+                    }
+
+                int templatesApplied = 0;
+                int detailLevelsSet  = 0;
+                int displayStylesSet = 0;
+                var log = new System.Collections.Generic.List<string>();
+
+                // ── 3. Match template and apply visual settings ───────────────────────
+                using (var trans = new Transaction(doc, "Apply Visual Standards"))
+                {
+                    trans.Start();
+                    var failOpts = trans.GetFailureHandlingOptions();
+                    failOpts.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failOpts);
+
+                    foreach (var vid in viewIds)
+                    {
+                        var view = doc.GetElement(vid) as View;
+                        if (view == null || view.IsTemplate) continue;
+
+                        // Skip views that already have a template — trust Barrett's explicit assignment
+                        bool hasTemplate = view.ViewTemplateId != null &&
+                                           view.ViewTemplateId != ElementId.InvalidElementId;
+
+                        if (!hasTemplate)
+                        {
+                            // Try to find matching template by viewType + scale
+                            var matched = FindBestTemplate(view, templatesByName);
+                            if (matched != null)
+                            {
+                                try
+                                {
+                                    view.ViewTemplateId = matched.Id;
+                                    templatesApplied++;
+                                    log.Add($"{view.Name} → template '{matched.Name}'");
+                                    continue; // template controls everything — skip manual overrides
+                                }
+                                catch { }
+                            }
+
+                            // No template found — set detail level by scale
+                            try
+                            {
+                                var targetLevel = DetailLevelForScale(view.Scale, view.ViewType);
+                                if (targetLevel.HasValue && view.DetailLevel != targetLevel.Value)
+                                {
+                                    view.DetailLevel = targetLevel.Value;
+                                    detailLevelsSet++;
+                                }
+                            }
+                            catch { }
+                        }
+
+                        // Display style: enforce HiddenLine (enum value 3) for model views
+                        // Use Enum.TryParse since the integer value for HiddenLine varies by Revit version
+                        try
+                        {
+                            if (view.ViewType != ViewType.Legend &&
+                                view.ViewType != ViewType.Schedule &&
+                                view.ViewType != ViewType.DrawingSheet)
+                            {
+                                if (Enum.TryParse<DisplayStyle>("HiddenLine", true, out var hiddenLine))
+                                {
+                                    if (view.DisplayStyle != hiddenLine)
+                                    {
+                                        view.DisplayStyle = hiddenLine;
+                                        displayStylesSet++;
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+
+                    trans.Commit();
+                }
+
+                return ResponseBuilder.Success()
+                    .With("viewsProcessed", viewIds.Count)
+                    .With("templatesApplied", templatesApplied)
+                    .With("detailLevelsSet", detailLevelsSet)
+                    .With("displayStylesSet", displayStylesSet)
+                    .With("log", log)
+                    .Build();
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Match the best View Template for a view based on its ViewType and scale denominator.
+        /// Searches the template index for names containing the expected keywords.
+        /// Priority: exact pattern match > partial match.
+        /// </summary>
+        private static View FindBestTemplate(View view, Dictionary<string, View> byName)
+        {
+            int scale = 0;
+            try { scale = view.Scale; } catch { }
+
+            // Build candidate keyword patterns ordered by specificity
+            var candidates = new System.Collections.Generic.List<string[]>();
+
+            switch (view.ViewType)
+            {
+                case ViewType.FloorPlan:
+                    var planName = (view.Name ?? "").ToUpperInvariant();
+                    if (planName.Contains("RCP") || planName.Contains("REFLECTED") || planName.Contains("CEILING"))
+                    {
+                        candidates.Add(new[] { "RCP" });
+                    }
+                    else if (planName.Contains("ROOF"))
+                    {
+                        candidates.Add(new[] { "ROOF" });
+                        candidates.Add(new[] { "PLAN" });
+                    }
+                    else if (planName.Contains("ENLARG") || planName.Contains("KITCHEN") || planName.Contains("BATH") || scale <= 24)
+                    {
+                        candidates.Add(new[] { "ENLAR" });
+                    }
+                    else
+                    {
+                        // Match scale: 1/4" = denom 48, 1/8" = 96
+                        if (scale <= 48)  candidates.Add(new[] { "PLAN", "1/4" });
+                        if (scale <= 96)  candidates.Add(new[] { "PLAN", "1/8" });
+                        candidates.Add(new[] { "PLAN" });
+                    }
+                    break;
+
+                case ViewType.CeilingPlan:
+                    candidates.Add(new[] { "RCP" });
+                    candidates.Add(new[] { "CEILING" });
+                    break;
+
+                case ViewType.Elevation:
+                    if (scale <= 64)      candidates.Add(new[] { "ELEV", "3/16" });
+                    if (scale <= 96)      candidates.Add(new[] { "ELEV", "1/8" });
+                    candidates.Add(new[] { "ELEV" });
+                    break;
+
+                case ViewType.Section:
+                    if (scale <= 16)
+                    {
+                        candidates.Add(new[] { "WSECT" });
+                        candidates.Add(new[] { "WALL", "SECT" });
+                        candidates.Add(new[] { "WALL" });
+                    }
+                    candidates.Add(new[] { "SECT", "1/4" });
+                    candidates.Add(new[] { "SECT" });
+                    break;
+
+                case ViewType.Detail:
+                case ViewType.DraftingView:
+                    if (scale <= 4)       candidates.Add(new[] { "DETAIL", "3" });
+                    else if (scale <= 12) candidates.Add(new[] { "DETAIL", "1" });
+                    candidates.Add(new[] { "DETAIL" });
+                    break;
+
+                case ViewType.AreaPlan:
+                    candidates.Add(new[] { "AREA" });
+                    break;
+            }
+
+            foreach (var pattern in candidates)
+            {
+                foreach (var kvp in byName)
+                {
+                    if (pattern.All(p => kvp.Key.Contains(p)))
+                        return kvp.Value;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Returns the appropriate DetailLevel for a view based on scale denominator and type.
+        /// CAD Visual Rules §4.2: Coarse (1/16"–1/8"), Medium (3/16"–1/4"), Fine (1/2"+).
+        /// </summary>
+        private static ViewDetailLevel? DetailLevelForScale(int scale, ViewType viewType)
+        {
+            if (viewType == ViewType.Legend || viewType == ViewType.Schedule ||
+                viewType == ViewType.DrawingSheet || viewType == ViewType.ThreeD)
+                return null;
+
+            if (scale == 0) return null;
+
+            if (scale <= 24)  return ViewDetailLevel.Fine;       // 1/2"=1' and larger
+            if (scale <= 64)  return ViewDetailLevel.Medium;     // 3/16"–1/4"
+            if (scale <= 192) return ViewDetailLevel.Coarse;     // 1/8" and smaller
+            return ViewDetailLevel.Coarse;                        // site plan scale
         }
 
         #endregion

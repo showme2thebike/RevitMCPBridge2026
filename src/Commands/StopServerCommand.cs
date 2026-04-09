@@ -24,6 +24,17 @@ namespace RevitMCPBridge.Commands
 
                 server.Stop();
 
+                // Also stop TCP daemon if running
+                try
+                {
+                    if (server.IsDaemonRunning)
+                        server.StopDaemon();
+                }
+                catch (Exception daemonEx)
+                {
+                    Log.Warning(daemonEx, "TCP daemon stop error (non-fatal)");
+                }
+
                 TaskDialog.Show("BIM Monkey", "BIM Monkey server stopped.");
                 Log.Information("MCP Server stopped via UI command");
                 

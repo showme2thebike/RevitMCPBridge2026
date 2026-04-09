@@ -3691,5 +3691,771 @@ namespace RevitMCPBridge2026
 
         #endregion
 
+        #region CD Generation Annotation Helpers
+
+        /// <summary>
+        /// Places a DETAIL CROSS REFERENCES text legend in each floor plan view,
+        /// listing all detail numbers/sheets from the generated plan so users can navigate.
+        /// </summary>
+        [MCPMethod("addDetailCrossReferences", Category = "Annotation", Description = "Places a detail cross-reference legend in all floor plan views, listing every generated detail with its sheet reference")]
+        public static string AddDetailCrossReferences(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc  = uiApp.ActiveUIDocument.Document;
+                var plan = parameters["plan"] as JObject;
+                var detailPlan = plan?["details"] as JArray ?? new JArray();
+
+                if (detailPlan.Count == 0)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = true, message = "No details in plan — nothing to cross-reference", notesPlaced = 0 });
+
+                // Build the legend text
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("DETAIL CROSS REFERENCES");
+                foreach (var d in detailPlan.Cast<JObject>())
+                {
+                    int    num   = d["detailNumber"]?.Value<int>() ?? 0;
+                    string sheet = d["sheetReference"]?.ToString() ?? "?";
+                    string title = d["title"]?.ToString() ?? d["detailType"]?.ToString() ?? "DETAIL";
+                    sb.AppendLine($"{num}/{sheet}  {title.ToUpperInvariant()}");
+                }
+                string legendText = sb.ToString().TrimEnd();
+
+                // Find a TextNoteType (prefer small)
+                var textNoteType = new FilteredElementCollector(doc)
+                    .OfClass(typeof(TextNoteType))
+                    .Cast<TextNoteType>()
+                    .OrderBy(t => Math.Abs(t.get_Parameter(BuiltInParameter.TEXT_SIZE)?.AsDouble() ?? 1.0 - 0.0078)) // ~3/32"
+                    .FirstOrDefault();
+
+                if (textNoteType == null)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = "No TextNoteType found" });
+
+                // Place legend in every non-template floor plan view
+                var floorPlanViews = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewPlan))
+                    .Cast<ViewPlan>()
+                    .Where(v => !v.IsTemplate && v.ViewType == ViewType.FloorPlan)
+                    .ToList();
+
+                int notesPlaced = 0;
+                foreach (var view in floorPlanViews)
+                {
+                    // Position at lower-left of the view's crop box
+                    XYZ origin;
+                    try
+                    {
+                        var crop = view.CropBox;
+                        origin = new XYZ(crop.Min.X + 1.0, crop.Min.Y + 1.0, 0); // 1 ft margin
+                    }
+                    catch
+                    {
+                        origin = XYZ.Zero;
+                    }
+
+                    using (var trans = new Transaction(doc, $"BM: Cross-refs in {view.Name}"))
+                    {
+                        trans.Start();
+                        var opts = new TextNoteOptions(textNoteType.Id)
+                        {
+                            HorizontalAlignment = HorizontalTextAlignment.Left,
+                        };
+                        TextNote.Create(doc, view.Id, origin, legendText, opts);
+                        trans.Commit();
+                        notesPlaced++;
+                    }
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success     = true,
+                    notesPlaced,
+                    viewsTagged = floorPlanViews.Count,
+                    detailCount = detailPlan.Count,
+                });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Makes grid lines visible in all non-template floor plan and section views.
+        /// </summary>
+        [MCPMethod("setGridLinesVisible", Category = "Annotation", Description = "Ensures grid lines are visible in all floor plan and section views")]
+        public static string SetGridLinesVisible(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var gridsCatId = new ElementId(BuiltInCategory.OST_Grids);
+                int updated = 0;
+
+                var views = new FilteredElementCollector(doc)
+                    .OfClass(typeof(View))
+                    .Cast<View>()
+                    .Where(v => !v.IsTemplate && (v.ViewType == ViewType.FloorPlan || v.ViewType == ViewType.Section || v.ViewType == ViewType.Elevation))
+                    .ToList();
+
+                foreach (var view in views)
+                {
+                    try
+                    {
+                        if (view.GetCategoryHidden(gridsCatId))
+                        {
+                            using (var trans = new Transaction(doc, $"BM: Grid visibility {view.Name}"))
+                            {
+                                trans.Start();
+                                view.SetCategoryHidden(gridsCatId, false);
+                                trans.Commit();
+                                updated++;
+                            }
+                        }
+                    }
+                    catch { /* view may not support this category */ }
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = true, viewsUpdated = updated, viewsChecked = views.Count });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Tightens crop regions of floor plan views to the building footprint (element bounding boxes + margin).
+        /// </summary>
+        [MCPMethod("setCropRegionsTight", Category = "Annotation", Description = "Sets floor plan view crop regions tight to the building footprint with a configurable margin")]
+        public static string SetCropRegionsTight(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc    = uiApp.ActiveUIDocument.Document;
+                double marginFt = parameters["marginFt"]?.ToObject<double>() ?? 3.0; // default 3 ft margin
+
+                var floorPlanViews = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewPlan))
+                    .Cast<ViewPlan>()
+                    .Where(v => !v.IsTemplate && v.ViewType == ViewType.FloorPlan && v.CropBoxActive)
+                    .ToList();
+
+                int updated = 0;
+                foreach (var view in floorPlanViews)
+                {
+                    // Collect all model elements and use get_BoundingBox(view) to filter
+                    // to only elements in this view's scope.  Using FilteredElementCollector(doc, view.Id)
+                    // would limit to elements already inside the *current* crop box, preventing expansion.
+                    var elems = new FilteredElementCollector(doc)
+                        .WhereElementIsNotElementType()
+                        .ToList();
+
+                    double minX = double.MaxValue, minY = double.MaxValue;
+                    double maxX = double.MinValue, maxY = double.MinValue;
+                    bool found = false;
+
+                    foreach (var el in elems)
+                    {
+                        try
+                        {
+                            // get_BoundingBox(view) returns null for elements outside this view's level/scope
+                            var bb = el.get_BoundingBox(view);
+                            if (bb == null) continue;
+                            minX = Math.Min(minX, bb.Min.X);
+                            minY = Math.Min(minY, bb.Min.Y);
+                            maxX = Math.Max(maxX, bb.Max.X);
+                            maxY = Math.Max(maxY, bb.Max.Y);
+                            found = true;
+                        }
+                        catch { }
+                    }
+
+                    if (!found) continue;
+
+                    using (var trans = new Transaction(doc, $"BM: Crop {view.Name}"))
+                    {
+                        trans.Start();
+                        var newCrop = new BoundingBoxXYZ
+                        {
+                            Min = new XYZ(minX - marginFt, minY - marginFt, view.CropBox.Min.Z),
+                            Max = new XYZ(maxX + marginFt, maxY + marginFt, view.CropBox.Max.Z),
+                        };
+                        view.CropBox       = newCrop;
+                        view.CropBoxActive = true;
+                        trans.Commit();
+                        updated++;
+                    }
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = true, viewsUpdated = updated, marginFt });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Adds exterior dimension strings to floor plan views.
+        /// Creates a horizontal string (above building, references N-S wall exterior faces)
+        /// and a vertical string (right of building, references E-W wall exterior faces).
+        /// Skips views that already have dimension elements unless skipIfHasDims=false.
+        /// Must run BEFORE setCropRegionsTight so the crop expands to include the strings.
+        /// </summary>
+        [MCPMethod("addFloorPlanDimensions", Category = "Annotation", Description = "Adds exterior dimension strings to floor plan views: horizontal string above and vertical string to the right, referencing wall faces")]
+        public static string AddFloorPlanDimensions(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                double offsetFt         = parameters["offsetFt"]?.ToObject<double>() ?? 2.0;
+                bool   skipIfHasDims    = parameters["skipIfHasDims"]?.ToObject<bool>() ?? true;
+                int?   specificViewId   = parameters["viewId"]?.ToObject<int?>();
+
+                // ── Find best linear dimension type ───────────────────────────────
+                var dimType = new FilteredElementCollector(doc)
+                    .OfClass(typeof(DimensionType))
+                    .Cast<DimensionType>()
+                    .Where(dt => dt.StyleType == DimensionStyleType.Linear)
+                    .OrderBy(dt =>
+                    {
+                        // Prefer CDC or BM prefixed types (firm standards)
+                        var n = dt.Name;
+                        if (n.StartsWith("CDC", StringComparison.OrdinalIgnoreCase)) return 0;
+                        if (n.StartsWith("BM",  StringComparison.OrdinalIgnoreCase)) return 1;
+                        return 2;
+                    })
+                    .FirstOrDefault();
+
+                if (dimType == null)
+                    return ResponseBuilder.Error("No linear dimension type found in model").Build();
+
+                // ── Target views ──────────────────────────────────────────────────
+                IEnumerable<ViewPlan> targetViews;
+                if (specificViewId.HasValue)
+                {
+                    var sv = doc.GetElement(new ElementId(specificViewId.Value)) as ViewPlan;
+                    targetViews = sv != null ? new[] { sv } : Enumerable.Empty<ViewPlan>();
+                }
+                else
+                {
+                    targetViews = new FilteredElementCollector(doc)
+                        .OfClass(typeof(ViewPlan))
+                        .Cast<ViewPlan>()
+                        .Where(v => !v.IsTemplate && v.ViewType == ViewType.FloorPlan);
+                }
+
+                int viewsUpdated = 0;
+                var log    = new List<object>();
+                var errors = new List<string>();
+
+                foreach (var view in targetViews)
+                {
+                    if (view == null) continue;
+
+                    // Skip views that already have dimension elements
+                    if (skipIfHasDims)
+                    {
+                        bool hasDims = new FilteredElementCollector(doc, view.Id)
+                            .OfClass(typeof(Dimension))
+                            .Any();
+                        if (hasDims)
+                        {
+                            log.Add(new { view = view.Name, status = "skipped_has_dims" });
+                            continue;
+                        }
+                    }
+
+                    // Level Z for dimension line placement
+                    var levelId = view.GenLevel?.Id ?? view.LevelId;
+                    double levelZ = (doc.GetElement(levelId) as Level)?.Elevation ?? 0;
+
+                    // Collect straight walls on this level (doc-scope so we don't miss
+                    // walls outside the current crop box)
+                    var walls = new FilteredElementCollector(doc)
+                        .OfClass(typeof(Wall))
+                        .Cast<Wall>()
+                        .Where(w => w.LevelId == levelId
+                                 && w.WallType?.Kind == WallKind.Basic
+                                 && w.Location is LocationCurve lwlc
+                                 && lwlc.Curve is Line)
+                        .ToList();
+
+                    if (walls.Count < 2)
+                    {
+                        log.Add(new { view = view.Name, status = "skipped_no_walls" });
+                        continue;
+                    }
+
+                    // Bounding box of all wall endpoints
+                    double minX = double.MaxValue, maxX = double.MinValue;
+                    double minY = double.MaxValue, maxY = double.MinValue;
+                    foreach (var w in walls)
+                    {
+                        var lc = (LocationCurve)w.Location;
+                        var p0 = lc.Curve.GetEndPoint(0);
+                        var p1 = lc.Curve.GetEndPoint(1);
+                        minX = Math.Min(minX, Math.Min(p0.X, p1.X));
+                        maxX = Math.Max(maxX, Math.Max(p0.X, p1.X));
+                        minY = Math.Min(minY, Math.Min(p0.Y, p1.Y));
+                        maxY = Math.Max(maxY, Math.Max(p0.Y, p1.Y));
+                    }
+
+                    // N-S walls (|dir.Y| > 0.7): faces are perpendicular to X
+                    //   → can be referenced by a horizontal dimension line
+                    var nsWalls = walls
+                        .Where(w => Math.Abs(((Line)((LocationCurve)w.Location).Curve).Direction.Y) > 0.7)
+                        .OrderBy(w => {
+                            var lc = (LocationCurve)w.Location;
+                            return (lc.Curve.GetEndPoint(0).X + lc.Curve.GetEndPoint(1).X) / 2.0;
+                        })
+                        .ToList();
+
+                    // E-W walls (|dir.X| > 0.7): faces are perpendicular to Y
+                    //   → can be referenced by a vertical dimension line
+                    var ewWalls = walls
+                        .Where(w => Math.Abs(((Line)((LocationCurve)w.Location).Curve).Direction.X) > 0.7)
+                        .OrderBy(w => {
+                            var lc = (LocationCurve)w.Location;
+                            return (lc.Curve.GetEndPoint(0).Y + lc.Curve.GetEndPoint(1).Y) / 2.0;
+                        })
+                        .ToList();
+
+                    int dimsCreated = 0;
+
+                    using (var tx = new Transaction(doc, "BM: Add Floor Plan Dimensions"))
+                    {
+                        var fho = tx.GetFailureHandlingOptions();
+                        fho.SetFailuresPreprocessor(new WarningSwallower());
+                        tx.SetFailureHandlingOptions(fho);
+                        tx.Start();
+
+                        // ── Horizontal string: above building, refs N-S wall faces ──
+                        if (nsWalls.Count >= 2)
+                        {
+                            var refs = new ReferenceArray();
+                            foreach (var w in nsWalls)
+                            {
+                                try
+                                {
+                                    // Exterior face first, then interior — gives both faces of each wall
+                                    foreach (var r in HostObjectUtils.GetSideFaces(w, ShellLayerType.Exterior)
+                                                       .Concat(HostObjectUtils.GetSideFaces(w, ShellLayerType.Interior)))
+                                        refs.Append(r);
+                                }
+                                catch { /* skip walls whose faces can't be extracted */ }
+                            }
+                            if (refs.Size >= 2)
+                            {
+                                try
+                                {
+                                    var dimLine = Line.CreateBound(
+                                        new XYZ(minX - 1.0, maxY + offsetFt, levelZ),
+                                        new XYZ(maxX + 1.0, maxY + offsetFt, levelZ));
+                                    doc.Create.NewDimension(view, dimLine, refs, dimType);
+                                    dimsCreated++;
+                                }
+                                catch (Exception ex) { errors.Add($"{view.Name} H: {ex.Message}"); }
+                            }
+                        }
+
+                        // ── Vertical string: right of building, refs E-W wall faces ──
+                        if (ewWalls.Count >= 2)
+                        {
+                            var refs = new ReferenceArray();
+                            foreach (var w in ewWalls)
+                            {
+                                try
+                                {
+                                    foreach (var r in HostObjectUtils.GetSideFaces(w, ShellLayerType.Exterior)
+                                                       .Concat(HostObjectUtils.GetSideFaces(w, ShellLayerType.Interior)))
+                                        refs.Append(r);
+                                }
+                                catch { }
+                            }
+                            if (refs.Size >= 2)
+                            {
+                                try
+                                {
+                                    var dimLine = Line.CreateBound(
+                                        new XYZ(maxX + offsetFt, minY - 1.0, levelZ),
+                                        new XYZ(maxX + offsetFt, maxY + 1.0, levelZ));
+                                    doc.Create.NewDimension(view, dimLine, refs, dimType);
+                                    dimsCreated++;
+                                }
+                                catch (Exception ex) { errors.Add($"{view.Name} V: {ex.Message}"); }
+                            }
+                        }
+
+                        tx.Commit();
+                    }
+
+                    if (dimsCreated > 0) viewsUpdated++;
+                    log.Add(new { view = view.Name, dimsCreated, nsWalls = nsWalls.Count, ewWalls = ewWalls.Count, status = dimsCreated > 0 ? "ok" : "no_dims_created" });
+                }
+
+                return ResponseBuilder.Success()
+                    .With("viewsUpdated",  viewsUpdated)
+                    .With("dimTypeName",   dimType.Name)
+                    .With("log",           log)
+                    .With("errors",        errors)
+                    .Build();
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        // ── Helpers for AddFloorPlanDimensions ────────────────────────────────────
+
+        /// <summary>
+        /// Writes project name, address, and number to the Revit ProjectInformation object
+        /// so titleblocks pick them up automatically.
+        /// </summary>
+        [MCPMethod("setTitleblockProjectInfo", Category = "Annotation", Description = "Sets project name, number, address, and client name in Revit project information so all titleblocks reflect it")]
+        public static string SetTitleblockProjectInfo(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var pi  = doc.ProjectInformation;
+
+                using (var trans = new Transaction(doc, "BM: Project Info"))
+                {
+                    trans.Start();
+
+                    void TrySet(BuiltInParameter bip, string value)
+                    {
+                        if (string.IsNullOrWhiteSpace(value)) return;
+                        var p = pi.get_Parameter(bip);
+                        if (p != null && !p.IsReadOnly) p.Set(value);
+                    }
+
+                    TrySet(BuiltInParameter.PROJECT_NAME,    parameters["projectName"]?.ToString());
+                    TrySet(BuiltInParameter.PROJECT_NUMBER,  parameters["projectNumber"]?.ToString());
+                    TrySet(BuiltInParameter.PROJECT_ADDRESS, parameters["projectAddress"]?.ToString());
+                    TrySet(BuiltInParameter.CLIENT_NAME,     parameters["clientName"]?.ToString());
+                    TrySet(BuiltInParameter.PROJECT_STATUS,  parameters["projectStatus"]?.ToString());
+                    TrySet(BuiltInParameter.PROJECT_ISSUE_DATE, parameters["issueDate"]?.ToString());
+
+                    trans.Commit();
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = true, message = "Project information updated" });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Places a Drawing List schedule on the G0.x cover sheet.
+        /// Creates the Drawing List schedule if one does not already exist in the model.
+        /// </summary>
+        [MCPMethod("generateCoverSheet", Category = "Annotation", Description = "Places a Drawing List schedule on the G0.x cover sheet; creates the schedule if needed")]
+        public static string GenerateCoverSheet(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                // ── Find cover sheet (first G0.x sheet) ──────────────────────────────
+                string targetSheetNum = parameters["sheetNumber"]?.ToString();
+                ViewSheet coverSheet;
+                if (!string.IsNullOrWhiteSpace(targetSheetNum))
+                {
+                    coverSheet = new FilteredElementCollector(doc)
+                        .OfClass(typeof(ViewSheet))
+                        .Cast<ViewSheet>()
+                        .FirstOrDefault(s => string.Equals(s.SheetNumber, targetSheetNum, StringComparison.OrdinalIgnoreCase));
+                }
+                else
+                {
+                    coverSheet = new FilteredElementCollector(doc)
+                        .OfClass(typeof(ViewSheet))
+                        .Cast<ViewSheet>()
+                        .Where(s => s.SheetNumber.StartsWith("G0", StringComparison.OrdinalIgnoreCase))
+                        .OrderBy(s => s.SheetNumber, StringComparer.OrdinalIgnoreCase)
+                        .FirstOrDefault();
+                }
+
+                if (coverSheet == null)
+                    return ResponseBuilder.Error("No G0.x cover sheet found in model").Build();
+
+                // ── Find or create Drawing List (Sheet List) schedule ────────────────
+                // A sheet list is a ViewSchedule with CategoryId == OST_Sheets
+                var sheetCatId = new ElementId(BuiltInCategory.OST_Sheets);
+                var drawingList = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewSchedule))
+                    .Cast<ViewSchedule>()
+                    .FirstOrDefault(s => !s.IsTemplate
+                        && s.Definition.CategoryId == sheetCatId);
+
+                bool scheduleCreated = false;
+                if (drawingList == null)
+                {
+                    using (var tx = new Transaction(doc, "BM: Create Drawing List"))
+                    {
+                        tx.Start();
+                        drawingList = ViewSchedule.CreateSchedule(doc, sheetCatId);
+                        drawingList.Name = "DRAWING LIST *";
+                        tx.Commit();
+                        scheduleCreated = true;
+                    }
+                }
+
+                // ── Check if already placed on this sheet ─────────────────────────────
+                var existingSsi = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ScheduleSheetInstance))
+                    .Cast<ScheduleSheetInstance>()
+                    .FirstOrDefault(ssi => ssi.ScheduleId == drawingList.Id && ssi.OwnerViewId == coverSheet.Id);
+
+                if (existingSsi != null)
+                    return ResponseBuilder.Success()
+                        .With("sheetNumber", coverSheet.SheetNumber)
+                        .With("sheetName",   coverSheet.Name)
+                        .With("drawingListId", (long)drawingList.Id.Value)
+                        .With("scheduleCreated", scheduleCreated)
+                        .With("status", "already_placed")
+                        .Build();
+
+                // ── Determine insertion point ─────────────────────────────────────────
+                // Default: left-center of sheet, giving titleblock room on right
+                double insertX = parameters["insertionX"]?.ToObject<double>() ?? 0.25; // ft from sheet origin
+                double insertY = parameters["insertionY"]?.ToObject<double>() ?? 0.60;
+                var insertPt = new XYZ(insertX, insertY, 0);
+
+                using (var tx = new Transaction(doc, "BM: Place Drawing List on Cover Sheet"))
+                {
+                    tx.Start();
+                    ScheduleSheetInstance.Create(doc, coverSheet.Id, drawingList.Id, insertPt);
+                    tx.Commit();
+                }
+
+                return ResponseBuilder.Success()
+                    .With("sheetNumber",     coverSheet.SheetNumber)
+                    .With("sheetName",       coverSheet.Name)
+                    .With("drawingListId",   (long)drawingList.Id.Value)
+                    .With("scheduleCreated", scheduleCreated)
+                    .With("status",          "placed")
+                    .Build();
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        #endregion
+
+        #region Deferred annotation items
+
+        /// <summary>
+        /// Makes level datum markers visible in all section and elevation views.
+        /// Unhides the Levels category so FIRST FLOOR / SECOND FLOOR datums appear.
+        /// </summary>
+        [MCPMethod("setLevelMarkersVisible", Category = "Annotation", Description = "Unhides level datum markers in all section and elevation views so floor-to-floor heights are visible")]
+        public static string SetLevelMarkersVisible(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var levelsCatId = new ElementId(BuiltInCategory.OST_Levels);
+                int updated = 0;
+
+                var views = new FilteredElementCollector(doc)
+                    .OfClass(typeof(View))
+                    .Cast<View>()
+                    .Where(v => !v.IsTemplate &&
+                                (v.ViewType == ViewType.Section || v.ViewType == ViewType.Elevation))
+                    .ToList();
+
+                foreach (var view in views)
+                {
+                    try
+                    {
+                        bool hidden = view.GetCategoryHidden(levelsCatId);
+                        if (!hidden) continue; // already visible — skip
+                        using (var trans = new Transaction(doc, $"BM: Level visibility {view.Name}"))
+                        {
+                            trans.Start();
+                            view.SetCategoryHidden(levelsCatId, false);
+                            trans.Commit();
+                            updated++;
+                        }
+                    }
+                    catch { }
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = true, viewsUpdated = updated, viewsChecked = views.Count });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Makes section cut indicators visible in all floor plan views so sections are navigable.
+        /// Unhides OST_Sections category (the circled section marks) in floor plans.
+        /// </summary>
+        [MCPMethod("setSectionMarksVisible", Category = "Annotation", Description = "Unhides section cut indicators in floor plan views so section marks are visible and navigable")]
+        public static string SetSectionMarksVisible(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var sectionsCatId = new ElementId(BuiltInCategory.OST_Sections);
+                int updated = 0;
+
+                var floorPlanViews = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewPlan))
+                    .Cast<ViewPlan>()
+                    .Where(v => !v.IsTemplate && v.ViewType == ViewType.FloorPlan)
+                    .ToList();
+
+                foreach (var view in floorPlanViews)
+                {
+                    try
+                    {
+                        if (!view.GetCategoryHidden(sectionsCatId)) continue;
+                        using (var trans = new Transaction(doc, $"BM: Section marks {view.Name}"))
+                        {
+                            trans.Start();
+                            view.SetCategoryHidden(sectionsCatId, false);
+                            trans.Commit();
+                            updated++;
+                        }
+                    }
+                    catch { }
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = true, viewsUpdated = updated });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Places a north arrow in every floor plan view.
+        /// Prefers an already-loaded "north arrow" family; falls back to a ↑ N TextNote.
+        /// </summary>
+        [MCPMethod("placeNorthArrow", Category = "Annotation", Description = "Places a north arrow annotation in each floor plan view, using a loaded family or a TextNote fallback")]
+        public static string PlaceNorthArrow(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                // Find any loaded north-arrow family symbol
+                FamilySymbol northSymbol = new FilteredElementCollector(doc)
+                    .OfClass(typeof(FamilySymbol))
+                    .Cast<FamilySymbol>()
+                    .FirstOrDefault(fs =>
+                        fs.FamilyName.IndexOf("north", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        fs.Name.IndexOf("north", StringComparison.OrdinalIgnoreCase) >= 0);
+
+                // True north rotation angle (project north → true north)
+                double trueNorthAngle = 0;
+                try
+                {
+                    var pos = doc.ActiveProjectLocation.GetProjectPosition(XYZ.Zero);
+                    trueNorthAngle = pos.Angle; // radians, project north → true north
+                }
+                catch { }
+
+                var floorPlanViews = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewPlan))
+                    .Cast<ViewPlan>()
+                    .Where(v => !v.IsTemplate && v.ViewType == ViewType.FloorPlan)
+                    .ToList();
+
+                int placed = 0;
+                var results = new List<object>();
+
+                foreach (var view in floorPlanViews)
+                {
+                    // Position at upper-right of crop box
+                    XYZ origin;
+                    try
+                    {
+                        var crop = view.CropBox;
+                        origin = new XYZ(crop.Max.X - 3.0, crop.Max.Y - 3.0, 0);
+                    }
+                    catch { origin = XYZ.Zero; }
+
+                    bool usedFamily = false;
+                    using (var trans = new Transaction(doc, $"BM: North arrow {view.Name}"))
+                    {
+                        trans.Start();
+                        var fo = trans.GetFailureHandlingOptions();
+                        fo.SetFailuresPreprocessor(new WarningSwallower());
+                        trans.SetFailureHandlingOptions(fo);
+
+                        if (northSymbol != null)
+                        {
+                            try
+                            {
+                                if (!northSymbol.IsActive) northSymbol.Activate();
+                                var inst = doc.Create.NewFamilyInstance(origin, northSymbol, view);
+                                // Apply true north rotation
+                                if (Math.Abs(trueNorthAngle) > 0.001)
+                                {
+                                    var axis = Line.CreateBound(origin, origin + XYZ.BasisZ);
+                                    ElementTransformUtils.RotateElement(doc, inst.Id, axis, trueNorthAngle);
+                                }
+                                usedFamily = true;
+                            }
+                            catch
+                            {
+                                // Family placement failed — fall through to TextNote
+                            }
+                        }
+
+                        if (!usedFamily)
+                        {
+                            // Fallback: simple TextNote indicating north direction
+                            var tnt = new FilteredElementCollector(doc)
+                                .OfClass(typeof(TextNoteType))
+                                .Cast<TextNoteType>()
+                                .FirstOrDefault();
+                            if (tnt != null)
+                            {
+                                var opts = new TextNoteOptions(tnt.Id)
+                                {
+                                    HorizontalAlignment = HorizontalTextAlignment.Center,
+                                };
+                                TextNote.Create(doc, view.Id, origin, "↑ N", opts);
+                            }
+                        }
+
+                        trans.Commit();
+                        placed++;
+                        results.Add(new { viewName = view.Name, method = usedFamily ? "family" : "textNote" });
+                    }
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    placed,
+                    familyUsed  = northSymbol?.FamilyName ?? "none (TextNote fallback)",
+                    trueNorthAngleDeg = trueNorthAngle * 180 / Math.PI,
+                    views = results,
+                });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        #endregion
+
     }
 }

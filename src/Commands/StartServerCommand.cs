@@ -30,6 +30,17 @@ namespace RevitMCPBridge.Commands
 
                 server.Start();
 
+                // Also start TCP daemon for bimmonkey_run.py daemon transport
+                try
+                {
+                    if (!server.IsDaemonRunning)
+                        server.StartDaemon();
+                }
+                catch (Exception daemonEx)
+                {
+                    Log.Warning(daemonEx, "TCP daemon failed to start (non-fatal — pipe bridge still works)");
+                }
+
                 var dialog = new TaskDialog("BIM Monkey");
                 dialog.MainContent = "BIM Monkey server starting. Click Server Status to confirm it's ready before running Claude Code.";
                 dialog.MainIcon = TaskDialogIcon.TaskDialogIconInformation;

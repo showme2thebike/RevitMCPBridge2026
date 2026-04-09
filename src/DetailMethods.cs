@@ -6977,7 +6977,8 @@ namespace RevitMCPBridge2026
 
                     foreach (JObject layer in layers)
                     {
-                        string layerName = layer["name"]?.ToString() ?? "Unknown";
+                        // Accept both "name" (legacy) and "material" (Claude output field name)
+                        string layerName = layer["material"]?.ToString() ?? layer["name"]?.ToString() ?? "Unknown";
                         // ToObject<double?>() handles JSON null safely; ToObject<double>() throws on JNull
                         double thickness = layer["thickness"]?.ToObject<double?>() ?? 0;
                         // Auto-convert inches → feet if value looks like inches (no wall layer is > 2 ft thick)
@@ -6987,9 +6988,11 @@ namespace RevitMCPBridge2026
                             thickness /= 12.0;
                             thicknessAutoConverted = true;
                         }
-                        string hatch = layer["hatch"]?.ToString(); // filled region type name
+                        // Accept both "hatch" (legacy) and "filledRegionTypeName" (Claude output field name)
+                        string hatch = layer["filledRegionTypeName"]?.ToString() ?? layer["hatch"]?.ToString();
                         string lineWeight = layer["lineWeight"]?.ToString() ?? "Thin Lines";
-                        bool isOverlay = layer["overlay"]?.ToObject<bool>() ?? false; // insulation overlaps framing
+                        // Accept both "overlay" (legacy) and "isOverlay" (Claude output field name)
+                        bool isOverlay = layer["isOverlay"]?.ToObject<bool?>() ?? layer["overlay"]?.ToObject<bool?>() ?? false;
 
                         if (thickness <= 0 && !isOverlay)
                         {

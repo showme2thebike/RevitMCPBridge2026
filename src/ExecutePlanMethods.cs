@@ -45,6 +45,7 @@ namespace RevitMCPBridge
             int viewsAlreadyPlaced = 0;
             int viewsDuplicated    = 0;
             int detailsCreated     = 0;
+            int detailsReused      = 0; // existing views placed by existingViewId (not counted in detailsCreated)
             int schedulesPlaced    = 0;
 
             // ── PRE-FLIGHT: build all caches before touching Revit ────────────
@@ -352,6 +353,10 @@ namespace RevitMCPBridge
             var viewportPlacements = new List<(ViewSheet sheet, ElementId viewId, XYZ pos, string sheetNumber, string viewName)>();
             var schedulePlacements = new List<(ViewSheet sheet, ElementId schedId, XYZ pos, string sheetNumber, string schedName)>();
             var runtimeDupNeeded   = new List<ElementId>();
+            // Views that need dup because they're ALREADY on another sheet (pre-existing, not just
+            // claimed earlier in this same Phase 3 run).  These views must use the dup id even when
+            // they're the only claimant in the current chunk.
+            var runtimeDupElsewhere = new HashSet<ElementId>();
             // Track view IDs matched during THIS Phase 3 run so the second claimant triggers a dup
             var claimedViewIdsThisRun = new HashSet<long>();
 
@@ -475,6 +480,11 @@ namespace RevitMCPBridge
                         // Needs a runtime duplicate
                         if (!runtimeDupNeeded.Contains(matched.Id))
                             runtimeDupNeeded.Add(matched.Id);
+                        // Track cross-chunk case: view is on a DIFFERENT sheet from a prior chunk.
+                        // The update loop must assign the dup even when this is the only claimant
+                        // in the current chunk (otherwise the original id is used → placement fails).
+                        if (alreadyPlacedElsewhere && !claimedThisRun)
+                            runtimeDupElsewhere.Add(matched.Id);
                         viewIdToPlace = matched.Id; // placeholder — replaced after runtime dup tx
                     }
                     else
@@ -531,24 +541,37 @@ namespace RevitMCPBridge
                     tx.Commit();
                 }
 
-                // Update viewportPlacements: first claimant of each source keeps the original;
-                // all subsequent claimants get the duplicate so each sheet gets a distinct viewId.
+                // Update viewportPlacements: first claimant within this chunk keeps the original
+                // UNLESS the view was already placed on a different sheet in a prior chunk, in
+                // which case ALL claimants in this chunk must use the dup id.
                 var sourceFirstSeen = new HashSet<ElementId>();
                 for (int i = 0; i < viewportPlacements.Count; i++)
                 {
                     var entry = viewportPlacements[i];
                     if (!sourceToDuplicateMap.TryGetValue(entry.viewId, out var dupId)) continue;
-                    if (sourceFirstSeen.Contains(entry.viewId))
+
+                    bool needsDup = sourceFirstSeen.Contains(entry.viewId)   // subsequent same-chunk claimant
+                                 || runtimeDupElsewhere.Contains(entry.viewId); // view pre-exists on another sheet
+
+                    if (needsDup)
                     {
-                        // Subsequent claimant — assign the duplicate
                         viewportPlacements[i] = (entry.sheet, dupId, entry.pos, entry.sheetNumber, entry.viewName);
                     }
                     else
                     {
-                        // First claimant — keep the original viewId (no replacement)
+                        // First claimant within this chunk — keep the original viewId
                         sourceFirstSeen.Add(entry.viewId);
                     }
                 }
+
+                // Dup-failed views: remove their placements so Phase 4 doesn't attempt
+                // to place the un-replaced original id (which would throw "viewId cannot be added").
+                var dupFailedIds = new HashSet<long>(
+                    runtimeDupNeeded
+                        .Where(id => !sourceToDuplicateMap.ContainsKey(id))
+                        .Select(id => (long)id.Value));
+                if (dupFailedIds.Count > 0)
+                    viewportPlacements.RemoveAll(p => dupFailedIds.Contains((long)p.viewId.Value));
             }
 
             // ── PHASE 4: Place all viewports (ONE transaction + SubTransactions)
@@ -636,6 +659,7 @@ namespace RevitMCPBridge
                             }
                             catch { /* rename is best-effort; keep old name if it fails */ }
                         }
+                        detailsReused++;
                         log.Add(new { phase = 5, op = "createDraftingView", detailNum, description,
                                       viewId = (long)draftView.Id.Value, status = "reused_by_id" });
                     }
@@ -644,6 +668,7 @@ namespace RevitMCPBridge
                         // BIM Monkey generated view name (with " *")
                         draftView = existing;
                         viewAlreadyExisted = true;
+                        detailsReused++;
                         log.Add(new { phase = 5, op = "createDraftingView", detailNum, description, viewId = (long)draftView.Id.Value, status = "reused" });
                     }
                     else if (existingDraftingViews.TryGetValue(bareDescription, out var existingBare))
@@ -651,6 +676,7 @@ namespace RevitMCPBridge
                         // Barrett's pre-drawn view (no " *" suffix) — this is the unplaced detail library case
                         draftView = existingBare;
                         viewAlreadyExisted = true;
+                        detailsReused++;
                         log.Add(new { phase = 5, op = "createDraftingView", detailNum, description,
                                       viewId = (long)draftView.Id.Value, status = "reused_existing" });
                     }
@@ -1097,6 +1123,7 @@ namespace RevitMCPBridge
                 .With("viewsAlreadyPlaced",  viewsAlreadyPlaced)
                 .With("viewsDuplicated",     viewsDuplicated)
                 .With("detailsCreated",      detailsCreated)
+                .With("detailsReused",       detailsReused)
                 .With("schedulesPlaced",     schedulesPlaced)
                 .With("errorCount",          errors.Count)
                 .With("errors",              errors)
