@@ -89,6 +89,17 @@ namespace RevitMCPBridge
                         Log.Error(ex, "Failed to initialize ChangeTracker");
                     }
 
+                    // Initialize passive workflow observer (view navigation + model changes)
+                    try
+                    {
+                        WorkflowObserver.Instance.Initialize(_uiApplication);
+                        Log.Information("WorkflowObserver initialized");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "WorkflowObserver failed to initialize (non-fatal)");
+                    }
+
                     // Fix: auto-restart pipe server when a new document is opened.
                     // Revit's named pipe context becomes stale after switching files —
                     // a fresh Stop+Start clears any dead connections and re-initialises
@@ -218,8 +229,8 @@ namespace RevitMCPBridge
             platformButton.LargeImage = CreateButtonIcon("monkey", 32);
             platformButton.Image      = CreateButtonIcon("monkey", 16);
 
-            // ── Control - Claude Code ─────────────────────────────────────
-            var serverPanel = application.CreateRibbonPanel(_tabName, "Control - Claude Code");
+            // ── MCP Control ───────────────────────────────────────────────
+            var serverPanel = application.CreateRibbonPanel(_tabName, "MCP Control");
 
             var startButtonData = new PushButtonData("StartMCPServer", "Start\nServer", asm,
                 "RevitMCPBridge.Commands.StartServerCommand")
@@ -244,12 +255,12 @@ namespace RevitMCPBridge
             statusButton.LargeImage = CreateButtonIcon("status", 32);
             statusButton.Image      = CreateButtonIcon("status", 16);
 
-            // ── Control - BIM Monkey ──────────────────────────────────────
-            var daemonPanel = application.CreateRibbonPanel(_tabName, "Control - BIM Monkey");
+            // ── TCP Control ───────────────────────────────────────────────
+            var daemonPanel = application.CreateRibbonPanel(_tabName, "TCP Control");
 
             var startDaemonData = new PushButtonData("StartDaemon", "Start\nServer", asm,
                 "RevitMCPBridge.Commands.StartDaemonCommand")
-                { ToolTip = $"Start the BIM Monkey TCP server on port {MCPServer.DaemonPort} — used by generation runs for a faster, more reliable connection than the Claude Code MCP server",
+                { ToolTip = "Start the BIM Monkey server — required before generation runs can execute",
                   AvailabilityClassName = "RevitMCPBridge.Commands.DaemonStoppedAvailability" };
             var startDaemonButton = daemonPanel.AddItem(startDaemonData) as PushButton;
             startDaemonButton.LargeImage = CreateButtonIcon("start", 32);
@@ -1608,6 +1619,17 @@ namespace RevitMCPBridge
                 catch (Exception ex)
                 {
                     Log.Error(ex, "Error shutting down ChangeTracker");
+                }
+
+                // Flush and shutdown WorkflowObserver
+                try
+                {
+                    WorkflowObserver.Instance.Shutdown();
+                    Log.Information("WorkflowObserver shutdown — observations flushed");
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "WorkflowObserver shutdown error (non-fatal)");
                 }
 
                 if (_mcpServer != null)
