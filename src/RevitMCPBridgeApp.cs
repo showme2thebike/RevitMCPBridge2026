@@ -223,7 +223,7 @@ namespace RevitMCPBridge
 
             var startButtonData = new PushButtonData("StartMCPServer", "Start\nServer", asm,
                 "RevitMCPBridge.Commands.StartServerCommand")
-                { ToolTip = "Start BIM Monkey server",
+                { ToolTip = "Start the Claude Code MCP server — required before Claude can read or modify your model",
                   AvailabilityClassName = "RevitMCPBridge.Commands.ServerStoppedAvailability" };
             var startButton = serverPanel.AddItem(startButtonData) as PushButton;
             startButton.LargeImage = CreateButtonIcon("start", 32);
@@ -231,7 +231,7 @@ namespace RevitMCPBridge
 
             var stopButtonData = new PushButtonData("StopMCPServer", "Stop\nServer", asm,
                 "RevitMCPBridge.Commands.StopServerCommand")
-                { ToolTip = "Stop BIM Monkey server",
+                { ToolTip = "Stop the Claude Code MCP server — use to reset a stale connection",
                   AvailabilityClassName = "RevitMCPBridge.Commands.ServerRunningAvailability" };
             var stopButton = serverPanel.AddItem(stopButtonData) as PushButton;
             stopButton.LargeImage = CreateButtonIcon("stop", 32);
@@ -239,7 +239,7 @@ namespace RevitMCPBridge
 
             var statusButtonData = new PushButtonData("MCPServerStatus", "Server\nStatus", asm,
                 "RevitMCPBridge.Commands.ServerStatusCommand")
-                { ToolTip = "Check BIM Monkey server status" };
+                { ToolTip = "Check whether the Claude Code MCP server is running and accepting connections" };
             var statusButton = serverPanel.AddItem(statusButtonData) as PushButton;
             statusButton.LargeImage = CreateButtonIcon("status", 32);
             statusButton.Image      = CreateButtonIcon("status", 16);
@@ -249,7 +249,7 @@ namespace RevitMCPBridge
 
             var startDaemonData = new PushButtonData("StartDaemon", "Start\nServer", asm,
                 "RevitMCPBridge.Commands.StartDaemonCommand")
-                { ToolTip = "Start BIM Monkey server (port 37523) — direct channel for generation runs",
+                { ToolTip = $"Start the BIM Monkey TCP server on port {MCPServer.DaemonPort} — used by generation runs for a faster, more reliable connection than the Claude Code MCP server",
                   AvailabilityClassName = "RevitMCPBridge.Commands.DaemonStoppedAvailability" };
             var startDaemonButton = daemonPanel.AddItem(startDaemonData) as PushButton;
             startDaemonButton.LargeImage = CreateButtonIcon("start", 32);
@@ -257,7 +257,7 @@ namespace RevitMCPBridge
 
             var stopDaemonData = new PushButtonData("StopDaemon", "Stop\nServer", asm,
                 "RevitMCPBridge.Commands.StopDaemonCommand")
-                { ToolTip = "Stop BIM Monkey server",
+                { ToolTip = "Stop the BIM Monkey TCP server",
                   AvailabilityClassName = "RevitMCPBridge.Commands.DaemonRunningAvailability" };
             var stopDaemonButton = daemonPanel.AddItem(stopDaemonData) as PushButton;
             stopDaemonButton.LargeImage = CreateButtonIcon("stop", 32);
@@ -265,7 +265,7 @@ namespace RevitMCPBridge
 
             var daemonStatusData = new PushButtonData("DaemonStatus", "Server\nStatus", asm,
                 "RevitMCPBridge.Commands.DaemonStatusCommand")
-                { ToolTip = "Check BIM Monkey server status" };
+                { ToolTip = $"Check whether the BIM Monkey TCP server is running on port {MCPServer.DaemonPort}" };
             var daemonStatusButton = daemonPanel.AddItem(daemonStatusData) as PushButton;
             daemonStatusButton.LargeImage = CreateButtonIcon("status", 32);
             daemonStatusButton.Image      = CreateButtonIcon("status", 16);

@@ -25,14 +25,14 @@ namespace RevitMCPBridge.Commands
 
                 if (server.IsDaemonRunning)
                 {
-                    TaskDialog.Show("BIM Monkey", $"BIM Monkey channel is already connected on port {MCPServer.DaemonPort}.");
+                    TaskDialog.Show("BIM Monkey", $"BIM Monkey TCP server is already running on port {MCPServer.DaemonPort}.");
                     return Result.Succeeded;
                 }
 
                 server.StartDaemon();
 
                 var dialog = new TaskDialog("BIM Monkey");
-                dialog.MainContent = $"Server Control - BIM Monkey connected on port {MCPServer.DaemonPort}.\n\nGeneration runs will now use the direct channel instead of the PowerShell pipe bridge.";
+                dialog.MainContent = $"BIM Monkey TCP server started on port {MCPServer.DaemonPort}.\n\nGeneration runs will use this server automatically.";
                 dialog.MainIcon = TaskDialogIcon.TaskDialogIconInformation;
                 dialog.Show();
 
@@ -59,12 +59,12 @@ namespace RevitMCPBridge.Commands
                 var server = RevitMCPBridgeApp.GetServer();
                 if (server == null || !server.IsDaemonRunning)
                 {
-                    TaskDialog.Show("BIM Monkey", "BIM Monkey channel is not connected.");
+                    TaskDialog.Show("BIM Monkey", "BIM Monkey TCP server is not running.");
                     return Result.Succeeded;
                 }
 
                 server.StopDaemon();
-                TaskDialog.Show("BIM Monkey", "Server Control - BIM Monkey disconnected.");
+                TaskDialog.Show("BIM Monkey", "BIM Monkey TCP server stopped.");
                 Log.Information("TCP daemon (BIM Monkey channel) stopped via UI command");
                 return Result.Succeeded;
             }
@@ -95,7 +95,7 @@ namespace RevitMCPBridge.Commands
                 if (server == null)
                 {
                     sb.AppendLine("Status:  Not initialized");
-                    sb.AppendLine("Click 'Connect' to start the BIM Monkey direct channel.");
+                    sb.AppendLine("Click 'Start Server' to start the BIM Monkey TCP server.");
                 }
                 else
                 {
@@ -119,11 +119,11 @@ namespace RevitMCPBridge.Commands
                     sb.AppendLine();
 
                     if (tcpReady)
-                        sb.AppendLine("BIM Monkey direct channel is ready.\nGeneration runs will use this transport automatically.");
+                        sb.AppendLine("BIM Monkey TCP server is ready.\nGeneration runs will use this server automatically.");
                     else if (server.IsDaemonRunning)
-                        sb.AppendLine("Plugin reports connected but port is not yet responding.\nWait a moment and recheck, or click Disconnect → Connect.");
+                        sb.AppendLine("Plugin reports running but port is not yet responding.\nWait a moment and recheck, or click Stop Server → Start Server.");
                     else
-                        sb.AppendLine("Click 'Connect' to start the BIM Monkey direct channel.");
+                        sb.AppendLine("Click 'Start Server' to start the BIM Monkey TCP server.");
                 }
 
                 var dialog = new TaskDialog("BIM Monkey");

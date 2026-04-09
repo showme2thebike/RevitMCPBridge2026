@@ -24,7 +24,7 @@ namespace RevitMCPBridge.Commands
                 
                 if (server.IsRunning)
                 {
-                    TaskDialog.Show("BIM Monkey", "Server is already running.");
+                    TaskDialog.Show("BIM Monkey", "Claude Code MCP server is already running.");
                     return Result.Succeeded;
                 }
 
@@ -42,7 +42,7 @@ namespace RevitMCPBridge.Commands
                 }
 
                 var dialog = new TaskDialog("BIM Monkey");
-                dialog.MainContent = "BIM Monkey server starting. Click Server Status to confirm it's ready before running Claude Code.";
+                dialog.MainContent = "Claude Code MCP server starting. Click Server Status to confirm it's ready before running Claude Code.";
                 dialog.MainIcon = TaskDialogIcon.TaskDialogIconInformation;
                 dialog.Show();
                 
