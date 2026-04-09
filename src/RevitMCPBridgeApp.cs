@@ -218,8 +218,8 @@ namespace RevitMCPBridge
             platformButton.LargeImage = CreateButtonIcon("monkey", 32);
             platformButton.Image      = CreateButtonIcon("monkey", 16);
 
-            // ── Server Control - Claude Code ──────────────────────────────
-            var serverPanel = application.CreateRibbonPanel(_tabName, "Server Control - Claude Code");
+            // ── Control - Claude Code ─────────────────────────────────────
+            var serverPanel = application.CreateRibbonPanel(_tabName, "Control - Claude Code");
 
             var startButtonData = new PushButtonData("StartMCPServer", "Start\nServer", asm,
                 "RevitMCPBridge.Commands.StartServerCommand")
@@ -244,28 +244,28 @@ namespace RevitMCPBridge
             statusButton.LargeImage = CreateButtonIcon("status", 32);
             statusButton.Image      = CreateButtonIcon("status", 16);
 
-            // ── Server Control - BIM Monkey ───────────────────────────────
-            var daemonPanel = application.CreateRibbonPanel(_tabName, "Server Control - BIM Monkey");
+            // ── Control - BIM Monkey ──────────────────────────────────────
+            var daemonPanel = application.CreateRibbonPanel(_tabName, "Control - BIM Monkey");
 
-            var startDaemonData = new PushButtonData("StartDaemon", "Connect", asm,
+            var startDaemonData = new PushButtonData("StartDaemon", "Start\nServer", asm,
                 "RevitMCPBridge.Commands.StartDaemonCommand")
-                { ToolTip = "Connect BIM Monkey direct channel (port 37523) — faster transport for generation runs",
+                { ToolTip = "Start BIM Monkey server (port 37523) — direct channel for generation runs",
                   AvailabilityClassName = "RevitMCPBridge.Commands.DaemonStoppedAvailability" };
             var startDaemonButton = daemonPanel.AddItem(startDaemonData) as PushButton;
             startDaemonButton.LargeImage = CreateButtonIcon("start", 32);
             startDaemonButton.Image      = CreateButtonIcon("start", 16);
 
-            var stopDaemonData = new PushButtonData("StopDaemon", "Disconnect", asm,
+            var stopDaemonData = new PushButtonData("StopDaemon", "Stop\nServer", asm,
                 "RevitMCPBridge.Commands.StopDaemonCommand")
-                { ToolTip = "Disconnect BIM Monkey direct channel",
+                { ToolTip = "Stop BIM Monkey server",
                   AvailabilityClassName = "RevitMCPBridge.Commands.DaemonRunningAvailability" };
             var stopDaemonButton = daemonPanel.AddItem(stopDaemonData) as PushButton;
             stopDaemonButton.LargeImage = CreateButtonIcon("stop", 32);
             stopDaemonButton.Image      = CreateButtonIcon("stop", 16);
 
-            var daemonStatusData = new PushButtonData("DaemonStatus", "Status", asm,
+            var daemonStatusData = new PushButtonData("DaemonStatus", "Server\nStatus", asm,
                 "RevitMCPBridge.Commands.DaemonStatusCommand")
-                { ToolTip = "Check BIM Monkey direct channel status" };
+                { ToolTip = "Check BIM Monkey server status" };
             var daemonStatusButton = daemonPanel.AddItem(daemonStatusData) as PushButton;
             daemonStatusButton.LargeImage = CreateButtonIcon("status", 32);
             daemonStatusButton.Image      = CreateButtonIcon("status", 16);
