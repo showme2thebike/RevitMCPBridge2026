@@ -4,6 +4,7 @@ using System.Linq;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using Newtonsoft.Json.Linq;
+using Serilog;
 using RevitMCPBridge;
 using RevitMCPBridge.Helpers;
 
@@ -4448,6 +4449,112 @@ namespace RevitMCPBridge2026
                     trueNorthAngleDeg = trueNorthAngle * 180 / Math.PI,
                     views = results,
                 });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        #endregion
+
+        #region Annotation Suite
+
+        /// <summary>
+        /// Runs all post-execution annotation steps in a single ExternalEvent dispatch.
+        /// Replaces 10 individual round-trips with one call when using the TCP daemon.
+        ///
+        /// Steps (in order):
+        ///   applyVisualStandards → tagAllFloorPlanViews → setGridLinesVisible →
+        ///   addDetailCrossReferences → addFloorPlanDimensions → generateCoverSheet →
+        ///   setCropRegionsTight → setLevelMarkersVisible → setSectionMarksVisible →
+        ///   placeNorthArrow
+        ///
+        /// Each step runs even if a prior step fails — errors are collected and returned.
+        /// exportBimMonkeySheetsToPNG is excluded (long-running, separate timeout).
+        /// </summary>
+        [MCPMethod("runAnnotationSuite", Category = "Annotation",
+            Description = "Runs all post-execution annotation steps in one call: visual standards, tagging, grid/level/section visibility, cross-references, dimensions, cover sheet, crop regions, north arrow")]
+        public static string RunAnnotationSuite(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var plan        = parameters["plan"] as JObject ?? new JObject();
+                var offsetFt    = parameters["offsetFt"]?.Value<double>()    ?? 2.0;
+                var marginFt    = parameters["marginFt"]?.Value<double>()    ?? 3.0;
+                var skipIfHasDims = parameters["skipIfHasDims"]?.Value<bool>() ?? true;
+
+                var steps  = new JObject();
+                var errors = new JArray();
+
+                void RunStep(string methodName, JObject stepParams)
+                {
+                    try
+                    {
+                        var json   = MCPServer.ExecuteMethod(uiApp, methodName, stepParams);
+                        var result = JObject.Parse(json);
+                        steps[methodName] = result;
+                        if (!(result["success"]?.Value<bool>() ?? true))
+                        {
+                            var err = result["error"]?.ToString() ?? "unknown error";
+                            errors.Add($"{methodName}: {err}");
+                            Log.Warning("[AnnotationSuite] {Step} failed: {Error}", methodName, err);
+                        }
+                        else
+                        {
+                            Log.Debug("[AnnotationSuite] {Step} OK", methodName);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        var errMsg = ex.Message;
+                        steps[methodName] = new JObject { ["success"] = false, ["error"] = errMsg };
+                        errors.Add($"{methodName}: {errMsg}");
+                        Log.Warning(ex, "[AnnotationSuite] {Step} threw exception", methodName);
+                    }
+                }
+
+                // ── Run each step in order ─────────────────────────────────────────
+
+                RunStep("applyVisualStandards", new JObject());
+
+                RunStep("tagAllFloorPlanViews", new JObject
+                {
+                    ["tagTypes"]         = new JArray("rooms", "doors", "windows"),
+                    ["skipAlreadyTagged"] = true,
+                    ["tagLocation"]      = "center",
+                });
+
+                RunStep("setGridLinesVisible", new JObject());
+
+                RunStep("addDetailCrossReferences", new JObject { ["plan"] = plan });
+
+                RunStep("addFloorPlanDimensions", new JObject
+                {
+                    ["offsetFt"]     = offsetFt,
+                    ["skipIfHasDims"] = skipIfHasDims,
+                });
+
+                RunStep("generateCoverSheet", new JObject());
+
+                RunStep("setCropRegionsTight", new JObject { ["marginFt"] = marginFt });
+
+                RunStep("setLevelMarkersVisible", new JObject());
+
+                RunStep("setSectionMarksVisible", new JObject());
+
+                RunStep("placeNorthArrow", new JObject());
+
+                // ── Summary ────────────────────────────────────────────────────────
+
+                Log.Information("[AnnotationSuite] Complete — {StepCount} steps, {ErrorCount} error(s)",
+                    steps.Count, errors.Count);
+
+                return ResponseBuilder.Success()
+                    .With("steps",      steps)
+                    .With("errors",     errors)
+                    .With("errorCount", (int)errors.Count)
+                    .Build();
             }
             catch (Exception ex)
             {
