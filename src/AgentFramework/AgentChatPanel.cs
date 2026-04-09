@@ -42,6 +42,10 @@ namespace RevitMCPBridge2026.AgentFramework
         private string _firmStandardsDoc;   // fetched from Railway on init, injected into every prompt
         private bool _isProcessing;
 
+        // Proactive prompting
+        private System.Windows.Threading.DispatcherTimer _proactiveTimer;
+        private readonly HashSet<string> _promptedViewKeys = new HashSet<string>();
+
         // Available models
         private static readonly Dictionary<string, string> AvailableModels = new Dictionary<string, string>
         {
@@ -1036,6 +1040,54 @@ namespace RevitMCPBridge2026.AgentFramework
             // Fetch firm standards in the background — injected into every prompt once loaded
             if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
                 _ = FetchFirmStandardsAsync();
+
+            // Proactive prompt timer — checks for new views every 30 seconds
+            _proactiveTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(30)
+            };
+            _proactiveTimer.Tick += (s, e) => CheckForProactivePrompt();
+            _proactiveTimer.Start();
+        }
+
+        private void CheckForProactivePrompt()
+        {
+            try
+            {
+                if (_isProcessing) return;
+
+                var recent = WorkflowObserver.Instance.GetRecentViewCreations(withinMinutes: 15);
+                if (!recent.Any()) return;
+
+                // Filter out views we've already prompted about
+                var newOnes = recent.Where(r => !_promptedViewKeys.Contains(r.ViewName)).ToList();
+                if (!newOnes.Any()) return;
+
+                // Pattern detect: elevation/section + drafting/detail in same window → sheet placement prompt
+                var elevations = newOnes.Where(r =>
+                    r.ViewType == "Elevation" || r.ViewType == "Section" ||
+                    r.ViewName.IndexOf("elevation", StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+
+                var details = newOnes.Where(r =>
+                    r.ViewType == "DraftingView" ||
+                    r.ViewName.IndexOf("detail", StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+
+                // Also prompt on any cluster of 2+ new views of any type
+                bool hasPattern = (elevations.Any() && details.Any()) || newOnes.Count >= 2;
+                if (!hasPattern) return;
+
+                // Mark these as prompted so we don't repeat
+                foreach (var v in newOnes)
+                    _promptedViewKeys.Add(v.ViewName);
+                WorkflowObserver.Instance.MarkPrompted(newOnes.Select(v => v.ViewName));
+
+                // Build the proactive message
+                var viewList = string.Join(", ", newOnes.Select(v => $"\"{v.ViewName}\""));
+                var msg = $"I see you just created {viewList}. Ready to place {(newOnes.Count == 1 ? "it" : "them")} on a sheet?";
+
+                AddAssistantMessage(msg);
+            }
+            catch { /* never crash the UI */ }
         }
 
         private async Task FetchFirmStandardsAsync()
@@ -1096,6 +1148,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private void DisconnectMCP()
         {
+            _proactiveTimer?.Stop();
             lock (_pipeLock)
             {
                 _mcpWriter?.Dispose();

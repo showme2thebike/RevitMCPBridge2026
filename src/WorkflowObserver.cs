@@ -166,8 +166,45 @@ namespace RevitMCPBridge
                 var doc     = e.GetDocument();
                 var project = doc?.Title ?? _currentProject;
 
-                // Collect which element categories were modified
-                // (not element IDs — we don't want to store model data, just patterns)
+                // ── Detect newly created views ────────────────────────────────
+                var addedIds = e.GetAddedElementIds();
+                if (addedIds.Any())
+                {
+                    var newViews = addedIds
+                        .Select(id => { try { return doc?.GetElement(id) as View; } catch { return null; } })
+                        .Where(v => v != null && !v.IsTemplate && v.CanBePrinted)
+                        .ToList();
+
+                    foreach (var v in newViews)
+                    {
+                        var viewTypeName = v.ViewType.ToString();
+                        var evt = new ObservationEvent
+                        {
+                            Event   = "ViewCreated",
+                            Project = project,
+                            Data    = new
+                            {
+                                viewName = v.Name,
+                                viewType = viewTypeName,
+                            }
+                        };
+                        Enqueue(evt);
+                        // Also keep a short in-memory list for proactive prompting
+                        lock (_recentCreationsLock)
+                        {
+                            _recentCreations.Add(new ViewCreationRecord
+                            {
+                                ViewName = v.Name,
+                                ViewType = viewTypeName,
+                                CreatedAt = DateTime.UtcNow
+                            });
+                            // Trim records older than 30 minutes
+                            _recentCreations.RemoveAll(r => (DateTime.UtcNow - r.CreatedAt).TotalMinutes > 30);
+                        }
+                    }
+                }
+
+                // ── Collect which element categories were modified ─────────────
                 var modifiedIds = e.GetModifiedElementIds();
                 if (!modifiedIds.Any()) return;
 
@@ -203,6 +240,42 @@ namespace RevitMCPBridge
                 });
             }
             catch { }
+        }
+
+        // ── Recent view creations (in-memory, for proactive prompting) ────────
+
+        private readonly object _recentCreationsLock = new object();
+        private readonly List<ViewCreationRecord> _recentCreations = new List<ViewCreationRecord>();
+
+        public class ViewCreationRecord
+        {
+            public string   ViewName  { get; set; }
+            public string   ViewType  { get; set; }
+            public DateTime CreatedAt { get; set; }
+        }
+
+        /// <summary>
+        /// Returns views created within the last <paramref name="withinMinutes"/> minutes.
+        /// Safe to call from any thread.
+        /// </summary>
+        public List<ViewCreationRecord> GetRecentViewCreations(int withinMinutes = 15)
+        {
+            lock (_recentCreationsLock)
+            {
+                var cutoff = DateTime.UtcNow.AddMinutes(-withinMinutes);
+                return _recentCreations.Where(r => r.CreatedAt >= cutoff).ToList();
+            }
+        }
+
+        /// <summary>
+        /// Marks the given view names as already prompted so they won't trigger again.
+        /// </summary>
+        public void MarkPrompted(IEnumerable<string> viewNames)
+        {
+            lock (_recentCreationsLock)
+            {
+                _recentCreations.RemoveAll(r => viewNames.Contains(r.ViewName));
+            }
         }
 
         private void OnDocumentOpened(object sender, DocumentOpenedEventArgs e)
