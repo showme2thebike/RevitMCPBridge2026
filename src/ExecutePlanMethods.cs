@@ -619,6 +619,23 @@ namespace RevitMCPBridge
                         // Exact ID match — highest priority (Claude resolved against unplacedDraftingViews list)
                         draftView = byId;
                         viewAlreadyExisted = true;
+                        // Rename to match plan description so the view title on the sheet is correct,
+                        // not whatever the old view was named in a previous generation run.
+                        if (!string.Equals(draftView.Name, targetViewName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            try
+                            {
+                                using (var renameTx = new Transaction(doc, "BIM Monkey — Rename Detail View"))
+                                {
+                                    renameTx.Start();
+                                    draftView.Name = targetViewName;
+                                    renameTx.Commit();
+                                }
+                                existingDraftingViews.Remove(draftView.Name); // remove stale key
+                                existingDraftingViews[targetViewName] = draftView;
+                            }
+                            catch { /* rename is best-effort; keep old name if it fails */ }
+                        }
                         log.Add(new { phase = 5, op = "createDraftingView", detailNum, description,
                                       viewId = (long)draftView.Id.Value, status = "reused_by_id" });
                     }
