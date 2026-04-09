@@ -516,40 +516,47 @@ namespace RevitMCPBridge
         
         private async Task RunServer(CancellationToken cancellationToken)
         {
+            // Pre-create the first server instance before entering the loop so it's
+            // immediately ready when the first client connects.
+            NamedPipeServerStream standbyPipe = new NamedPipeServerStream(
+                _pipeName, PipeDirection.InOut, 254, PipeTransmissionMode.Byte, PipeOptions.None);
+            Task standbyWait = Task.Run(() => standbyPipe.WaitForConnection(), cancellationToken);
+
             while (!cancellationToken.IsCancellationRequested)
             {
-                NamedPipeServerStream pipeServer = null;
                 try
                 {
-                    // SYNCHRONOUS pipe to avoid async deadlock in Revit's threading model
-                    pipeServer = new NamedPipeServerStream(_pipeName, PipeDirection.InOut, 254,
-                        PipeTransmissionMode.Byte, PipeOptions.None);
-
-                    Log.Debug("Waiting for client connection...");
-                    // Use synchronous WaitForConnection wrapped in Task.Run
-                    await Task.Run(() => pipeServer.WaitForConnection(), cancellationToken);
+                    // Wait for the pre-created instance to receive a connection
+                    await standbyWait;
                     Log.Information("Client connected to MCP Server");
 
-                    // Handle this client in a separate task so we can immediately accept new connections
-                    var clientPipe = pipeServer;
-                    pipeServer = null; // Don't dispose in finally block - client handler owns it now
+                    var clientPipe = standbyPipe;
+
+                    // Immediately pre-create the NEXT server instance so it's ready
+                    // before the current client finishes — eliminates the reconnect gap
+                    // that causes "semaphore timeout" on the next connection attempt.
+                    standbyPipe = new NamedPipeServerStream(
+                        _pipeName, PipeDirection.InOut, 254, PipeTransmissionMode.Byte, PipeOptions.None);
+                    standbyWait = Task.Run(() => standbyPipe.WaitForConnection(), cancellationToken);
 
                     _ = Task.Run(async () => await HandleClient(clientPipe, cancellationToken), cancellationToken);
                 }
                 catch (OperationCanceledException)
                 {
                     Log.Information("Server operation cancelled");
+                    standbyPipe?.Dispose();
                     break;
                 }
                 catch (Exception ex)
                 {
                     Log.Error(ex, "Server error");
                     ErrorOccurred?.Invoke(this, ex.Message);
+                    // Recreate standby pipe after error
+                    standbyPipe?.Dispose();
                     await Task.Delay(1000, cancellationToken);
-                }
-                finally
-                {
-                    pipeServer?.Dispose();
+                    standbyPipe = new NamedPipeServerStream(
+                        _pipeName, PipeDirection.InOut, 254, PipeTransmissionMode.Byte, PipeOptions.None);
+                    standbyWait = Task.Run(() => standbyPipe.WaitForConnection(), cancellationToken);
                 }
             }
         }
@@ -2332,6 +2339,8 @@ namespace RevitMCPBridge
                         return await ExecuteInRevitContext(uiApp => SheetMethods.BatchPrintSheets(uiApp, parameters));
                     case "generateViewportLayout":
                         return await ExecuteInRevitContext(uiApp => SheetMethods.GenerateViewportLayout(uiApp, parameters));
+                    case "applyVisualStandards":
+                        return await ExecuteInRevitContext(uiApp => SheetMethods.ApplyVisualStandards(uiApp, parameters));
 
                     case "createCallout":
                         return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.AnnotationMethods.CreateCallout(uiApp, parameters));
@@ -5061,6 +5070,8 @@ namespace RevitMCPBridge
                     }
 
                     // Build sheet placement index once — view ID → (sheetNumber, sheetName)
+                    // Includes both Viewport (floor plans, elevations, etc.) and
+                    // ScheduleSheetInstance (schedules) so schedules report isOnSheet correctly.
                     var viewToSheet = new Dictionary<long, (string sheetNumber, string sheetName)>();
                     foreach (var vp in new FilteredElementCollector(doc)
                         .OfClass(typeof(Viewport))
@@ -5071,6 +5082,17 @@ namespace RevitMCPBridge
                             var sheet = doc.GetElement(vp.SheetId) as ViewSheet;
                             if (sheet != null)
                                 viewToSheet[vp.ViewId.Value] = (sheet.SheetNumber, sheet.Name);
+                        }
+                    }
+                    foreach (var ssi in new FilteredElementCollector(doc)
+                        .OfClass(typeof(ScheduleSheetInstance))
+                        .Cast<ScheduleSheetInstance>())
+                    {
+                        if (!viewToSheet.ContainsKey(ssi.ScheduleId.Value))
+                        {
+                            var sheet = doc.GetElement(ssi.OwnerViewId) as ViewSheet;
+                            if (sheet != null)
+                                viewToSheet[ssi.ScheduleId.Value] = (sheet.SheetNumber, sheet.Name);
                         }
                     }
 
@@ -5117,6 +5139,93 @@ namespace RevitMCPBridge
                             }
                         }
 
+                        // ── C1: Crop box dimensions (feet) ───────────────────────────────────────
+                        // Used by sheetPacker.js to compute fill ratios without prompting Claude
+                        // to guess. CropBox is in internal Revit units (feet in 2026).
+                        double? cropWidthFt = null;
+                        double? cropHeightFt = null;
+                        try
+                        {
+                            if (view.CropBoxActive && view.CropBox != null)
+                            {
+                                var box = view.CropBox;
+                                cropWidthFt  = Math.Abs(box.Max.X - box.Min.X);
+                                cropHeightFt = Math.Abs(box.Max.Y - box.Min.Y);
+                            }
+                        }
+                        catch { }
+
+                        // ── C2: Renovation condition classification ───────────────────────────────
+                        // Detect Existing / Demo / New from view name patterns and Revit phase.
+                        // The Python daemon also infers this, but the Revit phase parameter is
+                        // authoritative for views that don't carry condition keywords in their name.
+                        string renovationCondition = null;
+                        try
+                        {
+                            var vName = view.Name ?? "";
+                            // Phase-based: "Existing Construction" phase → "existing", "New Construction" → "new"
+                            var phase = view.get_Parameter(BuiltInParameter.VIEW_PHASE)?.AsElementId();
+                            if (phase != null && phase != ElementId.InvalidElementId)
+                            {
+                                var phaseName = (doc.GetElement(phase) as Phase)?.Name ?? "";
+                                if (phaseName.IndexOf("Exist", StringComparison.OrdinalIgnoreCase) >= 0)
+                                    renovationCondition = "existing";
+                                else if (phaseName.IndexOf("Demo", StringComparison.OrdinalIgnoreCase) >= 0)
+                                    renovationCondition = "demo";
+                                else if (phaseName.IndexOf("New", StringComparison.OrdinalIgnoreCase) >= 0)
+                                    renovationCondition = "new";
+                            }
+                            // Name-based fallback (matches viewClassifier.js EXISTING/DEMO/NEW_PATTERNS)
+                            if (renovationCondition == null)
+                            {
+                                if (System.Text.RegularExpressions.Regex.IsMatch(vName,
+                                    @"\bexist(ing)?\b|\b_e\b|\s+e$|-e$|\bexg\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                                    renovationCondition = "existing";
+                                else if (System.Text.RegularExpressions.Regex.IsMatch(vName,
+                                    @"\bdemo(lition)?\b|\b_d\b|\s+d$|-d$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                                    renovationCondition = "demo";
+                                else if (System.Text.RegularExpressions.Regex.IsMatch(vName,
+                                    @"\bnew\b|\b_n\b|\s+n$|-n$|\bproposed\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                                    renovationCondition = "new";
+                            }
+                        }
+                        catch { }
+
+                        // ── C4: View Template name ───────────────────────────────────────────────
+                        // Highest-confidence classification signal — encodes Barrett's intent.
+                        string viewTemplateName = null;
+                        try
+                        {
+                            if (view.ViewTemplateId != null && view.ViewTemplateId != ElementId.InvalidElementId)
+                            {
+                                var tmpl = doc.GetElement(view.ViewTemplateId) as View;
+                                viewTemplateName = tmpl?.Name;
+                            }
+                        }
+                        catch { }
+
+                        // ── C4: Detail level, discipline, phase, phaseFilter ─────────────────────
+                        string detailLevel = null;
+                        string discipline = null;
+                        string viewPhaseName = null;
+                        string phaseFilterName = null;
+                        try { detailLevel = view.DetailLevel.ToString(); } catch { }
+                        try { discipline = view.Discipline.ToString(); } catch { }
+                        try
+                        {
+                            var phaseId2 = view.get_Parameter(BuiltInParameter.VIEW_PHASE)?.AsElementId();
+                            if (phaseId2 != null && phaseId2 != ElementId.InvalidElementId)
+                                viewPhaseName = (doc.GetElement(phaseId2) as Phase)?.Name;
+                        }
+                        catch { }
+                        try
+                        {
+                            var pfId = view.get_Parameter(BuiltInParameter.VIEW_PHASE_FILTER)?.AsElementId();
+                            if (pfId != null && pfId != ElementId.InvalidElementId)
+                                phaseFilterName = (doc.GetElement(pfId) as PhaseFilter)?.Name;
+                        }
+                        catch { }
+
                         views.Add(new
                         {
                             id = view.Id.Value,
@@ -5129,6 +5238,18 @@ namespace RevitMCPBridge
                             isOnSheet = sheetInfo.sheetNumber != null,
                             sheetNumber = sheetInfo.sheetNumber,
                             sheetName = sheetInfo.sheetName,
+                            // C1 — crop box geometry
+                            cropWidthFt,
+                            cropHeightFt,
+                            // C2 — renovation condition
+                            renovationCondition,
+                            isExisting = renovationCondition == "existing",
+                            // C4 — visual classification signals
+                            viewTemplate = viewTemplateName,
+                            detailLevel,
+                            discipline,
+                            phase = viewPhaseName,
+                            phaseFilter = phaseFilterName,
                         });
                     }
 
@@ -5152,6 +5273,8 @@ namespace RevitMCPBridge
                 }
             });
         }
+
+        // C3 enhancement wired into the existing GetSchedules below (line ~6667)
 
         private Task<string> ExportViewImage(JObject parameters)
         {
@@ -6511,6 +6634,9 @@ namespace RevitMCPBridge
         /// <summary>
         /// Get all schedules in the project
         /// </summary>
+        // C3: Enhanced — now includes isOnSheet, sheetNumber, category name, viewType="Schedule",
+        // and filters out internal/keynote/revision schedules so the daemon receives a clean
+        // authoritative schedule inventory separate from getViews.
         private Task<string> GetSchedules(JObject parameters)
         {
             return ExecuteInRevitContext(uiApp =>
@@ -6519,33 +6645,71 @@ namespace RevitMCPBridge
                 {
                     var doc = uiApp.ActiveUIDocument.Document;
 
-                    var schedules = new FilteredElementCollector(doc)
+                    // Build sheet placement index via ScheduleSheetInstance
+                    var schedToSheet = new Dictionary<long, (string sheetNumber, string sheetName)>();
+                    foreach (var ssi in new FilteredElementCollector(doc)
+                        .OfClass(typeof(ScheduleSheetInstance))
+                        .Cast<ScheduleSheetInstance>())
+                    {
+                        var schedId = ssi.ScheduleId.Value;
+                        if (!schedToSheet.ContainsKey(schedId))
+                        {
+                            var sheet = doc.GetElement(ssi.OwnerViewId) as ViewSheet;
+                            if (sheet != null)
+                                schedToSheet[schedId] = (sheet.SheetNumber, sheet.Name);
+                        }
+                    }
+
+                    var schedules = new List<object>();
+                    foreach (var vs in new FilteredElementCollector(doc)
                         .OfClass(typeof(ViewSchedule))
                         .Cast<ViewSchedule>()
-                        .Where(s => !s.IsTemplate)
-                        .Select(s => new
+                        .Where(s => !s.IsTemplate && !s.IsTitleblockRevisionSchedule))
+                    {
+                        // Skip internal Revit schedules not valid for CDs
+                        var nameL = (vs.Name ?? "").ToLowerInvariant();
+                        if (nameL.Contains("<") || nameL.Contains("revision") || nameL.Contains("keynote"))
+                            continue;
+
+                        int fieldCount = 0;
+                        string category = null;
+                        int rowCount = 0;
+                        try
                         {
-                            id = s.Id.Value,
-                            name = s.Name,
-                            isAssemblyView = s.IsAssemblyView,
-                            definition = new
-                            {
-                                categoryId = s.Definition.CategoryId.Value,
-                                fieldCount = s.Definition.GetFieldCount(),
-                                filterCount = s.Definition.GetFilterCount(),
-                                sortGroupFieldCount = s.Definition.GetSortGroupFieldCount()
-                            }
-                        })
-                        .ToList();
+                            fieldCount = vs.Definition.GetFieldCount();
+                            if (vs.Definition.CategoryId != ElementId.InvalidElementId)
+                                category = Category.GetCategory(doc, vs.Definition.CategoryId)?.Name;
+                        }
+                        catch { }
+                        try
+                        {
+                            rowCount = vs.GetTableData()
+                                         .GetSectionData(SectionType.Body)
+                                         .NumberOfRows;
+                        }
+                        catch { }
+
+                        schedToSheet.TryGetValue(vs.Id.Value, out var sheetInfo);
+
+                        schedules.Add(new
+                        {
+                            id          = vs.Id.Value,
+                            name        = vs.Name,
+                            viewType    = "Schedule",
+                            category,
+                            fieldCount,
+                            rowCount,
+                            isOnSheet   = sheetInfo.sheetNumber != null,
+                            sheetNumber = sheetInfo.sheetNumber,
+                            sheetName   = sheetInfo.sheetName,
+                        });
+                    }
 
                     return JsonConvert.SerializeObject(new
                     {
                         success = true,
-                        result = new
-                        {
-                            totalSchedules = schedules.Count,
-                            schedules = schedules
-                        }
+                        scheduleCount = schedules.Count,
+                        schedules
                     });
                 }
                 catch (Exception ex)

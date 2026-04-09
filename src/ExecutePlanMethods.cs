@@ -64,6 +64,16 @@ namespace RevitMCPBridge
                     viewByName[v.Name] = v;
             }
 
+            // schedulesByName: ALL ViewSchedules by name — not filtered by CanBePrinted.
+            // Used in Phase 3 to route schedule views from views[] without depending on
+            // allViews (which excludes non-printable/empty schedules).
+            var schedulesByName = new FilteredElementCollector(doc)
+                .OfClass(typeof(ViewSchedule))
+                .Cast<ViewSchedule>()
+                .Where(s => !s.IsTemplate && !s.IsTitleblockRevisionSchedule)
+                .GroupBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+
             // sheetsByNumber: pre-load all existing sheets
             var sheetsByNumber = new FilteredElementCollector(doc)
                 .OfClass(typeof(ViewSheet))
@@ -86,46 +96,101 @@ namespace RevitMCPBridge
                     .Select(ssi => ((long)ssi.OwnerViewId.Value, (long)ssi.ScheduleId.Value))
             );
 
-            // titleBlockId: prefer the most-used titleblock on existing sheets;
-            // fall back to first available symbol if no sheets exist yet.
+            // titleBlockId: prefer the widest (most landscape) titleblock so generated sheets
+            // match the firm's standard CD format. Fall back to most-used on existing sheets,
+            // then to first available symbol.
             ElementId titleBlockId = null;
             {
-                var existingSheetList = new FilteredElementCollector(doc)
-                    .OfClass(typeof(ViewSheet))
-                    .Cast<ViewSheet>()
-                    .Where(s => !s.IsPlaceholder)
+                // Collect all available titleblock symbols with their dimensions
+                var allTitleBlocks = new FilteredElementCollector(doc)
+                    .OfClass(typeof(FamilySymbol))
+                    .OfCategory(BuiltInCategory.OST_TitleBlocks)
+                    .Cast<FamilySymbol>()
                     .ToList();
 
-                var usageCount = new Dictionary<ElementId, int>();
+                // Helper: get width×height in feet for a FamilySymbol
+                (double w, double h) GetTBDimensions(FamilySymbol sym)
+                {
+                    try
+                    {
+                        var wp = sym.LookupParameter("Sheet Width") ?? sym.get_Parameter(BuiltInParameter.SHEET_WIDTH);
+                        var hp = sym.LookupParameter("Sheet Height") ?? sym.get_Parameter(BuiltInParameter.SHEET_HEIGHT);
+                        return (wp?.AsDouble() ?? 0, hp?.AsDouble() ?? 0);
+                    }
+                    catch { return (0, 0); }
+                }
+
                 FamilySymbol preferredSymbol = null;
 
-                foreach (var existingSheet in existingSheetList)
-                {
-                    var tbInstance = new FilteredElementCollector(doc, existingSheet.Id)
-                        .OfClass(typeof(FamilyInstance))
-                        .OfCategory(BuiltInCategory.OST_TitleBlocks)
-                        .Cast<FamilyInstance>()
-                        .FirstOrDefault();
-                    if (tbInstance == null) continue;
-                    var symId = tbInstance.Symbol.Id;
-                    usageCount[symId] = usageCount.TryGetValue(symId, out var cnt) ? cnt + 1 : 1;
-                }
+                // 1. Prefer the largest landscape titleblock (width >= height, biggest area)
+                var landscapeCandidates = allTitleBlocks
+                    .Select(sym => { var (w, h) = GetTBDimensions(sym); return (sym, w, h, area: w * h); })
+                    .Where(t => t.w >= t.h && t.area > 0)
+                    .OrderByDescending(t => t.area)
+                    .ToList();
 
-                if (usageCount.Count > 0)
-                {
-                    var mostUsedId = usageCount.OrderByDescending(kv => kv.Value).First().Key;
-                    preferredSymbol = doc.GetElement(mostUsedId) as FamilySymbol;
-                }
+                if (landscapeCandidates.Count > 0)
+                    preferredSymbol = landscapeCandidates[0].sym;
 
+                // 1b. Dimensions unavailable — score by sheet size keywords (larger = better)
+                // Arch E=5, D/30x40=4, C/22x34=3, B/17x22=2, A/11x17=1; prefer "Typical Sheet" type over covers
                 if (preferredSymbol == null)
                 {
-                    // No existing sheets — fall back to first loaded titleblock
-                    preferredSymbol = new FilteredElementCollector(doc)
-                        .OfClass(typeof(FamilySymbol))
-                        .OfCategory(BuiltInCategory.OST_TitleBlocks)
-                        .Cast<FamilySymbol>()
+                    int SizeScore(FamilySymbol sym)
+                    {
+                        var name = (sym.FamilyName ?? "") + " " + (sym.Name ?? "");
+                        if (System.Text.RegularExpressions.Regex.IsMatch(name, @"\bE\b|36x48|Arch\s*E", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return 5;
+                        if (System.Text.RegularExpressions.Regex.IsMatch(name, @"\bD\b|30[xX]40|24[xX]36|Arch\s*D", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return 4;
+                        if (System.Text.RegularExpressions.Regex.IsMatch(name, @"\bC\b|22[xX]34|18[xX]24|Arch\s*C", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return 3;
+                        if (System.Text.RegularExpressions.Regex.IsMatch(name, @"\bB\b|17[xX]22|Arch\s*B", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return 2;
+                        if (System.Text.RegularExpressions.Regex.IsMatch(name, @"\bA\b|11[xX]17|8\.5[xX]11", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return 1;
+                        return 0;
+                    }
+                    bool IsTypicalSheet(FamilySymbol sym)
+                    {
+                        var t = (sym.Name ?? "").ToLowerInvariant();
+                        return t.Contains("typical") || t.Contains("standard") || t.Contains("not for construction") || t.Contains("with stamp");
+                    }
+                    preferredSymbol = allTitleBlocks
+                        .Select(sym => (sym, score: SizeScore(sym), typical: IsTypicalSheet(sym) ? 1 : 0))
+                        .Where(t => t.score > 0)
+                        .OrderByDescending(t => t.score)
+                        .ThenByDescending(t => t.typical)
+                        .Select(t => t.sym)
                         .FirstOrDefault();
                 }
+
+                // 2. Fall back: most-used on existing sheets
+                if (preferredSymbol == null)
+                {
+                    var existingSheetList = new FilteredElementCollector(doc)
+                        .OfClass(typeof(ViewSheet))
+                        .Cast<ViewSheet>()
+                        .Where(s => !s.IsPlaceholder)
+                        .ToList();
+
+                    var usageCount = new Dictionary<ElementId, int>();
+                    foreach (var existingSheet in existingSheetList)
+                    {
+                        var tbInstance = new FilteredElementCollector(doc, existingSheet.Id)
+                            .OfClass(typeof(FamilyInstance))
+                            .OfCategory(BuiltInCategory.OST_TitleBlocks)
+                            .Cast<FamilyInstance>()
+                            .FirstOrDefault();
+                        if (tbInstance == null) continue;
+                        var symId = tbInstance.Symbol.Id;
+                        usageCount[symId] = usageCount.TryGetValue(symId, out var cnt) ? cnt + 1 : 1;
+                    }
+                    if (usageCount.Count > 0)
+                    {
+                        var mostUsedId = usageCount.OrderByDescending(kv => kv.Value).First().Key;
+                        preferredSymbol = doc.GetElement(mostUsedId) as FamilySymbol;
+                    }
+                }
+
+                // 3. Last resort: first available
+                if (preferredSymbol == null)
+                    preferredSymbol = allTitleBlocks.FirstOrDefault();
 
                 if (preferredSymbol != null)
                     titleBlockId = preferredSymbol.Id;
@@ -139,6 +204,30 @@ namespace RevitMCPBridge
                 .Cast<ViewDrafting>()
                 .Where(v => !v.IsTemplate)
                 .ToDictionary(v => v.Name.ToLowerInvariant(), v => v, StringComparer.OrdinalIgnoreCase);
+
+            // Build a set of view names claimed by detailPlan so Phase 3 never tries to
+            // place them via Phase 4 — Phase 5 owns all detail/drafting view placements.
+            var detailPlanNames = new HashSet<string>(
+                detailPlan.Cast<JObject>()
+                    .Select(d => d["description"]?.ToString()?.Trim())
+                    .Where(n => !string.IsNullOrEmpty(n)),
+                StringComparer.OrdinalIgnoreCase);
+
+            // Build a set of sheets that are detail sheets (have detailPlan entries).
+            // Phase 3 skips ALL view lookups for these sheets — Phase 5 owns their content.
+            var detailSheetRefs = new HashSet<string>(
+                detailPlan.Cast<JObject>()
+                    .Select(d => d["sheetReference"]?.ToString()?.Trim())
+                    .Where(s => !string.IsNullOrEmpty(s)),
+                StringComparer.OrdinalIgnoreCase);
+
+            // Collect view IDs already placed on existing sheets (pre-run) so Phase 3
+            // doesn't try to re-place them (e.g. SITE PLAN already on a template sheet).
+            var preExistingPlacedViewIds = new HashSet<long>(
+                new FilteredElementCollector(doc)
+                    .OfClass(typeof(Viewport))
+                    .Cast<Viewport>()
+                    .Select(vp => (long)vp.ViewId.Value));
 
             // Cache all available FilledRegionTypes for hatch resolution
             var allHatchTypes = new FilteredElementCollector(doc)
@@ -238,8 +327,13 @@ namespace RevitMCPBridge
                             if (dupId != sourceView.Id)
                             {
                                 var dupView = doc.GetElement(dupId) as View;
-                                if (dupView != null && !dupView.Name.EndsWith(" *"))
-                                    try { dupView.Name = dupView.Name + " *"; } catch { }
+                                if (dupView != null)
+                                {
+                                    var cleanName = System.Text.RegularExpressions.Regex
+                                        .Replace(dupView.Name, @"\s+Copy\s+\d+$", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                    if (!cleanName.EndsWith(" *"))
+                                        try { dupView.Name = cleanName + " *"; } catch { }
+                                }
                                 sourceToDuplicateMap[sourceView.Id] = dupId;
                                 viewsDuplicated++;
                             }
@@ -258,6 +352,8 @@ namespace RevitMCPBridge
             var viewportPlacements = new List<(ViewSheet sheet, ElementId viewId, XYZ pos, string sheetNumber, string viewName)>();
             var schedulePlacements = new List<(ViewSheet sheet, ElementId schedId, XYZ pos, string sheetNumber, string schedName)>();
             var runtimeDupNeeded   = new List<ElementId>();
+            // Track view IDs matched during THIS Phase 3 run so the second claimant triggers a dup
+            var claimedViewIdsThisRun = new HashSet<long>();
 
             foreach (var sheetSpec in sheets.Cast<JObject>())
             {
@@ -284,10 +380,62 @@ namespace RevitMCPBridge
                         placedViewportSet.Select(p => new ElementId(p.Item2))
                     );
 
+                    // Skip entire sheet if it's a detail sheet — Phase 5 owns its content
+                    if (detailSheetRefs.Contains(sheetNumber))
+                    {
+                        log.Add(new { phase = 3, op = "buildPlacements", sheetNumber, viewName, status = "skipped_detail_sheet" });
+                        continue;
+                    }
+
+                    // Fast-path: if the view name exactly matches a ViewSchedule, route it
+                    // directly to schedulePlacements — bypasses allViews (which excludes non-
+                    // printable schedules) and prevents ViewSchedules from ever reaching Phase 4.
+                    if (schedulesByName.TryGetValue(viewName, out var directSchedId))
+                    {
+                        var directSchedKey = ((long)sheet.Id.Value, (long)directSchedId.Value);
+                        if (placedScheduleSet.Contains(directSchedKey))
+                        {
+                            viewsAlreadyPlaced++;
+                            log.Add(new { phase = 3, op = "buildPlacements", sheetNumber, viewName, status = "already_on_sheet" });
+                        }
+                        else
+                        {
+                            schedulePlacements.Add((sheet, directSchedId, pos, sheetNumber, viewName));
+                            claimedViewIdsThisRun.Add((long)directSchedId.Value);
+                            log.Add(new { phase = 3, op = "buildPlacements", sheetNumber, viewName, status = "schedule_direct" });
+                        }
+                        continue;
+                    }
+
                     View matched = FindBestView(allViews, placedViewIdsForFinder, viewName, levelName, viewType);
                     if (matched == null)
                     {
                         log.Add(new { phase = 3, op = "buildPlacements", sheetNumber, viewName, status = "no_match" });
+                        continue;
+                    }
+
+                    long matchedIdValue = (long)matched.Id.Value;
+                    bool isPreExisting       = preExistingPlacedViewIds.Contains(matchedIdValue);
+                    bool claimedThisRun      = claimedViewIdsThisRun.Contains(matchedIdValue);
+                    bool alreadyPlacedElsewhere = matched.ViewType != ViewType.Legend &&
+                                                  placedViewportSet.Any(p => p.Item2 == matchedIdValue);
+
+                    // Skip views already placed on pre-existing sheets ONLY if we haven't
+                    // also claimed this view ourselves in this Phase 3 run.
+                    if (isPreExisting && !claimedThisRun)
+                    {
+                        log.Add(new { phase = 3, op = "buildPlacements", sheetNumber, viewName, status = "skipped_preexisting" });
+                        continue;
+                    }
+
+                    // If FindBestView matched a DraftingView, skip it here — Phase 5 owns all
+                    // DraftingView placements. Also skip if the view name is claimed by detailPlan.
+                    if (matched is ViewDrafting
+                        || detailPlanNames.Contains(viewName)
+                        || detailPlanNames.Any(n => viewName.IndexOf(n, StringComparison.OrdinalIgnoreCase) >= 0
+                                                 || n.IndexOf(viewName, StringComparison.OrdinalIgnoreCase) >= 0))
+                    {
+                        log.Add(new { phase = 3, op = "buildPlacements", sheetNumber, viewName, status = "skipped_drafting_view" });
                         continue;
                     }
 
@@ -304,36 +452,37 @@ namespace RevitMCPBridge
                         {
                             schedulePlacements.Add((sheet, matched.Id, pos, sheetNumber, viewName));
                         }
+                        claimedViewIdsThisRun.Add(matchedIdValue);
                         continue;
                     }
 
-                    // Check if already on this sheet
-                    var vpKey = ((long)sheet.Id.Value, (long)matched.Id.Value);
+                    // Check if already on this specific sheet
+                    var vpKey = ((long)sheet.Id.Value, matchedIdValue);
                     if (placedViewportSet.Contains(vpKey))
                     {
                         viewsAlreadyPlaced++;
                         continue;
                     }
 
-                    // Resolve viewId
+                    // Resolve viewId — needs dup if: already claimed this run, or already placed elsewhere
                     ElementId viewIdToPlace;
                     if (sourceToDuplicateMap.TryGetValue(matched.Id, out var preDup))
                     {
                         viewIdToPlace = preDup;
                     }
-                    else if (matched.ViewType != ViewType.Legend &&
-                             placedViewportSet.Any(p => p.Item2 == (long)matched.Id.Value))
+                    else if (claimedThisRun || alreadyPlacedElsewhere)
                     {
-                        // Already placed elsewhere — needs runtime duplicate
+                        // Needs a runtime duplicate
                         if (!runtimeDupNeeded.Contains(matched.Id))
                             runtimeDupNeeded.Add(matched.Id);
-                        viewIdToPlace = matched.Id; // placeholder — will be replaced after runtime dup tx
+                        viewIdToPlace = matched.Id; // placeholder — replaced after runtime dup tx
                     }
                     else
                     {
                         viewIdToPlace = matched.Id;
                     }
 
+                    claimedViewIdsThisRun.Add(matchedIdValue);
                     viewportPlacements.Add((sheet, viewIdToPlace, pos, sheetNumber, viewName));
                 }
             }
@@ -362,8 +511,13 @@ namespace RevitMCPBridge
                             if (dupId != srcId)
                             {
                                 var dupView = doc.GetElement(dupId) as View;
-                                if (dupView != null && !dupView.Name.EndsWith(" *"))
-                                    try { dupView.Name = dupView.Name + " *"; } catch { }
+                                if (dupView != null)
+                                {
+                                    var cleanName = System.Text.RegularExpressions.Regex
+                                        .Replace(dupView.Name, @"\s+Copy\s+\d+$", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                    if (!cleanName.EndsWith(" *"))
+                                        try { dupView.Name = cleanName + " *"; } catch { }
+                                }
                                 sourceToDuplicateMap[srcId] = dupId;
                                 viewsDuplicated++;
                             }
@@ -377,12 +531,23 @@ namespace RevitMCPBridge
                     tx.Commit();
                 }
 
-                // Update viewportPlacements: replace placeholder IDs with their duplicates
+                // Update viewportPlacements: first claimant of each source keeps the original;
+                // all subsequent claimants get the duplicate so each sheet gets a distinct viewId.
+                var sourceFirstSeen = new HashSet<ElementId>();
                 for (int i = 0; i < viewportPlacements.Count; i++)
                 {
                     var entry = viewportPlacements[i];
-                    if (sourceToDuplicateMap.TryGetValue(entry.viewId, out var resolvedId))
-                        viewportPlacements[i] = (entry.sheet, resolvedId, entry.pos, entry.sheetNumber, entry.viewName);
+                    if (!sourceToDuplicateMap.TryGetValue(entry.viewId, out var dupId)) continue;
+                    if (sourceFirstSeen.Contains(entry.viewId))
+                    {
+                        // Subsequent claimant — assign the duplicate
+                        viewportPlacements[i] = (entry.sheet, dupId, entry.pos, entry.sheetNumber, entry.viewName);
+                    }
+                    else
+                    {
+                        // First claimant — keep the original viewId (no replacement)
+                        sourceFirstSeen.Add(entry.viewId);
+                    }
                 }
             }
 
@@ -423,6 +588,10 @@ namespace RevitMCPBridge
             }
 
             // ── PHASE 5: Drafting Views + Layer Stacks ────────────────────────
+            // In sheet chunks detailPlan is present only for Phase 3's detailSheetRefs skip-set.
+            // Phase 5 itself only runs in the dedicated detail chunk (sheets array is empty)
+            // so detail views are not created/placed before their target sheets exist.
+            if (!sheets.Any())
             foreach (var detail in detailPlan.Cast<JObject>())
             {
                 var detailNum   = detail["detailNumber"]?.Value<int>() ?? 0;
@@ -440,7 +609,7 @@ namespace RevitMCPBridge
                     var bareDescription = description.TrimEnd('*').TrimEnd();
 
                     // Also check if plan specifies an explicit existing view ID
-                    var existingViewId = detail["existingViewId"]?.Value<long>() ?? 0;
+                    var existingViewId = detail["existingViewId"]?.ToObject<long?>() ?? 0;
 
                     ViewDrafting draftView = null;
                     bool viewAlreadyExisted = false;
@@ -597,10 +766,13 @@ namespace RevitMCPBridge
 
                         if (targetSheet != null)
                         {
+                            // Check any sheet — a ViewDrafting can only appear on one sheet at a time.
+                            // Checking only the target sheet misses cases where a prior chunk already
+                            // placed this view on a different sheet, causing "viewId cannot be added".
                             bool detailAlreadyOnSheet = new FilteredElementCollector(doc)
                                 .OfClass(typeof(Viewport))
                                 .Cast<Viewport>()
-                                .Any(vp => vp.SheetId == targetSheet.Id && vp.ViewId == draftView.Id);
+                                .Any(vp => vp.ViewId == draftView.Id);
 
                             if (detailAlreadyOnSheet)
                             {
@@ -632,6 +804,89 @@ namespace RevitMCPBridge
                 }
             }
 
+            // ── PHASE 5b: Repair overlapping viewports ────────────────────────
+            try
+            {
+                var allSheets2 = new FilteredElementCollector(doc)
+                    .OfClass(typeof(ViewSheet))
+                    .Cast<ViewSheet>()
+                    .ToList();
+
+                int overlapRepairs = 0;
+                foreach (var sheet in allSheets2)
+                {
+                    var sheetVps = new FilteredElementCollector(doc)
+                        .OfClass(typeof(Viewport))
+                        .Cast<Viewport>()
+                        .Where(vp => vp.SheetId == sheet.Id)
+                        .ToList();
+
+                    if (sheetVps.Count < 2) continue;
+
+                    // Detect overlapping viewports by comparing bounding boxes
+                    bool hasOverlap = false;
+                    var outlines = new List<(Viewport vp, double x0, double y0, double x1, double y1)>();
+                    foreach (var vp in sheetVps)
+                    {
+                        try
+                        {
+                            var ol = vp.GetBoxOutline();
+                            outlines.Add((vp, ol.MinimumPoint.X, ol.MinimumPoint.Y, ol.MaximumPoint.X, ol.MaximumPoint.Y));
+                        }
+                        catch
+                        {
+                            // Fallback: use center only (0-size box)
+                            try
+                            {
+                                var c = vp.GetBoxCenter();
+                                outlines.Add((vp, c.X, c.Y, c.X, c.Y));
+                            }
+                            catch { }
+                        }
+                    }
+
+                    for (int i = 0; i < outlines.Count && !hasOverlap; i++)
+                    {
+                        for (int j = i + 1; j < outlines.Count && !hasOverlap; j++)
+                        {
+                            var a = outlines[i]; var b = outlines[j];
+                            // AABB overlap check
+                            if (a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0)
+                                hasOverlap = true;
+                        }
+                    }
+
+                    if (!hasOverlap) continue;
+
+                    // Redistribute to auto-layout positions
+                    var positions = GetAutoLayoutPositions(sheet, sheetVps.Count);
+                    using (var tx = new Transaction(doc, $"BM: Repair Viewports {sheet.SheetNumber}"))
+                    {
+                        tx.Start();
+                        tx.GetFailureHandlingOptions().SetFailuresPreprocessor(new WarningSwallower());
+                        for (int i = 0; i < sheetVps.Count && i < positions.Length; i++)
+                        {
+                            try
+                            {
+                                var current = sheetVps[i].GetBoxCenter();
+                                var target  = positions[i];
+                                var delta   = new XYZ(target.X - current.X, target.Y - current.Y, 0);
+                                if (delta.GetLength() > 0.01)
+                                    ElementTransformUtils.MoveElement(doc, sheetVps[i].Id, delta);
+                            }
+                            catch { }
+                        }
+                        tx.Commit();
+                        overlapRepairs++;
+                    }
+                }
+                log.Add(new { phase = "5b", op = "overlapRepair", sheetsRepaired = overlapRepairs });
+            }
+            catch (Exception ex)
+            {
+                log.Add(new { phase = "5b", op = "overlapRepair", status = "error", error = ex.Message });
+            }
+
             // ── PHASE 6: Create + Place Schedules ─────────────────────────────
             var typeToCategory = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
@@ -654,12 +909,42 @@ namespace RevitMCPBridge
             foreach (var schedSpec in schedulePlan.Cast<JObject>())
             {
                 var schedType  = schedSpec["type"]?.ToString();
-                var schedTitle = schedSpec["scheduleTitle"]?.ToString() ?? schedType?.ToUpper() + " SCHEDULE";
+                var schedTitle = schedSpec["scheduleTitle"]?.ToString()
+                              ?? schedSpec["scheduleName"]?.ToString()
+                              ?? schedType?.ToUpper() + " SCHEDULE";
                 var sheetNum   = schedSpec["sheetNumber"]?.ToString();
+
+                // T7: existingViewId — daemon annotated an existing schedule view.
+                // Place it directly without creating or looking up by category.
+                var existingViewIdToken = schedSpec["existingViewId"];
+                if (existingViewIdToken != null && existingViewIdToken.Type != JTokenType.Null)
+                {
+                    try
+                    {
+                        var evId = new ElementId(existingViewIdToken.Value<int>());
+                        if (doc.GetElement(evId) is ViewSchedule existingSched)
+                        {
+                            log.Add(new { phase = 6, op = "createSchedule", schedTitle, schedId = (long)evId.Value, status = "existingViewId" });
+                            if (!string.IsNullOrEmpty(sheetNum) && sheetsByNumber.TryGetValue(sheetNum, out var tSheet))
+                                allSchedulePlacements.Add((tSheet, evId, new XYZ(0.3, 0.3, 0), sheetNum, schedTitle));
+                            else
+                                errors.Add($"schedule {schedTitle}: target sheet '{sheetNum}' not found in model");
+                        }
+                        else
+                        {
+                            log.Add(new { phase = 6, op = "createSchedule", schedTitle, status = "existingViewId_not_found", id = existingViewIdToken.Value<int>() });
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        errors.Add($"existingViewId schedule {schedTitle}: {ex.Message}");
+                    }
+                    continue; // skip create path regardless
+                }
 
                 if (!typeToCategory.TryGetValue(schedType ?? "", out var categoryName))
                 {
-                    log.Add(new { phase = 6, op = "createSchedule", schedType, status = "unsupported_type" });
+                    log.Add(new { phase = 6, op = "createSchedule", schedType, schedTitle, status = "unsupported_type" });
                     continue;
                 }
 
@@ -727,6 +1012,27 @@ namespace RevitMCPBridge
 
             // Add Phase 3 schedule placements (views that are schedules from the sheets[] spec)
             allSchedulePlacements.AddRange(schedulePlacements);
+
+            // Recompute positions per-sheet so each schedule is centred in its own vertical
+            // slot rather than stacked at the fixed (0.3, 0.3) origin.
+            {
+                var bySheet = allSchedulePlacements
+                    .GroupBy(p => p.sheet.Id.Value)
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                var repositioned = new List<(ViewSheet sheet, ElementId schedId, XYZ pos, string sheetNumber, string schedName)>();
+                foreach (var grp in bySheet.Values)
+                {
+                    int total = grp.Count;
+                    for (int si = 0; si < total; si++)
+                    {
+                        var (sh, sid, _, snum, sname) = grp[si];
+                        repositioned.Add((sh, sid, GetSchedulePosition(sh, si, total), snum, sname));
+                    }
+                }
+                allSchedulePlacements.Clear();
+                allSchedulePlacements.AddRange(repositioned);
+            }
 
             // Place all schedules in ONE transaction + SubTransactions
             if (allSchedulePlacements.Count > 0)
@@ -879,6 +1185,49 @@ namespace RevitMCPBridge
             var positions = GetAutoLayoutPositions(sheet, maxPerSheet);
             int idx = Math.Max(0, Math.Min(positionOnSheet - 1, positions.Length - 1));
             return positions[idx];
+        }
+
+        /// <summary>
+        /// Compute the upper-left origin for a ScheduleSheetInstance so it sits in the
+        /// lower-left content area of the sheet rather than at the fixed (0.3, 0.3) default.
+        ///
+        /// ScheduleSheetInstance.Create places the schedule with the supplied point as its
+        /// upper-left corner; it expands downward and rightward.  We therefore place the
+        /// upper-left at roughly 40 % up from the bottom of the drawable area so the schedule
+        /// fills the lower portion of the sheet.  The first schedule of N stacks from the
+        /// bottom; each subsequent one is offset upward by its vertical slot.
+        /// </summary>
+        private static XYZ GetSchedulePosition(ViewSheet sheet, int scheduleIndex = 0, int totalSchedules = 1)
+        {
+            // Safe fallback (upper-left near bottom-left of a typical sheet)
+            double x = 0.1, y = 0.5;
+            try
+            {
+                var outline = sheet.Outline;
+                double sw = Math.Abs(outline.Max.U - outline.Min.U);
+                double sh = Math.Abs(outline.Max.V - outline.Min.V);
+                if (sw > 0.5 && sh > 0.5)
+                {
+                    double margin   = sh * 0.04;
+                    double bottomOY = outline.Min.V + margin + sh * 0.06; // above title block
+                    double topOY    = outline.Max.V - margin;
+                    double drawH    = topOY - bottomOY;
+
+                    // Divide drawable height into equal slots for each schedule
+                    int    n         = Math.Max(totalSchedules, 1);
+                    double slotH     = drawH / n;
+                    // This schedule occupies slot [scheduleIndex] counted from the bottom
+                    double slotBottom = bottomOY + slotH * scheduleIndex;
+                    // Place the upper-left of the schedule 60 % up within its slot
+                    // so the schedule body fills that 60 % downward.
+                    double schedY = slotBottom + slotH * 0.60;
+
+                    x = outline.Min.U + margin;
+                    y = schedY;
+                }
+            }
+            catch { /* keep fallback */ }
+            return new XYZ(x, y, 0);
         }
 
         private static JArray ResolveHatchNames(JArray layers, Dictionary<string, FilledRegionType> allHatchTypes, List<string> hatchNames)
