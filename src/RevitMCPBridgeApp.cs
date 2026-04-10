@@ -357,18 +357,18 @@ namespace RevitMCPBridge
             faqButton.LargeImage = CreateButtonIcon("faq", 32);
             faqButton.Image      = CreateButtonIcon("faq", 16);
 
-            // ── AI Assistant (BIM Manager Chat) ───────────────────────────────
+            // ── Banana Chat (BIM Manager Chat) ────────────────────────────────
             var chatPanel = application.CreateRibbonPanel(_tabName, "AI Assistant");
 
-            var aiButtonData = new PushButtonData("AIAssistant", "AI\nAssistant", asm,
+            var aiButtonData = new PushButtonData("AIAssistant", "Banana\nChat", asm,
                 "RevitMCPBridge2026.AgentFramework.LaunchAgentCommand")
             {
-                ToolTip = "AI Assistant — Chat with Claude",
+                ToolTip = "Banana Chat — Chat with Claude",
                 LongDescription = "Opens the BIM Monkey AI chat panel. Ask questions, trigger generation runs, and let Claude operate Revit directly."
             };
             var aiButton = chatPanel.AddItem(aiButtonData) as PushButton;
-            aiButton.LargeImage = CreateButtonIcon("ai", 32);
-            aiButton.Image      = CreateButtonIcon("ai", 16);
+            aiButton.LargeImage = CreateButtonIcon("banana", 32);
+            aiButton.Image      = CreateButtonIcon("banana", 16);
         }
 
         /// <summary>
@@ -635,6 +635,9 @@ namespace RevitMCPBridge
                             break;
                         case "ai":
                             DrawAiIcon(dc, size);
+                            break;
+                        case "banana":
+                            DrawBananaIcon(dc, size);
                             break;
                         case "monkey":
                             DrawMonkeyIcon(dc, size);
@@ -1081,6 +1084,53 @@ namespace RevitMCPBridge
             // Outer glow effect (optional sparkle)
             var glowPen = new Pen(new SolidColorBrush(Color.FromArgb(100, 255, 255, 255)), 0.5);
             dc.DrawEllipse(null, glowPen, new Point(center, center), center - margin + 2, center - margin + 2);
+        }
+
+        private void DrawBananaIcon(DrawingContext dc, int size)
+        {
+            // Flat white banana with dark charcoal outline — BIM Monkey ribbon style
+            double s = size / 32.0;
+            var fill = new SolidColorBrush(Colors.White);
+            var pen  = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.8 * s))
+            {
+                StartLineCap = PenLineCap.Round,
+                EndLineCap   = PenLineCap.Round,
+                LineJoin     = PenLineJoin.Round
+            };
+
+            // Banana body — curved crescent shape
+            // Drawn as a closed Bezier path curving from tip to tip
+            double cx = size * 0.5;
+            double cy = size * 0.5;
+
+            var body = new StreamGeometry();
+            using (var ctx = body.Open())
+            {
+                // Outer curve (back of banana — top arc)
+                ctx.BeginFigure(new Point(size * 0.18, size * 0.72), true, true);
+                ctx.BezierTo(
+                    new Point(size * 0.10, size * 0.30),
+                    new Point(size * 0.55, size * 0.05),
+                    new Point(size * 0.82, size * 0.22),
+                    true, false);
+                // Inner curve (belly of banana — bottom arc)
+                ctx.BezierTo(
+                    new Point(size * 0.72, size * 0.40),
+                    new Point(size * 0.38, size * 0.52),
+                    new Point(size * 0.30, size * 0.72),
+                    true, false);
+            }
+            dc.DrawGeometry(fill, pen, body);
+
+            // Stem nub at top-left tip
+            var stemPen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5 * s))
+            {
+                StartLineCap = PenLineCap.Round,
+                EndLineCap   = PenLineCap.Round
+            };
+            dc.DrawLine(stemPen,
+                new Point(size * 0.18, size * 0.72),
+                new Point(size * 0.14, size * 0.80));
         }
 
         private void DrawLibraryIcon(DrawingContext dc, int size)

@@ -90,7 +90,8 @@ namespace RevitMCPBridge2026.AgentFramework
 
             if (string.IsNullOrEmpty(_apiKey))
             {
-                ShowSettingsDialog();
+                // Defer until after window is shown — Owner = this requires the window to be visible first
+                Loaded += (s, e) => ShowSettingsDialog();
             }
             else
             {
@@ -103,12 +104,15 @@ namespace RevitMCPBridge2026.AgentFramework
 
             if (previousSession != null && previousSession.Messages.Count > 0)
             {
-                if (AskToContinueSession(previousSession))
+                Loaded += (s, e) =>
                 {
-                    RestoreSession(previousSession);
-                    sessionRestored = true;
-                    AddAssistantMessage("Welcome back! I remember our previous conversation. What would you like to continue working on?");
-                }
+                    if (AskToContinueSession(previousSession))
+                    {
+                        RestoreSession(previousSession);
+                        AddAssistantMessage("Welcome back! I remember our previous conversation. What would you like to continue working on?");
+                    }
+                };
+                sessionRestored = true; // suppress default welcome; Loaded handler covers both paths
             }
 
             if (!sessionRestored)
