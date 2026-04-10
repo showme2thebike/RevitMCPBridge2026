@@ -356,6 +356,19 @@ namespace RevitMCPBridge
             var faqButton = additionsPanel.AddItem(faqButtonData) as PushButton;
             faqButton.LargeImage = CreateButtonIcon("faq", 32);
             faqButton.Image      = CreateButtonIcon("faq", 16);
+
+            // ── AI Assistant (BIM Manager Chat) ───────────────────────────────
+            var chatPanel = application.CreateRibbonPanel(_tabName, "AI Assistant");
+
+            var aiButtonData = new PushButtonData("AIAssistant", "AI\nAssistant", asm,
+                "RevitMCPBridge2026.AgentFramework.LaunchAgentCommand")
+            {
+                ToolTip = "AI Assistant — Chat with Claude",
+                LongDescription = "Opens the BIM Monkey AI chat panel. Ask questions, trigger generation runs, and let Claude operate Revit directly."
+            };
+            var aiButton = chatPanel.AddItem(aiButtonData) as PushButton;
+            aiButton.LargeImage = CreateButtonIcon("ai", 32);
+            aiButton.Image      = CreateButtonIcon("ai", 16);
         }
 
         /// <summary>
