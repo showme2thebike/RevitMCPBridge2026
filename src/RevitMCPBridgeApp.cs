@@ -215,13 +215,6 @@ namespace RevitMCPBridge
             // ── AI Enablement ─────────────────────────────────────────────
             var aiPanel = application.CreateRibbonPanel(_tabName, "AI Enablement");
 
-            var claudeButtonData = new PushButtonData("OpenClaude", "Claude\nCode", asm,
-                "RevitMCPBridge.Commands.OpenClaudeCommand")
-                { ToolTip = "Open Claude Code in BIM Monkey folder" };
-            var claudeButton = aiPanel.AddItem(claudeButtonData) as PushButton;
-            claudeButton.LargeImage = CreateButtonIcon("claude", 32);
-            claudeButton.Image      = CreateButtonIcon("claude", 16);
-
             var platformButtonData = new PushButtonData("BimMonkeyPlatform", "Web\nPlatform", asm,
                 "RevitMCPBridge.Commands.OpenPlatformCommand")
                 { ToolTip = "Open BIM Monkey dashboard" };
@@ -244,7 +237,7 @@ namespace RevitMCPBridge
 
             var startButtonData = new PushButtonData("StartMCPServer", "Start\nServer", asm,
                 "RevitMCPBridge.Commands.StartServerCommand")
-                { ToolTip = "Start the Claude Code MCP server — required before Claude can read or modify your model",
+                { ToolTip = "Start the Banana Chat MCP server — required before Banana Chat can read or modify your model",
                   AvailabilityClassName = "RevitMCPBridge.Commands.ServerStoppedAvailability" };
             var startButton = serverPanel.AddItem(startButtonData) as PushButton;
             startButton.LargeImage = CreateButtonIcon("start", 32);
@@ -252,7 +245,7 @@ namespace RevitMCPBridge
 
             var stopButtonData = new PushButtonData("StopMCPServer", "Stop\nServer", asm,
                 "RevitMCPBridge.Commands.StopServerCommand")
-                { ToolTip = "Stop the Claude Code MCP server — use to reset a stale connection",
+                { ToolTip = "Stop the Banana Chat MCP server — use to reset a stale connection",
                   AvailabilityClassName = "RevitMCPBridge.Commands.ServerRunningAvailability" };
             var stopButton = serverPanel.AddItem(stopButtonData) as PushButton;
             stopButton.LargeImage = CreateButtonIcon("stop", 32);
@@ -260,7 +253,7 @@ namespace RevitMCPBridge
 
             var statusButtonData = new PushButtonData("MCPServerStatus", "Server\nStatus", asm,
                 "RevitMCPBridge.Commands.ServerStatusCommand")
-                { ToolTip = "Check whether the Claude Code MCP server is running and accepting connections" };
+                { ToolTip = "Check whether the Banana Chat MCP server is running and accepting connections" };
             var statusButton = serverPanel.AddItem(statusButtonData) as PushButton;
             statusButton.LargeImage = CreateButtonIcon("status", 32);
             statusButton.Image      = CreateButtonIcon("status", 16);
