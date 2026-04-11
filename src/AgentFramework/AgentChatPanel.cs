@@ -1227,12 +1227,15 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private async Task FetchFirmStandardsAsync()
         {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
             try
             {
                 using (var client = new System.Net.Http.HttpClient())
                 {
                     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
                     client.Timeout = TimeSpan.FromSeconds(10);
+
+                    // 1. Synthesized standards doc (learning from all past sessions)
                     var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/firms/standards");
                     if (resp.IsSuccessStatusCode)
                     {
@@ -1245,11 +1248,27 @@ namespace RevitMCPBridge2026.AgentFramework
                             System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Firm standards loaded ({doc.Length} chars)");
                         }
                     }
+
+                    // 2. Raw corrections from platform reviews (denied + edited decisions)
+                    var corrResp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/corrections/knowledge");
+                    if (corrResp.IsSuccessStatusCode)
+                    {
+                        var corrBody = await corrResp.Content.ReadAsStringAsync();
+                        var corrObj  = JObject.Parse(corrBody);
+                        var knowledge = corrObj["knowledge"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(knowledge))
+                        {
+                            _correctionsKnowledge = string.IsNullOrWhiteSpace(_correctionsKnowledge)
+                                ? knowledge
+                                : knowledge + "\n\n" + _correctionsKnowledge;
+                            System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Platform corrections loaded ({knowledge.Length} chars)");
+                        }
+                    }
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Failed to load firm standards: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Failed to load firm standards/corrections: {ex.Message}");
             }
         }
 
@@ -1274,7 +1293,22 @@ namespace RevitMCPBridge2026.AgentFramework
                 System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Preferences restore failed: {ex.Message}");
             }
 
-            // 2. Fetch corrections knowledge via pipe (needs MCP) — wait for pipe to settle
+            // 2. Load corrections from local memories.json (no pipe needed — always works)
+            try
+            {
+                var memoriesCorrections = LoadMemoryCorrectionsAsKnowledge();
+                if (!string.IsNullOrWhiteSpace(memoriesCorrections))
+                {
+                    _correctionsKnowledge = memoriesCorrections;
+                    System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Memory corrections loaded ({memoriesCorrections.Length} chars)");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Memory corrections load failed: {ex.Message}");
+            }
+
+            // 3. Also fetch from CorrectionLearner via pipe (additional corrections from daemon runs)
             await Task.Delay(1500);
             try
             {
@@ -1283,14 +1317,44 @@ namespace RevitMCPBridge2026.AgentFramework
                 var knowledge = corrObj["knowledge"]?.ToString();
                 if (!string.IsNullOrWhiteSpace(knowledge))
                 {
-                    _correctionsKnowledge = knowledge;
-                    System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Corrections loaded ({knowledge.Length} chars)");
+                    // Append to memory corrections rather than replace
+                    _correctionsKnowledge = string.IsNullOrWhiteSpace(_correctionsKnowledge)
+                        ? knowledge
+                        : _correctionsKnowledge + "\n\n" + knowledge;
+                    System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Pipe corrections appended ({knowledge.Length} chars)");
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Corrections fetch failed: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Pipe corrections fetch failed: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Reads memories.json and formats all correction-type entries as a knowledge block
+        /// for injection into the system prompt. No MCP pipe needed.
+        /// </summary>
+        private string LoadMemoryCorrectionsAsKnowledge()
+        {
+            if (!File.Exists(MemoryFile)) return null;
+
+            var memories = LoadMemories();
+            var corrections = memories
+                .Where(m => m.MemoryType == "correction")
+                .OrderByDescending(m => m.Importance)
+                .ThenByDescending(m => m.CreatedAt)
+                .Take(20)
+                .ToList();
+
+            if (!corrections.Any()) return null;
+
+            var sb = new System.Text.StringBuilder();
+            foreach (var c in corrections)
+            {
+                sb.AppendLine(c.Content);
+                sb.AppendLine();
+            }
+            return sb.ToString().Trim();
         }
 
         /// <summary>
@@ -2574,7 +2638,27 @@ namespace RevitMCPBridge2026.AgentFramework
                     ? ""
                     : $"\n\nCAD VISUAL RULES (sections 1,4,7,8 — call getKnowledgeFile 'cad-visual-rules' for full reference):\n{_cadVisualRulesQuickRef}\n";
 
-                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}
+                var persistentIntelBlock = "\n\nPERSISTENT INTELLIGENCE — CRITICAL:\n" +
+                    "You have a memory system that survives across sessions. Use it constantly.\n\n" +
+                    "STORE A CORRECTION immediately when:\n" +
+                    "- Barrett says no, wrong, don't do that, that's not right, actually, stop\n" +
+                    "- A tool call fails and you learn why\n" +
+                    "- You place something incorrectly and Barrett fixes it\n" +
+                    "- Barrett states a preference (I always want..., never put..., use X not Y)\n" +
+                    "Call: memoryStoreCorrection with whatISaid, whatWasWrong, correctApproach, category\n\n" +
+                    "STORE A MEMORY after important decisions:\n" +
+                    "- Sheet numbering pattern for this project\n" +
+                    "- View template names that are set up\n" +
+                    "- Family names and type names available in this model\n" +
+                    "- Key project facts (building type, occupancy, jurisdiction)\n" +
+                    "Call: memoryStore with content, memoryType (decision/fact/preference), importance 7-9\n\n" +
+                    "RECALL MEMORIES when starting a task:\n" +
+                    "- Before placing sheets: memoryRecall with query 'sheet layout preferences'\n" +
+                    "- Before placing views: memoryRecall with query 'view template names'\n" +
+                    "- When Barrett mentions a project: memoryRecall with the project name\n\n" +
+                    "The goal: Barrett should never have to tell you the same thing twice.\n";
+
+                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}{persistentIntelBlock}
 
 CURRENT PROJECT: {projectName}
 
