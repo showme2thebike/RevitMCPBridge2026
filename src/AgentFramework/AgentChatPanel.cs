@@ -41,6 +41,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private string _selectedModel;
         private string _firmStandardsDoc;     // fetched from Railway on init, injected into every prompt
         private string _correctionsKnowledge; // fetched from plugin on init, injected into every prompt
+        private string _librarySummary;        // compact approved-examples summary from Railway, injected into every prompt
         private string _cadVisualRulesQuickRef; // loaded from knowledge/cad-visual-rules.md on init
         private static readonly string PreferencesPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
@@ -1262,6 +1263,20 @@ namespace RevitMCPBridge2026.AgentFramework
                                 ? knowledge
                                 : knowledge + "\n\n" + _correctionsKnowledge;
                             System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Platform corrections loaded ({knowledge.Length} chars)");
+                        }
+                    }
+
+                    // 3. Approved examples library summary (compact — what kinds of details this firm approves)
+                    var libResp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/library/summary");
+                    if (libResp.IsSuccessStatusCode)
+                    {
+                        var libBody = await libResp.Content.ReadAsStringAsync();
+                        var libObj  = JObject.Parse(libBody);
+                        var summary = libObj["summary"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(summary))
+                        {
+                            _librarySummary = summary;
+                            System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Library summary loaded ({summary.Length} chars)");
                         }
                     }
                 }
@@ -2638,6 +2653,10 @@ namespace RevitMCPBridge2026.AgentFramework
                     ? ""
                     : $"\n\nCAD VISUAL RULES (sections 1,4,7,8 — call getKnowledgeFile 'cad-visual-rules' for full reference):\n{_cadVisualRulesQuickRef}\n";
 
+                var libraryBlock = string.IsNullOrWhiteSpace(_librarySummary)
+                    ? ""
+                    : $"\n\nAPPROVED EXAMPLES LIBRARY (details/sheets this firm has approved — use as quality benchmark):\n{_librarySummary}\n";
+
                 var persistentIntelBlock = "\n\nPERSISTENT INTELLIGENCE — CRITICAL:\n" +
                     "You have a memory system that survives across sessions. Use it constantly.\n\n" +
                     "STORE A CORRECTION immediately when:\n" +
@@ -2658,7 +2677,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     "- When Barrett mentions a project: memoryRecall with the project name\n\n" +
                     "The goal: Barrett should never have to tell you the same thing twice.\n";
 
-                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}{persistentIntelBlock}
+                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{persistentIntelBlock}
 
 CURRENT PROJECT: {projectName}
 
