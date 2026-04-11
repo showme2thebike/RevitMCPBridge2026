@@ -39,7 +39,12 @@ namespace RevitMCPBridge2026.AgentFramework
         private string _apiKey;
         private string _bimMonkeyApiKey;
         private string _selectedModel;
-        private string _firmStandardsDoc;   // fetched from Railway on init, injected into every prompt
+        private string _firmStandardsDoc;     // fetched from Railway on init, injected into every prompt
+        private string _correctionsKnowledge; // fetched from plugin on init, injected into every prompt
+        private string _cadVisualRulesQuickRef; // loaded from knowledge/cad-visual-rules.md on init
+        private static readonly string PreferencesPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            "BIM Monkey", "preferences.json");
         private bool _isProcessing;
 
         // Proactive prompting
@@ -74,7 +79,7 @@ namespace RevitMCPBridge2026.AgentFramework
             _sessionProjectName = uiApp?.ActiveUIDocument?.Document?.Title ?? "Unknown";
 
             // Window setup
-            Title = "BIM Ops Studio - AI Assistant";
+            Title = "Banana Chat";
             Width = 500;
             Height = 700;
             MinWidth = 350;
@@ -181,7 +186,7 @@ namespace RevitMCPBridge2026.AgentFramework
             var titleStack = new StackPanel();
             var title = new TextBlock
             {
-                Text = "BIM Ops Studio",
+                Text = "BIM Monkey - Banana Chat",
                 Foreground = Brushes.White,
                 FontSize = 18,
                 FontWeight = FontWeights.SemiBold
@@ -311,7 +316,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 CaretBrush = Brushes.White,
                 MaxLength = 0          // No character limit (0 = unlimited)
             };
-            _inputTextBox.KeyDown += InputTextBox_KeyDown;
+            _inputTextBox.PreviewKeyDown += InputTextBox_KeyDown;
             Grid.SetColumn(_inputTextBox, 0);
             grid.Children.Add(_inputTextBox);
 
@@ -366,13 +371,24 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private void LoadConfig()
         {
-            // Anthropic key: env var takes precedence, then config file
-            _apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
             _selectedModel = DefaultModel;
 
-            // BIM Monkey key: read from installer-written CLAUDE.md, then config file
-            _bimMonkeyApiKey = ReadBimMonkeyKeyFromClaudeMd();
+            // Primary: read both keys from Claude Code's settings.json (~/.claude/settings.json)
+            var (claudeApiKey, claudeBmKey) = ReadClaudeCodeSettings();
+            _apiKey = claudeApiKey;
+            _bimMonkeyApiKey = claudeBmKey;
 
+            // Fallback: environment variables
+            if (string.IsNullOrEmpty(_apiKey))
+                _apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+                _bimMonkeyApiKey = Environment.GetEnvironmentVariable("BIM_MONKEY_API_KEY");
+
+            // Fallback: installer-written CLAUDE.md for BIM Monkey key
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+                _bimMonkeyApiKey = ReadBimMonkeyKeyFromClaudeMd();
+
+            // Fallback: local config file (user overrides from Settings dialog)
             try
             {
                 if (File.Exists(ConfigPath))
@@ -396,6 +412,27 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 System.Diagnostics.Debug.WriteLine($"Error loading config: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Read both API keys from Claude Code's settings.json (~/.claude/settings.json).
+        /// </summary>
+        private (string anthropicKey, string bmKey) ReadClaudeCodeSettings()
+        {
+            try
+            {
+                var path = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".claude", "settings.json");
+                if (!File.Exists(path)) return (null, null);
+                var obj = JObject.Parse(File.ReadAllText(path));
+                var env = obj["env"] as JObject;
+                return (
+                    env?["ANTHROPIC_API_KEY"]?.ToString(),
+                    env?["BIM_MONKEY_API_KEY"]?.ToString()
+                );
+            }
+            catch { return (null, null); }
         }
 
         /// <summary>
@@ -894,12 +931,14 @@ namespace RevitMCPBridge2026.AgentFramework
         // Core files to always load (small, essential for every session)
         private static readonly string[] CoreKnowledgeFiles = new[]
         {
-            "_index.md",              // Index of all files - tells agent what's available
-            "user-preferences.md",    // How to communicate
-            "voice-corrections.md",   // Wispr Flow fixes
-            "error-recovery.md",      // How to handle errors
-            "revit-api-lessons.md",   // Key API gotchas
-            "annotation-standards.md" // Text sizes, keynotes, dimensions - CRITICAL
+            "_index.md",                           // Index of all files - tells agent what's available
+            "user-preferences.md",                 // How to communicate
+            "voice-corrections.md",                // Wispr Flow fixes
+            "error-recovery.md",                   // How to handle errors
+            "revit-api-lessons.md",                // Key API gotchas
+            "annotation-standards.md",             // Text sizes, keynotes, dimensions - CRITICAL
+            "cad-visual-rules.md",                 // Lineweight, poche, scale, view templates, renovation graphics
+            "bimmonkey-backend-best-practices.md"  // NCS classification pipeline rules (sheetGrammar, viewClassifier, sheetPacker, planValidator)
         };
 
         /// <summary>
@@ -964,6 +1003,70 @@ namespace RevitMCPBridge2026.AgentFramework
             catch (Exception ex)
             {
                 return $"Error loading knowledge file: {ex.Message}";
+            }
+        }
+
+        /// <summary>
+        /// Load CAD visual rules quick reference from knowledge/cad-visual-rules.md.
+        /// Extracts sections 1, 4, 7, 8 (hierarchy, scale, view templates, renovation) —
+        /// compact enough for the system prompt without blowing the context budget.
+        /// </summary>
+        private void LoadCadVisualRulesQuickRef()
+        {
+            try
+            {
+                var filePath = Path.Combine(KnowledgeDir, "cad-visual-rules.md");
+                if (!File.Exists(filePath)) return;
+
+                var full = File.ReadAllText(filePath);
+
+                // Extract sections 1 (weight levels), 4 (scale), 7 (view templates), 8 (renovation)
+                // by grabbing from each ## heading to the next one
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("CAD VISUAL RULES - Quick Reference (full doc: getKnowledgeFile 'cad-visual-rules')");
+                sb.AppendLine();
+
+                string[] sectionsToInclude = { "## 1 ", "## 4 ", "## 7 ", "## 8 " };
+                var lines = full.Split('\n');
+                bool capturing = false;
+                string captureUntil = null;
+
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    var line = lines[i];
+                    bool isH2 = line.StartsWith("## ");
+
+                    if (isH2)
+                    {
+                        capturing = sectionsToInclude.Any(s => line.Contains(s.Trim()));
+                        if (capturing)
+                        {
+                            // find the next ## to know when to stop
+                            captureUntil = null;
+                            for (int j = i + 1; j < lines.Length; j++)
+                            {
+                                if (lines[j].StartsWith("## ")) { captureUntil = lines[j]; break; }
+                            }
+                        }
+                        else
+                        {
+                            capturing = false;
+                        }
+                    }
+
+                    if (capturing) sb.AppendLine(line);
+                }
+
+                var result = sb.ToString().Trim();
+                if (result.Length > 200)
+                {
+                    _cadVisualRulesQuickRef = result;
+                    System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] CAD visual rules loaded ({result.Length} chars)");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] CAD visual rules load failed: {ex.Message}");
             }
         }
 
@@ -1045,6 +1148,12 @@ namespace RevitMCPBridge2026.AgentFramework
             if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
                 _ = FetchFirmStandardsAsync();
 
+            // Restore learned preferences from last session, then fetch corrections knowledge
+            _ = LoadPreferencesAndCorrectionsAsync();
+
+            // Load CAD visual rules quick reference from knowledge file
+            LoadCadVisualRulesQuickRef();
+
             // Proactive prompt timer — checks for new views every 30 seconds
             _proactiveTimer = new System.Windows.Threading.DispatcherTimer
             {
@@ -1122,6 +1231,64 @@ namespace RevitMCPBridge2026.AgentFramework
             }
         }
 
+        /// <summary>
+        /// On init: restore saved preferences directly into PreferenceLearner (no MCP round-trip needed —
+        /// same process), then fetch corrections knowledge via MCP pipe.
+        /// </summary>
+        private async Task LoadPreferencesAndCorrectionsAsync()
+        {
+            // 1. Restore preferences directly — PreferenceLearner is in-process, no pipe needed
+            try
+            {
+                if (File.Exists(PreferencesPath))
+                {
+                    var savedJson = File.ReadAllText(PreferencesPath);
+                    PreferenceLearner.Instance.ImportFromMemory(savedJson);
+                    System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Preferences restored from {PreferencesPath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Preferences restore failed: {ex.Message}");
+            }
+
+            // 2. Fetch corrections knowledge via pipe (needs MCP) — wait for pipe to settle
+            await Task.Delay(1500);
+            try
+            {
+                var corrResult = await ExecuteMCPMethodAsync("getCorrectionsAsKnowledge", new JObject());
+                var corrObj = JObject.Parse(corrResult);
+                var knowledge = corrObj["knowledge"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(knowledge))
+                {
+                    _correctionsKnowledge = knowledge;
+                    System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Corrections loaded ({knowledge.Length} chars)");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Corrections fetch failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// On disconnect: save PreferenceLearner state directly to disk (no MCP — pipe may already be closing).
+        /// </summary>
+        private void SavePreferences()
+        {
+            try
+            {
+                var exportJson = PreferenceLearner.Instance.ExportForMemory();
+                Directory.CreateDirectory(Path.GetDirectoryName(PreferencesPath));
+                File.WriteAllText(PreferencesPath, exportJson);
+                System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Preferences saved to {PreferencesPath}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] SavePreferences failed: {ex.Message}");
+            }
+        }
+
         private string GetModelDisplayName(string modelId)
         {
             if (modelId.Contains("opus"))   return "Opus 4.6";
@@ -1153,6 +1320,10 @@ namespace RevitMCPBridge2026.AgentFramework
         private void DisconnectMCP()
         {
             _proactiveTimer?.Stop();
+
+            // Save learned preferences before pipe closes — synchronous, direct, no MCP needed
+            SavePreferences();
+
             lock (_pipeLock)
             {
                 _mcpWriter?.Dispose();
@@ -1172,17 +1343,13 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             try
             {
-                // Find bimmonkey_run.py relative to the known Documents folder
-                var scriptPath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                    "BIM Monkey", "scripts", "bimmonkey_run.py");
+                // Installer puts bimmonkey_run.py in Documents\BIM Monkey\wrapper\
+                var docsFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+                var scriptPath = Path.Combine(docsFolder, "BIM Monkey", "wrapper", "bimmonkey_run.py");
 
-                // Fallback: look next to the DLL
+                // Fallback: older install puts it directly in Documents\BIM Monkey\
                 if (!File.Exists(scriptPath))
-                {
-                    var asmDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-                    scriptPath = Path.Combine(asmDir, "bimmonkey_run.py");
-                }
+                    scriptPath = Path.Combine(docsFolder, "BIM Monkey", "bimmonkey_run.py");
 
                 if (!File.Exists(scriptPath))
                     return JsonConvert.SerializeObject(new { success = false, error = $"bimmonkey_run.py not found at {scriptPath}" });
@@ -2333,7 +2500,7 @@ namespace RevitMCPBridge2026.AgentFramework
             public string Source { get; set; }
         }
 
-        private async void InputTextBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        private async void InputTextBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)  // hooked as PreviewKeyDown
         {
             // Ctrl+Enter or just Enter (when not holding Shift) to submit
             if (e.Key == System.Windows.Input.Key.Enter && !_isProcessing)
@@ -2377,7 +2544,15 @@ namespace RevitMCPBridge2026.AgentFramework
                     ? ""
                     : $"\n\nFIRM STANDARDS (learned from this firm's history — follow these closely):\n{_firmStandardsDoc}\n";
 
-                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}
+                var correctionsBlock = string.IsNullOrWhiteSpace(_correctionsKnowledge)
+                    ? ""
+                    : $"\n\nPAST CORRECTIONS (things that went wrong and how they were fixed — do not repeat these mistakes):\n{_correctionsKnowledge}\n";
+
+                var cadVisualBlock = string.IsNullOrWhiteSpace(_cadVisualRulesQuickRef)
+                    ? ""
+                    : $"\n\nCAD VISUAL RULES (sections 1,4,7,8 — call getKnowledgeFile 'cad-visual-rules' for full reference):\n{_cadVisualRulesQuickRef}\n";
+
+                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}
 
 CURRENT PROJECT: {projectName}
 
@@ -2390,14 +2565,20 @@ YOUR CAPABILITIES:
 - Annotations: placeTextNote, placeKeynote, tagElements
 - Sheets/Views: createSheet, placeViewOnSheet, duplicateView
 
+SHEET PLACEMENT WORKFLOW — always follow this order:
+0. START HERE: Call classifyAndPackViews FIRST before doing anything else. This runs the full NCS/UDS classification pipeline on all views and returns a pre-assigned sheet layout identical to the Railway daemon. The promptBlock field contains the authoritative sheet plan — use it to know which views go on which sheets. You must not deviate from the definite assignments in promptBlock; only the ambiguous views are yours to place.
+1. After classifyAndPackViews, create each sheet in the order shown in promptBlock (G0.1, G1.1, A0.1, A1.1...). Use the sheetId from promptBlock as the sheet number.
+2. For each sheet, call getSheetLayoutRecommendation passing the sheet number AND the viewIds for THAT sheet's viewports only — never pass the same view list to multiple sheets.
+3. Use the returned XY coordinates in placeViewOnSheet — do not guess positions.
+4. Call analyzeView after placement to verify — 'Is the viewport visible and correctly positioned?'
+If getSheetLayoutRecommendation returns no positions, fall back to getSheetPrintableArea and place views at the center of each quadrant.
+
+SCALE WORKFLOW — before placing any view:
+Call getRecommendedScale for the view — it checks firm preferred scales by view type before falling back to geometry fit. Use the returned scale when placing.
+
 IMPORTANT - USE YOUR EYES:
 After placing elements on sheets, USE analyzeView to SEE the result and verify it worked!
-Example: After placeViewOnSheet, call analyzeView with question: 'Is the viewport visible and positioned correctly?'
-This helps you catch issues like:
-- Views that didn't actually get placed
-- Overlapping viewports
-- Elements in wrong locations
-- Empty sheets that should have content
+This helps you catch: views that didn't get placed, overlapping viewports, elements in wrong locations.
 
 {knowledgeBase}
 
@@ -2437,6 +2618,32 @@ STYLE:
 
         #region Message Display Methods
 
+        /// <summary>
+        /// Creates a read-only TextBox that looks like a TextBlock but supports text selection and copy.
+        /// </summary>
+        private static System.Windows.Controls.TextBox SelectableText(
+            string text,
+            System.Windows.Media.Brush foreground,
+            double fontSize = 14,
+            FontFamily fontFamily = null)
+        {
+            return new System.Windows.Controls.TextBox
+            {
+                Text = text,
+                Foreground = foreground,
+                FontSize = fontSize,
+                FontFamily = fontFamily ?? new FontFamily("Segoe UI"),
+                Background = System.Windows.Media.Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                IsReadOnly = true,
+                TextWrapping = TextWrapping.Wrap,
+                Padding = new Thickness(0),
+                Cursor = System.Windows.Input.Cursors.IBeam,
+                IsTabStop = false,
+                FocusVisualStyle = null
+            };
+        }
+
         private void AddUserMessage(string text)
         {
             // Track for session persistence
@@ -2450,7 +2657,7 @@ STYLE:
                 Margin = new Thickness(50, 8, 8, 8),
                 HorizontalAlignment = HorizontalAlignment.Right
             };
-            border.Child = new TextBlock { Text = text, Foreground = Brushes.White, TextWrapping = TextWrapping.Wrap, FontSize = 14 };
+            border.Child = SelectableText(text, Brushes.White);
             _chatHistory.Children.Add(border);
             ScrollToBottom();
         }
@@ -2474,7 +2681,7 @@ STYLE:
                 CornerRadius = new CornerRadius(12, 12, 12, 0),
                 Padding = new Thickness(12)
             };
-            border.Child = new TextBlock { Text = text, Foreground = Brushes.White, TextWrapping = TextWrapping.Wrap, FontSize = 14 };
+            border.Child = SelectableText(text, Brushes.White);
             container.Children.Add(border);
 
             // Feedback buttons (thumbs up/down)
@@ -2673,14 +2880,10 @@ STYLE:
                 Padding = new Thickness(10),
                 Margin = new Thickness(20, 4, 20, 4)
             };
-            border.Child = new TextBlock
-            {
-                Text = text,
-                Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160)),
-                TextWrapping = TextWrapping.Wrap,
-                FontSize = 12,
-                FontFamily = new FontFamily("Consolas")
-            };
+            border.Child = SelectableText(text,
+                new SolidColorBrush(Color.FromRgb(160, 160, 160)),
+                fontSize: 12,
+                fontFamily: new FontFamily("Consolas"));
             _chatHistory.Children.Add(border);
             ScrollToBottom();
         }
@@ -2694,13 +2897,8 @@ STYLE:
                 Padding = new Thickness(12),
                 Margin = new Thickness(8)
             };
-            border.Child = new TextBlock
-            {
-                Text = "Error: " + text,
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 100, 100)),
-                TextWrapping = TextWrapping.Wrap,
-                FontSize = 14
-            };
+            border.Child = SelectableText("Error: " + text,
+                new SolidColorBrush(Color.FromRgb(255, 100, 100)));
             _chatHistory.Children.Add(border);
             ScrollToBottom();
         }

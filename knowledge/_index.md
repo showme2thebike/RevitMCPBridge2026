@@ -162,12 +162,13 @@
 
 ---
 
-## Documentation Standards (7 files)
+## Documentation Standards (8 files)
 
 | File | Description |
 |------|-------------|
 | [annotation-standards.md](annotation-standards.md) | Text styles, leaders, tags, keynotes |
 | [architectural-standards.md](architectural-standards.md) | Sheet numbering, scales, line weights |
+| [cad-visual-rules.md](cad-visual-rules.md) | ⭐ CRITICAL: Lineweight levels, cut/projection pen assignments, poche rules, scale by view type, annotation sizes, View Template standards, renovation phase graphics, NCS/UDS visual grammar |
 | [cd-standards.md](cd-standards.md) | Construction document organization, phases |
 | [detail-library.md](detail-library.md) | Standard details by assembly type |
 | [stair-railing-design.md](stair-railing-design.md) | Stair geometry, railings, guards, code |
@@ -183,6 +184,14 @@
 | [renewable-energy.md](renewable-energy.md) | Solar PV, storage, geothermal, net-zero |
 | [resilient-design.md](resilient-design.md) | Climate adaptation, flood, wind, seismic, fire |
 | [waterproofing.md](waterproofing.md) | Below-grade, plaza, wet areas (also in Envelope) |
+
+---
+
+## BIM Monkey Pipeline (1 file)
+
+| File | Description |
+|------|-------------|
+| [bimmonkey-backend-best-practices.md](bimmonkey-backend-best-practices.md) | ⭐ CRITICAL: Full NCS classification pipeline rules — sheetGrammar, viewClassifier 13-step decision tree, sheetPacker bin-packing, planValidator checks, permit-critical warnings, key rules for Banana Chat |
 
 ---
 
