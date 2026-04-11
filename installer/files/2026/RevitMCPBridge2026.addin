@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <RevitAddIns>
   <AddIn Type="Application">
-    <Name>BIM Monkey 2026</Name>
+    <Name>BIM Monkey</Name>
     <Assembly>RevitMCPBridge2026.dll</Assembly>
     <FullClassName>RevitMCPBridge.RevitMCPBridgeApp</FullClassName>
     <ClientId>8B8B6F55-9C7A-4F5E-8D8A-1B2C3D4E5F61</ClientId>

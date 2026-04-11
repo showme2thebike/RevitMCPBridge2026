@@ -22,7 +22,7 @@ namespace RevitMCPBridge.Commands
             }
             catch (Exception ex)
             {
-                TaskDialog.Show("BIM Monkey FAQ", ex.Message);
+                TaskDialog.Show("FAQ", ex.Message);
                 return Result.Succeeded;
             }
         }
@@ -81,10 +81,10 @@ namespace RevitMCPBridge.Commands
             html.AppendLine("<h2>Getting Started</h2>");
             html.AppendLine("<p class='step'><span class='step-num'>1.</span> Open Revit and your project file.</p>");
             html.AppendLine("<p class='step'><span class='step-num'>2.</span> Confirm the BIM Monkey installer has finished — it installs Node.js, Claude Code, Python, MCP Python package, PyMuPDF, and Playwright automatically. Python 3.10 or later is required (the installer adds 3.12 if nothing compatible is found). Existing Python 3.10, 3.11, 3.12, or 3.13 installs are all compatible and will not be replaced. If Python shows as missing after install, check that <em>Add Python to PATH</em> was checked during installation.</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>3.</span> In the <strong>BIM Monkey</strong> tab, click <strong>Start Server</strong> in the <strong>Control - Claude Code</strong> panel. The MCP server does not start automatically — you must start it before generation. Once running, it restarts automatically whenever you open a new project file. The BIM Monkey TCP server (Control - BIM Monkey panel) starts alongside it automatically.</p>");
+            html.AppendLine("<p class='step'><span class='step-num'>3.</span> In the <strong>BIM Monkey</strong> tab, click <strong>Start Server</strong> in the <strong>Server Control</strong> panel. The MCP server does not start automatically — you must start it before your first session. Once running, it restarts automatically whenever you open a new project file.</p>");
             html.AppendLine("<p class='step'><span class='step-num'>4.</span> Optionally click <strong>Standards</strong> in the Documentation panel to review your firm's library score and coverage before generating — so you know what the AI has to work from.</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>5.</span> Click <strong>Start Generation</strong> in the Documentation panel. A terminal window opens and the BIM Monkey generation daemon runs automatically — it reads your model, calls the backend to build a CD plan from your firm's training library, and executes it directly in Revit. No further input is needed.</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>6.</span> The daemon executes the plan in three phases: <strong>Phase 1</strong> — sheets and view placements; <strong>Phase 2</strong> — section and assembly details; <strong>Phase 3</strong> — door schedule, window schedule, room finish schedule, and keynote legend.</p>");
+            html.AppendLine("<p class='step'><span class='step-num'>5.</span> Open <strong>Banana Chat</strong> from the AI Enablement panel and tell it to start generation — or use it to ask questions about your model, place views, create schedules, and review what was built, all from inside Revit.</p>");
+            html.AppendLine("<p class='step'><span class='step-num'>6.</span> Generation runs in three phases: <strong>Phase 1</strong> — sheets and view placements; <strong>Phase 2</strong> — section and assembly details; <strong>Phase 3</strong> — door schedule, window schedule, room finish schedule, and keynote legend.</p>");
             html.AppendLine("<p class='step'><span class='step-num'>7.</span> Generated sheets are marked <code>*</code> in the Project Browser. Review results and add notes at <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a>.</p>");
 
             // ── What Claude generates ──────────────────────────────────────────
@@ -93,21 +93,26 @@ namespace RevitMCPBridge.Commands
             html.AppendLine("<p class='q'>Construction Details (Phase 2)</p><p class='a'>New drafting views drawn from scratch: wall-roof connections, foundation conditions, window/door head-sill-jamb details, parapet sections. Existing unplaced details are placed first before any new ones are generated.</p>");
             html.AppendLine("<p class='q'>Schedules (Phase 3)</p><p class='a'>Door schedule, window schedule, room finish schedule, and keynote legend — created as live Revit schedules and placed on the appropriate sheets (G1.xx, A5.xx, G0.xx) automatically.</p>");
 
+            // ── Banana Chat ────────────────────────────────────────────────────
+            html.AppendLine("<h2>Banana Chat</h2>");
+            html.AppendLine("<p class='q'>What is Banana Chat?</p><p class='a'>Banana Chat is an AI assistant that lives inside Revit. Instead of switching to a separate terminal or web app, you talk to Claude directly from the BIM Monkey ribbon — and Claude can actually reach into your Revit model and do things. Ask it to build a CD set, place a view on a sheet, create a schedule, rename views, or just tell you what's in the model. It responds like a conversation and executes like a script.</p>");
+            html.AppendLine("<p class='a'>Under the hood it runs Claude Sonnet 4.6 with access to all 705 Revit endpoints. You control the conversation — start generation, change course mid-run, ask follow-up questions, and fix problems without leaving Revit.</p>");
+            html.AppendLine("<p class='q'>Does it need my API key?</p><p class='a'>No setup required. Banana Chat reads your Anthropic API key and BIM Monkey API key automatically from Claude Code's settings file at startup. If a key can't be found, a settings dialog will appear — but for most users both keys are picked up automatically.</p>");
+            html.AppendLine("<p class='q'>What does it already know about my firm?</p><p class='a'>On startup, Banana Chat fetches your firm's current standards document from the BIM Monkey backend and loads it into every conversation automatically. It knows your sheet numbering conventions, detail naming patterns, schedule formats, and notes from past runs — so it starts from your practice, not a generic template.</p>");
+            html.AppendLine("<p class='q'>What is proactive prompting?</p><p class='a'>Banana Chat watches Revit in the background. When it detects you've created a new elevation, detail, or a cluster of views in the last 15 minutes, it sends a message automatically: <em>\"I see you just created [view name] — ready to place it on a sheet?\"</em> You can reply yes or ignore it. Each view is prompted only once.</p>");
+            html.AppendLine("<p class='q'>How do I send a message?</p><p class='a'>Type in the input box and press <strong>Enter</strong>. Press <strong>Shift+Enter</strong> to add a new line without sending.</p>");
+            html.AppendLine("<p class='q'>Can I switch AI models?</p><p class='a'>Yes — open the settings dialog (gear icon) to switch between Claude Sonnet and Claude Haiku. Haiku is faster for quick lookups; Sonnet is better for complex tasks like layout and schedule creation.</p>");
+
             // ── Ribbon Buttons ─────────────────────────────────────────────────
             html.AppendLine("<h2>Ribbon Buttons</h2>");
             html.AppendLine("<p class='q'>Claude Code (AI Enablement panel)</p><p class='a'>Opens a Claude Code terminal in your <code>Documents\\BIM Monkey\\</code> folder — for manual sessions outside of Start Generation.</p>");
             html.AppendLine("<p class='q'>Web Platform (AI Enablement panel)</p><p class='a'>Opens <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a> in your browser — review runs, upload CD sets, view your training library, manage your team.</p>");
-            html.AppendLine("<p class='q'>Start Server (Control - Claude Code panel)</p><p class='a'>Starts the Claude Code MCP server so Claude can communicate with Revit. Must be clicked manually before your first generation. The BIM Monkey TCP server starts alongside it automatically.</p>");
-            html.AppendLine("<p class='q'>Stop Server (Control - Claude Code panel)</p><p class='a'>Stops the Claude Code MCP server. Use this to reset a stale connection. Always Stop → Start after switching project files mid-session if auto-restart didn't fire. Also stops the BIM Monkey TCP server.</p>");
-            html.AppendLine("<p class='q'>Server Status (Control - Claude Code panel)</p><p class='a'>Shows whether the Claude Code MCP server is running and accepting connections.</p>");
-            html.AppendLine("<p class='q'>Start Server (Control - BIM Monkey panel)</p><p class='a'>Starts the BIM Monkey TCP server used by generation runs. This starts automatically when you click Start Server in the Control - Claude Code panel — you only need this button if you want to start it independently.</p>");
-            html.AppendLine("<p class='q'>Stop Server (Control - BIM Monkey panel)</p><p class='a'>Stops the BIM Monkey TCP server. Generation runs will fall back to the Claude Code MCP connection if this is stopped.</p>");
-            html.AppendLine("<p class='q'>Server Status (Control - BIM Monkey panel)</p><p class='a'>Shows whether the BIM Monkey TCP server is running and which port it is listening on.</p>");
-            html.AppendLine("<p class='q'>Check Model (Documentation panel)</p><p class='a'>Runs a pre-generation health check on your active Revit model — reviews room count and names, view types present, door and window counts, and title block. Returns a 0–100 health score, a pass/warning/fail checklist, and an estimated sheet count. Run this before Start Generation to catch issues that would produce incomplete output.</p>");
-            html.AppendLine("<p class='q'>Standards (Documentation panel)</p><p class='a'>Fetches your firm's library score from the BIM Monkey API — pages analyzed, projects uploaded, detail type coverage, and score breakdown. Also shows a <strong>Library Gaps</strong> list: detail types with missing or thin coverage (fewer than 5 examples), so you know exactly what to upload next to improve generation quality. Run this after Check Model to confirm your library is ready before generating.</p>");
-            html.AppendLine("<p class='q'>Start Generation (Documentation panel)</p><p class='a'>Launches the BIM Monkey generation daemon — a Python program that reads your model, calls the BIM Monkey backend for the CD plan, and executes all sheets, views, schedules, and details directly in Revit. A terminal window shows progress. No manual steps required.</p>");
-            html.AppendLine("<p class='q'>Stop Generation (Documentation panel)</p><p class='a'>Cancels a generation run in progress.</p>");
-            html.AppendLine("<p class='q'>Place Tags (Documentation panel)</p><p class='a'>Tags all floor plans with room, door, and window tags in a single batch operation across all plan views. Run this after Phase 1 completes to populate schedules with accurate data before Phase 3 creates them.</p>");
+            html.AppendLine("<p class='q'>Banana Chat (AI Enablement panel)</p><p class='a'>Opens the Banana Chat panel — a live AI assistant running Claude Sonnet 4.6 that knows your Revit model and your firm's standards. Ask it anything: \"what views are on sheet A2.01?\", \"create a door schedule\", \"place the bathroom elevations on a sheet\". It reads your firm's standards doc automatically on startup and injects it into every conversation. It also watches what you create in Revit — when it sees you've made a new set of elevations or details, it prompts you to place them on a sheet. Press Enter to send (Shift+Enter for a new line).</p>");
+            html.AppendLine("<p class='q'>Start Server (Server Control panel)</p><p class='a'>Starts the BIM Monkey MCP server — the named pipe that gives Claude access to all 705 Revit endpoints. Must be clicked before your first session. Restarts automatically when you open a new project.</p>");
+            html.AppendLine("<p class='q'>Stop Server (Server Control panel)</p><p class='a'>Stops the MCP server. Use this to reset a stale connection — always Stop → Start after switching project files if auto-restart didn't fire.</p>");
+            html.AppendLine("<p class='q'>Server Status (Server Control panel)</p><p class='a'>Shows whether the MCP named pipe is running and ready for connections.</p>");
+            html.AppendLine("<p class='q'>Check Model (Documentation panel)</p><p class='a'>Runs a pre-generation health check on your active Revit model — reviews room count and names, view types present, door and window counts, and title block. Returns a 0–100 health score, a pass/warning/fail checklist, and an estimated sheet count. Run this before generating to catch issues that would produce incomplete output.</p>");
+            html.AppendLine("<p class='q'>Standards (Documentation panel)</p><p class='a'>Fetches your firm's library score from the BIM Monkey API — pages analyzed, projects uploaded, detail type coverage, and score breakdown. Also shows a <strong>Library Gaps</strong> list: detail types with missing or thin coverage (fewer than 5 examples), so you know exactly what to upload next to improve generation quality.</p>");
             html.AppendLine("<p class='q'>Load (Redline Review panel)</p><p class='a'>Opens a file picker to load a redlined PDF. Claude analyzes the markup and extracts a structured list of changes, which become instructions for the next generation run.</p>");
             html.AppendLine("<p class='q'>Cancel / Clear (Redline Review panel)</p><p class='a'>Cancel stops an in-progress redline analysis. Clear removes all loaded redline context so the next generation runs clean.</p>");
             html.AppendLine("<p class='q'>FAQ (Additions panel)</p><p class='a'>Opens this page.</p>");
@@ -124,14 +129,14 @@ namespace RevitMCPBridge.Commands
 
             html.AppendLine("<p class='q'>Claude can't connect to Revit / server isn't responding.</p>");
             html.AppendLine("<p class='a'>The server must be running before Claude can send any commands. Reset it:</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>1.</span> BIM Monkey tab → <strong>Control - Claude Code</strong> → click <strong>Stop Server</strong>, wait 2 seconds</p>");
+            html.AppendLine("<p class='step'><span class='step-num'>1.</span> BIM Monkey tab → <strong>Server Control</strong> → click <strong>Stop Server</strong>, wait 2 seconds</p>");
             html.AppendLine("<p class='step'><span class='step-num'>2.</span> Click <strong>Start Server</strong> — confirm with Server Status before retrying</p>");
             html.AppendLine("<p class='step'><span class='step-num'>3.</span> Return to Claude Code and retry</p>");
 
             html.AppendLine("<p class='q'>I opened a different Revit file and Claude is still reading the old one.</p>");
             html.AppendLine("<p class='a'>The server binds to the document open at startup. You must restart it every time you switch files:</p>");
             html.AppendLine("<p class='step'><span class='step-num'>1.</span> Open your new project file in Revit</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>2.</span> BIM Monkey tab → <strong>Control - Claude Code</strong> → <strong>Stop Server</strong> then <strong>Start Server</strong></p>");
+            html.AppendLine("<p class='step'><span class='step-num'>2.</span> BIM Monkey tab → <strong>Server Control</strong> → <strong>Stop Server</strong> then <strong>Start Server</strong></p>");
             html.AppendLine("<p class='step'><span class='step-num'>3.</span> Claude will now read from the new active document</p>");
 
             html.AppendLine("<p class='q'>Detail sheets (A4.xx) are empty after generation.</p>");
@@ -165,6 +170,7 @@ namespace RevitMCPBridge.Commands
 
             html.AppendLine("<p class='q'>Revit warns about duplicate Type Mark values.</p><p class='a'>This is a standard Revit model quality warning unrelated to BIM Monkey. Revit is flagging elements in your model that share a Type Mark parameter. Dismiss it safely.</p>");
 
+            html.AppendLine("<p class='q'>Banana Chat opens a settings dialog asking for my API key.</p><p class='a'>This means Banana Chat couldn't find your Anthropic API key in Claude Code's settings file. Run <code>claude</code> in a terminal once to sign in — Claude Code stores your key automatically at <code>~/.claude/settings.json</code> and Banana Chat will find it on next launch. If you've already signed in and still see this, re-run the BIM Monkey installer to restore the settings file.</p>");
             html.AppendLine("<p class='q'>API key rejected.</p><p class='a'>Keys start with <code>bm_</code> and are emailed on signup. Re-run the installer to re-enter your key, or email <a href='mailto:hello@bimmonkey.ai'>hello@bimmonkey.ai</a>.</p>");
 
             html.AppendLine("<p class='q'>Installer blocked by Windows / antivirus.</p>");

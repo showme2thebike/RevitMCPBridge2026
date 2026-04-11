@@ -229,8 +229,18 @@ namespace RevitMCPBridge
             platformButton.LargeImage = CreateButtonIcon("monkey", 32);
             platformButton.Image      = CreateButtonIcon("monkey", 16);
 
-            // ── MCP Control ───────────────────────────────────────────────
-            var serverPanel = application.CreateRibbonPanel(_tabName, "MCP Control");
+            var bananaButtonData = new PushButtonData("AIAssistant", "Banana\nChat", asm,
+                "RevitMCPBridge2026.AgentFramework.LaunchAgentCommand")
+            {
+                ToolTip = "Chat with Claude about your model — ask questions, trigger generation, or let Claude operate Revit directly.",
+                LongDescription = "Opens the Banana Chat panel. Claude can read your model, create sheets, place views, run generation, and query your detail library."
+            };
+            var bananaButton = aiPanel.AddItem(bananaButtonData) as PushButton;
+            bananaButton.LargeImage = CreateButtonIcon("banana", 32);
+            bananaButton.Image      = CreateButtonIcon("banana", 16);
+
+            // ── Server Control ────────────────────────────────────────────
+            var serverPanel = application.CreateRibbonPanel(_tabName, "Server Control");
 
             var startButtonData = new PushButtonData("StartMCPServer", "Start\nServer", asm,
                 "RevitMCPBridge.Commands.StartServerCommand")
@@ -255,31 +265,6 @@ namespace RevitMCPBridge
             statusButton.LargeImage = CreateButtonIcon("status", 32);
             statusButton.Image      = CreateButtonIcon("status", 16);
 
-            // ── TCP Control ───────────────────────────────────────────────
-            var daemonPanel = application.CreateRibbonPanel(_tabName, "TCP Control");
-
-            var startDaemonData = new PushButtonData("StartDaemon", "Start\nServer", asm,
-                "RevitMCPBridge.Commands.StartDaemonCommand")
-                { ToolTip = "Start the BIM Monkey server — required before generation runs can execute",
-                  AvailabilityClassName = "RevitMCPBridge.Commands.DaemonStoppedAvailability" };
-            var startDaemonButton = daemonPanel.AddItem(startDaemonData) as PushButton;
-            startDaemonButton.LargeImage = CreateButtonIcon("start", 32);
-            startDaemonButton.Image      = CreateButtonIcon("start", 16);
-
-            var stopDaemonData = new PushButtonData("StopDaemon", "Stop\nServer", asm,
-                "RevitMCPBridge.Commands.StopDaemonCommand")
-                { ToolTip = "Stop the BIM Monkey TCP server",
-                  AvailabilityClassName = "RevitMCPBridge.Commands.DaemonRunningAvailability" };
-            var stopDaemonButton = daemonPanel.AddItem(stopDaemonData) as PushButton;
-            stopDaemonButton.LargeImage = CreateButtonIcon("stop", 32);
-            stopDaemonButton.Image      = CreateButtonIcon("stop", 16);
-
-            var daemonStatusData = new PushButtonData("DaemonStatus", "Server\nStatus", asm,
-                "RevitMCPBridge.Commands.DaemonStatusCommand")
-                { ToolTip = $"Check whether the BIM Monkey TCP server is running on port {MCPServer.DaemonPort}" };
-            var daemonStatusButton = daemonPanel.AddItem(daemonStatusData) as PushButton;
-            daemonStatusButton.LargeImage = CreateButtonIcon("status", 32);
-            daemonStatusButton.Image      = CreateButtonIcon("status", 16);
 
             // ── Documentation Control ──────────────────────────────────────
             var easyPanel = application.CreateRibbonPanel(_tabName, "Documentation");
@@ -298,29 +283,6 @@ namespace RevitMCPBridge
             standardsButton.LargeImage = CreateButtonIcon("standards", 32);
             standardsButton.Image      = CreateButtonIcon("standards", 16);
 
-            var startGenButtonData = new PushButtonData("StartGeneration", "Start\nGeneration", asm,
-                "RevitMCPBridge.Commands.StartGenerationCommand")
-                { ToolTip = "Start generating Construction Documents",
-                  AvailabilityClassName = "RevitMCPBridge.Commands.GenerationNotRunningAvailability" };
-            var startGenButton = easyPanel.AddItem(startGenButtonData) as PushButton;
-            startGenButton.LargeImage = CreateButtonIcon("startgen", 32);
-            startGenButton.Image      = CreateButtonIcon("startgen", 16);
-
-            var stopGenButtonData = new PushButtonData("StopGeneration", "Stop\nGeneration", asm,
-                "RevitMCPBridge.Commands.StopGenerationCommand")
-                { ToolTip = "Stop the running generation",
-                  AvailabilityClassName = "RevitMCPBridge.Commands.GenerationRunningAvailability" };
-            var stopGenButton = easyPanel.AddItem(stopGenButtonData) as PushButton;
-            stopGenButton.LargeImage = CreateButtonIcon("stopgen", 32);
-            stopGenButton.Image      = CreateButtonIcon("stopgen", 16);
-
-            var auditButtonData = new PushButtonData("PlaceTags", "Place\nTags", asm,
-                "RevitMCPBridge.Commands.AuditPlansCommand")
-                { ToolTip = "Tag all floor plans with room, door, and window tags",
-                  AvailabilityClassName = "RevitMCPBridge.Commands.GenerationNotRunningAvailability" };
-            var auditButton = easyPanel.AddItem(auditButtonData) as PushButton;
-            auditButton.LargeImage = CreateButtonIcon("audit", 32);
-            auditButton.Image      = CreateButtonIcon("audit", 16);
 
             // ── Redline Review ─────────────────────────────────────────────
             var redlinePanel = application.CreateRibbonPanel(_tabName, "Redline Review");
@@ -357,18 +319,6 @@ namespace RevitMCPBridge
             faqButton.LargeImage = CreateButtonIcon("faq", 32);
             faqButton.Image      = CreateButtonIcon("faq", 16);
 
-            // ── Banana Chat (BIM Manager Chat) ────────────────────────────────
-            var chatPanel = application.CreateRibbonPanel(_tabName, "AI Assistant");
-
-            var aiButtonData = new PushButtonData("AIAssistant", "Banana\nChat", asm,
-                "RevitMCPBridge2026.AgentFramework.LaunchAgentCommand")
-            {
-                ToolTip = "Banana Chat — Chat with Claude",
-                LongDescription = "Opens the BIM Monkey AI chat panel. Ask questions, trigger generation runs, and let Claude operate Revit directly."
-            };
-            var aiButton = chatPanel.AddItem(aiButtonData) as PushButton;
-            aiButton.LargeImage = CreateButtonIcon("banana", 32);
-            aiButton.Image      = CreateButtonIcon("banana", 16);
         }
 
         /// <summary>
@@ -387,15 +337,9 @@ namespace RevitMCPBridge
                 { "MCPServerStatus",   "3" },
                 { "ModelCheck",        "M" },
                 { "Standards",         "A" },
-                { "StartGeneration",   "G" },
-                { "StopGeneration",    "X" },
-                { "PlaceTags",         "T" },
                 { "RedlineLoad",       "L" },
                 { "RedlineCancel",     "N" },
                 { "RedlineClear",      "D" },
-                { "StartDaemon",       "4" },
-                { "StopDaemon",        "5" },
-                { "DaemonStatus",      "6" },
                 { "FAQ",               "F" },
                 { "MCPSettings",       "E" },
                 { "MCPHelp",           "H" },

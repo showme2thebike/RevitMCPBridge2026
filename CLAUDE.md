@@ -5,9 +5,18 @@
 # 1. Build plugin
 dotnet publish -c Release --no-self-contained
 
-# 2. *** COPY DLL to installer staging — Inno Setup reads from here, NOT bin/Release/publish/ ***
+# 2. *** COPY DLL to installer staging AND dev Revit location ***
+# Installer staging (Inno Setup reads from here, NOT bin/Release/publish/)
 cp "C:/Users/echra/.bimmonkey/RevitMCPBridge2026/bin/Release/publish/RevitMCPBridge2026.dll" \
    "C:/Users/echra/.bimmonkey/RevitMCPBridge2026/installer/files/2026/RevitMCPBridge2026.dll"
+# Dev Revit location — deploy to BOTH; Revit may load from either depending on install type
+cp "C:/Users/echra/.bimmonkey/RevitMCPBridge2026/bin/Release/publish/RevitMCPBridge2026.dll" \
+   "C:/Users/echra/AppData/Roaming/Autodesk/Revit/Addins/2026/RevitMCPBridge2026.dll"
+cp "C:/Users/echra/.bimmonkey/RevitMCPBridge2026/bin/Release/publish/RevitMCPBridge2026.dll" \
+   "C:/ProgramData/Autodesk/Revit/Addins/2026/RevitMCPBridge2026.dll"
+# Knowledge files — must live alongside the DLL for Banana Chat to find them
+cp -r "C:/Users/echra/.bimmonkey/RevitMCPBridge2026/knowledge" \
+   "C:/Users/echra/AppData/Roaming/Autodesk/Revit/Addins/2026/knowledge"
 
 # 3. Build installer (Inno Setup)
 powershell.exe -Command "& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' 'C:\Users\echra\.bimmonkey\bimmonkey-ai-git\scripts\BimMonkeySetup.iss'"

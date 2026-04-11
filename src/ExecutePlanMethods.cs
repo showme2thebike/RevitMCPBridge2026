@@ -327,14 +327,7 @@ namespace RevitMCPBridge
 
                             if (dupId != sourceView.Id)
                             {
-                                var dupView = doc.GetElement(dupId) as View;
-                                if (dupView != null)
-                                {
-                                    var cleanName = System.Text.RegularExpressions.Regex
-                                        .Replace(dupView.Name, @"\s+Copy\s+\d+$", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                                    if (!cleanName.EndsWith(" *"))
-                                        try { dupView.Name = cleanName + " *"; } catch { }
-                                }
+                                ApplyDupViewName(doc, dupId, viewName);
                                 sourceToDuplicateMap[sourceView.Id] = dupId;
                                 viewsDuplicated++;
                             }
@@ -357,6 +350,8 @@ namespace RevitMCPBridge
             // claimed earlier in this same Phase 3 run).  These views must use the dup id even when
             // they're the only claimant in the current chunk.
             var runtimeDupElsewhere = new HashSet<ElementId>();
+            // Map sourceId → the plan's intended view name, used to give dups a clean name
+            var sourceIdToIntendedName = new Dictionary<ElementId, string>();
             // Track view IDs matched during THIS Phase 3 run so the second claimant triggers a dup
             var claimedViewIdsThisRun = new HashSet<long>();
 
@@ -493,6 +488,7 @@ namespace RevitMCPBridge
                     }
 
                     claimedViewIdsThisRun.Add(matchedIdValue);
+                    sourceIdToIntendedName[matched.Id] = viewName;
                     viewportPlacements.Add((sheet, viewIdToPlace, pos, sheetNumber, viewName));
                 }
             }
@@ -520,14 +516,8 @@ namespace RevitMCPBridge
                             var dupId = srcView.Duplicate(opt);
                             if (dupId != srcId)
                             {
-                                var dupView = doc.GetElement(dupId) as View;
-                                if (dupView != null)
-                                {
-                                    var cleanName = System.Text.RegularExpressions.Regex
-                                        .Replace(dupView.Name, @"\s+Copy\s+\d+$", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                                    if (!cleanName.EndsWith(" *"))
-                                        try { dupView.Name = cleanName + " *"; } catch { }
-                                }
+                                sourceIdToIntendedName.TryGetValue(srcId, out var intendedName);
+                                ApplyDupViewName(doc, dupId, intendedName);
                                 sourceToDuplicateMap[srcId] = dupId;
                                 viewsDuplicated++;
                             }
@@ -600,8 +590,74 @@ namespace RevitMCPBridge
                             catch (Exception ex)
                             {
                                 sub.RollBack();
-                                errors.Add($"placeView {sheetNumber}/{viewName}: {ex.Message}");
-                                log.Add(new { phase = 4, op = "placeView", sheetNumber, viewName, status = "error", error = ex.Message });
+
+                                // "viewId cannot be added" = view is already placed somewhere.
+                                // Phase 3 should have caught this, but pre-existing views placed on
+                                // existing sheets can slip through if the plan assigns the same view
+                                // to multiple sheets or the preExisting check matched the wrong copy.
+                                if (ex.Message.IndexOf("viewId cannot be added", StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    // Already on this exact sheet → silent success
+                                    if (placedViewportSet.Contains(((long)sheet.Id.Value, (long)viewId.Value)))
+                                    {
+                                        viewsAlreadyPlaced++;
+                                        log.Add(new { phase = 4, op = "placeView", sheetNumber, viewName, status = "already_on_sheet" });
+                                        continue;
+                                    }
+
+                                    // On a different sheet → duplicate and retry
+                                    ElementId retryId = ElementId.InvalidElementId;
+                                    using (var subDup = new SubTransaction(doc))
+                                    {
+                                        try
+                                        {
+                                            subDup.Start();
+                                            var srcView = doc.GetElement(viewId) as View;
+                                            if (srcView != null)
+                                            {
+                                                var opt = (srcView.ViewType == ViewType.DraftingView || srcView.ViewType == ViewType.Detail)
+                                                    ? ViewDuplicateOption.WithDetailing
+                                                    : ViewDuplicateOption.Duplicate;
+                                                var dupId = srcView.Duplicate(opt);
+                                                if (dupId != viewId)
+                                                {
+                                                    ApplyDupViewName(doc, dupId, viewName);
+                                                    retryId = dupId;
+                                                    viewsDuplicated++;
+                                                }
+                                                subDup.Commit();
+                                            }
+                                            else subDup.RollBack();
+                                        }
+                                        catch { subDup.RollBack(); }
+                                    }
+
+                                    if (retryId != ElementId.InvalidElementId)
+                                    {
+                                        using (var subRetry = new SubTransaction(doc))
+                                        {
+                                            try
+                                            {
+                                                subRetry.Start();
+                                                Viewport.Create(doc, sheet.Id, retryId, pos);
+                                                subRetry.Commit();
+                                                placedViewportSet.Add(((long)sheet.Id.Value, (long)retryId.Value));
+                                                viewsPlaced++;
+                                                log.Add(new { phase = 4, op = "placeView", sheetNumber, viewName, status = "placed_late_dup", dupId = (long)retryId.Value });
+                                                continue;
+                                            }
+                                            catch { subRetry.RollBack(); }
+                                        }
+                                    }
+
+                                    errors.Add($"placeView {sheetNumber}/{viewName}: already placed elsewhere, late dup failed");
+                                    log.Add(new { phase = 4, op = "placeView", sheetNumber, viewName, status = "error_dup_failed" });
+                                }
+                                else
+                                {
+                                    errors.Add($"placeView {sheetNumber}/{viewName}: {ex.Message}");
+                                    log.Add(new { phase = 4, op = "placeView", sheetNumber, viewName, status = "error", error = ex.Message });
+                                }
                             }
                         }
                     }
@@ -611,10 +667,11 @@ namespace RevitMCPBridge
             }
 
             // ── PHASE 5: Drafting Views + Layer Stacks ────────────────────────
-            // In sheet chunks detailPlan is present only for Phase 3's detailSheetRefs skip-set.
-            // Phase 5 itself only runs in the dedicated detail chunk (sheets array is empty)
-            // so detail views are not created/placed before their target sheets exist.
-            if (!sheets.Any())
+            // Runs when detailPlan has content. In the old chunked path details arrived in their
+            // own chunk (sheets=[]), so !sheets.Any() was the gate. In the TCP daemon single-call
+            // path the full plan (sheets + detailPlan) is sent in one call — guard on detailPlan
+            // content instead so Phase 5 runs regardless of whether sheets were also present.
+            if (detailPlan.Any())
             foreach (var detail in detailPlan.Cast<JObject>())
             {
                 var detailNum   = detail["detailNumber"]?.Value<int>() ?? 0;
@@ -1182,6 +1239,32 @@ namespace RevitMCPBridge
                 .OrderByDescending(v => words.Count(w => v.Name.ToUpperInvariant().Contains(w)))
                 .FirstOrDefault(v => words.Any(w => w.Length > 3 && v.Name.ToUpperInvariant().Contains(w)));
             return wordMatch;
+        }
+
+        /// <summary>
+        /// Apply a clean name to a duplicated view using the plan's intended name.
+        /// Strips any Revit-generated "Copy N" suffix from the dup's auto-name, then
+        /// tries intendedName + " *". Falls back to numbered suffixes on name conflicts.
+        /// </summary>
+        private static void ApplyDupViewName(Document doc, ElementId dupId, string intendedName)
+        {
+            var dupView = doc.GetElement(dupId) as View;
+            if (dupView == null) return;
+            var baseName = (intendedName ?? dupView.Name)
+                .TrimEnd()
+                .TrimEnd('*').TrimEnd()          // strip trailing *
+                .TrimEnd('*').TrimEnd();          // strip double-star edge case
+            // Strip Revit "Copy N" from the base too
+            baseName = System.Text.RegularExpressions.Regex
+                .Replace(baseName, @"\s+Copy\s+\d+$", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                .TrimEnd();
+
+            for (int attempt = 0; attempt < 20; attempt++)
+            {
+                var candidate = attempt == 0 ? baseName + " *" : $"{baseName} * ({attempt + 1})";
+                try { dupView.Name = candidate; return; }
+                catch { /* name conflict — try next */ }
+            }
         }
 
         private static XYZ[] GetAutoLayoutPositions(ViewSheet sheet, int count)

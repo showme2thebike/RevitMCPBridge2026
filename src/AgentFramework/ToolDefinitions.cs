@@ -47,25 +47,6 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 new ToolDefinition
                 {
-                    Name = "triggerGeneration",
-                    Description = @"Launch a BIM Monkey CD generation run for the active Revit model.
-Use this when Barrett asks to generate construction documents, create sheets, or run BIM Monkey.
-Optionally pass a scope to limit generation to a specific part of the project.
-Examples of scope: 'bathrooms', 'wall sections', 'elevations', 'schedules'.
-Leave scope empty for a full CD set run (same as clicking Start Generation in the ribbon).
-Returns immediately — the generation runs in a separate terminal window.",
-                    InputSchema = new
-                    {
-                        type = "object",
-                        properties = new
-                        {
-                            scope = new { type = "string", description = "Optional: limit generation to a specific scope (e.g. 'bathrooms', 'wall sections'). Leave empty for full run." }
-                        },
-                        required = new string[] { }
-                    }
-                },
-                new ToolDefinition
-                {
                     Name = "queryLibrary",
                     Description = @"Query the firm's approved BIM Monkey drawing library on the server.
 Use this to look up approved reference sheets, check what drawings exist for a project, or find examples for gap analysis.

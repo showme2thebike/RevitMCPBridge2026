@@ -1486,50 +1486,6 @@ namespace RevitMCPBridge2026.AgentFramework
         }
 
         /// <summary>
-        /// Launch bimmonkey_run.py to start a generation run (same as clicking Start Generation).
-        /// Optional scope parameter (e.g. "bathrooms") for targeted generation — future use.
-        /// </summary>
-        private string HandleTriggerGeneration(JObject parameters)
-        {
-            try
-            {
-                // Installer puts bimmonkey_run.py in Documents\BIM Monkey\wrapper\
-                var docsFolder = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-                var scriptPath = Path.Combine(docsFolder, "BIM Monkey", "wrapper", "bimmonkey_run.py");
-
-                // Fallback: older install puts it directly in Documents\BIM Monkey\
-                if (!File.Exists(scriptPath))
-                    scriptPath = Path.Combine(docsFolder, "BIM Monkey", "bimmonkey_run.py");
-
-                if (!File.Exists(scriptPath))
-                    return JsonConvert.SerializeObject(new { success = false, error = $"bimmonkey_run.py not found at {scriptPath}" });
-
-                var scope = parameters?["scope"]?.ToString() ?? "";
-                var args = string.IsNullOrEmpty(scope) ? $"\"{scriptPath}\"" : $"\"{scriptPath}\" --scope \"{scope}\"";
-
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = "python",
-                    Arguments = args,
-                    UseShellExecute = true,
-                    CreateNoWindow = false
-                });
-
-                return JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    message = string.IsNullOrEmpty(scope)
-                        ? "Generation started — check the terminal window for progress."
-                        : $"Scoped generation started (scope: {scope}) — check the terminal for progress."
-                });
-            }
-            catch (Exception ex)
-            {
-                return JsonConvert.SerializeObject(new { success = false, error = ex.Message });
-            }
-        }
-
-        /// <summary>
         /// Query the BIM Monkey approved library on Railway using the firm's API key.
         /// </summary>
         private async Task<string> HandleQueryLibraryAsync(JObject parameters)
@@ -1595,12 +1551,6 @@ namespace RevitMCPBridge2026.AgentFramework
                     ["params"] = parameters
                 };
                 return await ExecuteMCPWithRetryAsync("analyzeView", parameters);
-            }
-
-            // BIM Monkey: trigger a generation run (launches bimmonkey_run.py)
-            if (methodName == "triggerGeneration")
-            {
-                return await Task.Run(() => HandleTriggerGeneration(parameters));
             }
 
             // BIM Monkey: query the approved library on Railway
@@ -2760,8 +2710,14 @@ YOUR CAPABILITIES:
 - Annotations: placeTextNote, placeKeynote, tagElements
 - Sheets/Views: createSheet, placeViewOnSheet, duplicateView
 
+ACCESS ALL 705 METHODS:
+The curated tools above are a small subset. Use callMCPMethod to call ANY of the 705 registered Revit methods.
+Example: callMCPMethod with method=""classifyAndPackViews"", parameters={{}}
+Example: callMCPMethod with method=""moveViewToSheet"", parameters={{""viewId"":875149,""targetSheetId"":123}}
+Use listAllMethods to discover available methods by category. Always prefer callMCPMethod over guessing.
+
 SHEET PLACEMENT WORKFLOW — always follow this order:
-0. START HERE: Call classifyAndPackViews FIRST before doing anything else. This runs the full NCS/UDS classification pipeline on all views and returns a pre-assigned sheet layout identical to the Railway daemon. The promptBlock field contains the authoritative sheet plan — use it to know which views go on which sheets. You must not deviate from the definite assignments in promptBlock; only the ambiguous views are yours to place.
+0. START HERE: callMCPMethod with method=""classifyAndPackViews"" — runs the full NCS/UDS classification pipeline and returns a pre-assigned sheet layout. The promptBlock is authoritative — do not deviate from definite assignments, only the ambiguous views are yours to place.
 1. After classifyAndPackViews, create each sheet in the order shown in promptBlock (G0.1, G1.1, A0.1, A1.1...). Use the sheetId from promptBlock as the sheet number.
 2. For each sheet, call getSheetLayoutRecommendation passing the sheet number AND the viewIds for THAT sheet's viewports only — never pass the same view list to multiple sheets.
 3. Use the returned XY coordinates in placeViewOnSheet — do not guess positions.

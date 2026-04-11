@@ -18,7 +18,7 @@ namespace RevitMCPBridge.Commands
                 
                 if (server == null || !server.IsRunning)
                 {
-                    TaskDialog.Show("BIM Monkey", "Claude Code MCP server is not running.");
+                    TaskDialog.Show("Stop Server", "Claude Code MCP server is not running.");
                     return Result.Succeeded;
                 }
 
@@ -35,7 +35,7 @@ namespace RevitMCPBridge.Commands
                     Log.Warning(daemonEx, "TCP daemon stop error (non-fatal)");
                 }
 
-                TaskDialog.Show("BIM Monkey", "Claude Code MCP server stopped.");
+                TaskDialog.Show("Stop Server", "Claude Code MCP server stopped.");
                 Log.Information("MCP Server stopped via UI command");
                 
                 return Result.Succeeded;

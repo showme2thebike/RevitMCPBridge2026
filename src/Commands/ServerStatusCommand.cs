@@ -62,7 +62,7 @@ namespace RevitMCPBridge.Commands
                     "Autodesk", "Revit", "Addins", "2026", "Logs");
                 status.AppendLine(logPath);
 
-                var dialog = new TaskDialog("BIM Monkey");
+                var dialog = new TaskDialog("Server Status");
                 dialog.MainContent = status.ToString();
                 dialog.MainIcon = TaskDialogIcon.TaskDialogIconInformation;
                 dialog.Show();

@@ -24,25 +24,14 @@ namespace RevitMCPBridge.Commands
                 
                 if (server.IsRunning)
                 {
-                    TaskDialog.Show("BIM Monkey", "Claude Code MCP server is already running.");
+                    TaskDialog.Show("Start Server", "Claude Code MCP server is already running.");
                     return Result.Succeeded;
                 }
 
                 server.Start();
 
-                // Also start TCP daemon for bimmonkey_run.py daemon transport
-                try
-                {
-                    if (!server.IsDaemonRunning)
-                        server.StartDaemon();
-                }
-                catch (Exception daemonEx)
-                {
-                    Log.Warning(daemonEx, "TCP daemon failed to start (non-fatal — pipe bridge still works)");
-                }
-
-                var dialog = new TaskDialog("BIM Monkey");
-                dialog.MainContent = "Claude Code MCP server starting. Click Server Status to confirm it's ready before running Claude Code.";
+                var dialog = new TaskDialog("Start Server");
+                dialog.MainContent = "BIM Monkey MCP server starting. The server restarts automatically when you open a new project.";
                 dialog.MainIcon = TaskDialogIcon.TaskDialogIconInformation;
                 dialog.Show();
                 
