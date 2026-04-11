@@ -9,7 +9,7 @@ using Serilog;
 
 namespace RevitMCPBridge.NcsClassifier
 {
-    public class NcsClassifierMethods
+    public static class NcsClassifierMethods
     {
         [MCPMethod("classifyAndPackViews",
             Category    = "SheetLayout",

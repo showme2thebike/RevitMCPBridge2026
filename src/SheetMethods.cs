@@ -1380,6 +1380,84 @@ namespace RevitMCPBridge
             }
         }
 
+        // ── moveViewToSheet ───────────────────────────────────────────────────────
+        [MCPMethod("moveViewToSheet", Category = "Sheet",
+            Description = "Move a view from its current sheet to a target sheet. Removes the existing viewport and places a new one at the same relative position (or center if no prior position). Use instead of delete+recreate.")]
+        public static string MoveViewToSheet(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var pv = new ParameterValidator(parameters, "moveViewToSheet");
+                var viewId        = new ElementId(pv.GetElementId("viewId"));
+                var targetSheetId = new ElementId(pv.GetElementId("targetSheetId"));
+
+                var view = doc.GetElement(viewId) as View;
+                if (view == null)
+                    return ResponseBuilder.Error("View not found", "ELEMENT_NOT_FOUND").Build();
+
+                var targetSheet = doc.GetElement(targetSheetId) as ViewSheet;
+                if (targetSheet == null)
+                    return ResponseBuilder.Error("Target sheet not found", "ELEMENT_NOT_FOUND").Build();
+
+                // Find existing viewport for this view
+                var existingVp = new FilteredElementCollector(doc)
+                    .OfClass(typeof(Viewport))
+                    .Cast<Viewport>()
+                    .FirstOrDefault(vp => vp.ViewId == viewId);
+
+                XYZ placementPoint;
+                string sourceSheetNumber = null;
+
+                if (existingVp != null)
+                {
+                    // Remember center position (sheets are same size, so reuse coordinates)
+                    placementPoint = existingVp.GetBoxCenter();
+                    var sourceSheet = doc.GetElement(existingVp.SheetId) as ViewSheet;
+                    sourceSheetNumber = sourceSheet?.SheetNumber;
+
+                    if (existingVp.Pinned)
+                        return ResponseBuilder.Error(
+                            $"Existing viewport on sheet {sourceSheetNumber} is pinned — unpin it first",
+                            "ELEMENT_PINNED").Build();
+                }
+                else
+                {
+                    // No existing viewport — place at sheet center
+                    placementPoint = new XYZ(0.354, 0.229, 0); // ~center of 24×36 sheet in feet
+                }
+
+                using (var trans = new Transaction(doc, "Move View to Sheet"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    // Remove from current sheet
+                    if (existingVp != null)
+                        doc.Delete(existingVp.Id);
+
+                    // Place on target sheet
+                    var newVp = Viewport.Create(doc, targetSheetId, viewId, placementPoint);
+                    trans.Commit();
+
+                    return ResponseBuilder.Success()
+                        .With("newViewportId", (int)newVp.Id.Value)
+                        .With("viewId", (int)viewId.Value)
+                        .With("targetSheetId", (int)targetSheetId.Value)
+                        .With("targetSheetNumber", targetSheet.SheetNumber)
+                        .With("movedFromSheet", sourceSheetNumber)
+                        .WithMessage($"View '{view.Name}' moved to sheet {targetSheet.SheetNumber}")
+                        .Build();
+                }
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
         /// <summary>
         /// Get all titleblock types
         /// </summary>

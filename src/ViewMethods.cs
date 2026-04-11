@@ -4127,5 +4127,84 @@ namespace RevitMCPBridge
         }
 
         #endregion
+
+        // ── getViewAnnotations ────────────────────────────────────────────────────
+        [MCPMethod("getViewAnnotations", Category = "View",
+            Description = "Returns all text notes, keynotes, and tags in a view with their content strings. Used to compare model annotations against approved library details.")]
+        public static string GetViewAnnotations(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var pv = new ParameterValidator(parameters, "getViewAnnotations");
+                var viewId = new ElementId(pv.GetElementId("viewId"));
+
+                var view = doc.GetElement(viewId) as View;
+                if (view == null)
+                    return ResponseBuilder.Error("View not found", "ELEMENT_NOT_FOUND").Build();
+
+                var annotations = new JArray();
+
+                // Text notes
+                var textNotes = new FilteredElementCollector(doc, viewId)
+                    .OfClass(typeof(TextNote))
+                    .Cast<TextNote>();
+                foreach (var tn in textNotes)
+                {
+                    annotations.Add(new JObject
+                    {
+                        ["type"]    = "textNote",
+                        ["id"]      = (long)tn.Id.Value,
+                        ["text"]    = tn.Text?.Trim(),
+                        ["x"]       = Math.Round(tn.Coord.X * 12, 4),
+                        ["y"]       = Math.Round(tn.Coord.Y * 12, 4)
+                    });
+                }
+
+                // Keynote tags
+                var keynotes = new FilteredElementCollector(doc, viewId)
+                    .OfCategory(BuiltInCategory.OST_KeynoteTags)
+                    .WhereElementIsNotElementType()
+                    .Cast<IndependentTag>();
+                foreach (var kn in keynotes)
+                {
+                    var tagText = kn.TagText ?? "";
+                    annotations.Add(new JObject
+                    {
+                        ["type"] = "keynote",
+                        ["id"]   = (long)kn.Id.Value,
+                        ["text"] = tagText.Trim()
+                    });
+                }
+
+                // Room/area/space tags
+                var tags = new FilteredElementCollector(doc, viewId)
+                    .OfClass(typeof(IndependentTag))
+                    .Cast<IndependentTag>()
+                    .Where(t => t.Category?.Id.Value != (long)BuiltInCategory.OST_KeynoteTags);
+                foreach (var tag in tags)
+                {
+                    var tagText = tag.TagText ?? "";
+                    if (string.IsNullOrWhiteSpace(tagText)) continue;
+                    annotations.Add(new JObject
+                    {
+                        ["type"] = "tag",
+                        ["id"]   = (long)tag.Id.Value,
+                        ["text"] = tagText.Trim()
+                    });
+                }
+
+                return ResponseBuilder.Success()
+                    .With("viewId", (long)viewId.Value)
+                    .With("viewName", view.Name)
+                    .With("annotations", annotations)
+                    .With("count", annotations.Count)
+                    .Build();
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
     }
 }
