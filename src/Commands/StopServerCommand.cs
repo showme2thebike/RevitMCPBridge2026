@@ -18,24 +18,13 @@ namespace RevitMCPBridge.Commands
                 
                 if (server == null || !server.IsRunning)
                 {
-                    TaskDialog.Show("Stop Server", "Claude Code MCP server is not running.");
+                    TaskDialog.Show("Stop Server", "Banana Chat MCP server is not running.");
                     return Result.Succeeded;
                 }
 
                 server.Stop();
 
-                // Also stop TCP daemon if running
-                try
-                {
-                    if (server.IsDaemonRunning)
-                        server.StopDaemon();
-                }
-                catch (Exception daemonEx)
-                {
-                    Log.Warning(daemonEx, "TCP daemon stop error (non-fatal)");
-                }
-
-                TaskDialog.Show("Stop Server", "Claude Code MCP server stopped.");
+                TaskDialog.Show("Stop Server", "Banana Chat MCP server stopped.");
                 Log.Information("MCP Server stopped via UI command");
                 
                 return Result.Succeeded;
