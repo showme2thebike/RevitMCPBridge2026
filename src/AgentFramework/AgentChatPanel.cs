@@ -42,6 +42,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private string _firmStandardsDoc;     // fetched from Railway on init, injected into every prompt
         private string _correctionsKnowledge; // fetched from plugin on init, injected into every prompt
         private string _librarySummary;        // compact approved-examples summary from Railway, injected into every prompt
+        private string _memoryContext;         // last session summary + top facts from local memories.json
         private string _cadVisualRulesQuickRef; // loaded from knowledge/cad-visual-rules.md on init
         private static readonly string PreferencesPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
@@ -1308,7 +1309,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Preferences restore failed: {ex.Message}");
             }
 
-            // 2. Load corrections from local memories.json (no pipe needed — always works)
+            // 2. Load corrections + context from local memories.json (no pipe needed — always works)
             try
             {
                 var memoriesCorrections = LoadMemoryCorrectionsAsKnowledge();
@@ -1317,6 +1318,10 @@ namespace RevitMCPBridge2026.AgentFramework
                     _correctionsKnowledge = memoriesCorrections;
                     System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Memory corrections loaded ({memoriesCorrections.Length} chars)");
                 }
+
+                _memoryContext = LoadMemoryContextAsKnowledge();
+                if (!string.IsNullOrWhiteSpace(_memoryContext))
+                    System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Memory context loaded ({_memoryContext.Length} chars)");
             }
             catch (Exception ex)
             {
@@ -1368,6 +1373,50 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 sb.AppendLine(c.Content);
                 sb.AppendLine();
+            }
+            return sb.ToString().Trim();
+        }
+
+        /// <summary>
+        /// Reads memories.json and returns top facts, decisions, and session summaries
+        /// for injection into the system prompt at startup.
+        /// </summary>
+        private string LoadMemoryContextAsKnowledge()
+        {
+            if (!File.Exists(MemoryFile)) return null;
+
+            var memories = LoadMemories();
+
+            // Most recent session summary
+            var lastSession = memories
+                .Where(m => m.MemoryType == "session")
+                .OrderByDescending(m => m.CreatedAt)
+                .FirstOrDefault();
+
+            // Top facts and decisions (highest importance)
+            var facts = memories
+                .Where(m => m.MemoryType == "fact" || m.MemoryType == "decision" || m.MemoryType == "preference")
+                .OrderByDescending(m => m.Importance)
+                .ThenByDescending(m => m.CreatedAt)
+                .Take(10)
+                .ToList();
+
+            if (lastSession == null && !facts.Any()) return null;
+
+            var sb = new System.Text.StringBuilder();
+            if (lastSession != null)
+            {
+                sb.AppendLine("LAST SESSION:");
+                sb.AppendLine(lastSession.Content);
+                sb.AppendLine();
+            }
+            if (facts.Any())
+            {
+                sb.AppendLine("STORED FACTS & DECISIONS:");
+                foreach (var f in facts)
+                {
+                    sb.AppendLine($"- {f.Content}");
+                }
             }
             return sb.ToString().Trim();
         }
@@ -1572,6 +1621,23 @@ namespace RevitMCPBridge2026.AgentFramework
             if (memoryResult != null)
             {
                 return memoryResult;
+            }
+
+            // callMCPMethod / listAllMethods — universal passthrough to the pipe
+            // Claude calls callMCPMethod({method: "foo", parameters: {...}})
+            // We unwrap and forward to the pipe as if Claude called "foo" directly.
+            if (methodName == "callMCPMethod")
+            {
+                var innerMethod = parameters?["method"]?.ToString();
+                if (string.IsNullOrEmpty(innerMethod))
+                    return JsonConvert.SerializeObject(new { success = false, error = "callMCPMethod requires a 'method' parameter" });
+                var innerParams = parameters?["parameters"] as JObject ?? new JObject();
+                return await ExecuteMCPWithRetryAsync(innerMethod, innerParams);
+            }
+            if (methodName == "listAllMethods")
+            {
+                // Forward to the pipe's listMethods (or getMethods) endpoint
+                return await ExecuteMCPWithRetryAsync("listMethods", parameters ?? new JObject());
             }
 
             // All other tools go through MCP with retry logic
@@ -2657,6 +2723,10 @@ namespace RevitMCPBridge2026.AgentFramework
                     ? ""
                     : $"\n\nAPPROVED EXAMPLES LIBRARY (details/sheets this firm has approved — use as quality benchmark):\n{_librarySummary}\n";
 
+                var memoryBlock = string.IsNullOrWhiteSpace(_memoryContext)
+                    ? ""
+                    : $"\n\nMEMORY FROM PREVIOUS SESSIONS (what you learned and did last time):\n{_memoryContext}\n";
+
                 var persistentIntelBlock = "\n\nPERSISTENT INTELLIGENCE — CRITICAL:\n" +
                     "You have a memory system that survives across sessions. Use it constantly.\n\n" +
                     "STORE A CORRECTION immediately when:\n" +
@@ -2677,7 +2747,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     "- When Barrett mentions a project: memoryRecall with the project name\n\n" +
                     "The goal: Barrett should never have to tell you the same thing twice.\n";
 
-                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{persistentIntelBlock}
+                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{memoryBlock}{persistentIntelBlock}
 
 CURRENT PROJECT: {projectName}
 

@@ -100,7 +100,7 @@ Pass projectName to filter to a specific project (e.g. '24 02 1710 NE 70th').",
                 new ToolDefinition
                 {
                     Name = "listAllMethods",
-                    Description = @"List ALL available MCP methods (437+ methods). Use this to discover what methods are available beyond the curated tools.
+                    Description = @"List ALL available MCP methods (705+ methods). Use this to discover what methods are available beyond the curated tools.
 Categories include: Wall, Door, Window, Room, View, Sheet, Schedule, Family, Parameter, Structural, MEP, Detail, Filter, Material, Phase, Workset, Annotation, and more.
 Returns method names grouped by category with descriptions.",
                     InputSchema = new
@@ -118,7 +118,7 @@ Returns method names grouped by category with descriptions.",
                     Name = "callMCPMethod",
                     Description = @"Call ANY MCP method by name. Use this when you need a method not in the curated tools list.
 First use listAllMethods to discover available methods, then use this to call them.
-This is your gateway to all 437+ Revit automation methods.
+This is your gateway to all 705+ Revit automation methods.
 Common methods: createWall, placeDoor, placeWindow, createRoom, tagRoom, createSchedule, setParameter, etc.",
                     InputSchema = new
                     {
@@ -981,7 +981,7 @@ Captures key outcomes, decisions, problems solved, and next steps.",
                         },
                         required = new[] { "sheetId", "viewIds" }
                     }
-                }
+                },
             };
         }
 

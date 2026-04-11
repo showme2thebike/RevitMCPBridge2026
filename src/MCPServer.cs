@@ -3870,6 +3870,45 @@ namespace RevitMCPBridge
             var searchFilter = parameters?["search"]?.ToString();
             var includeParams = parameters?["includeParams"]?.ToString()?.ToLower() == "true";
 
+            // Use live scanner metadata — reflects every registered [MCPMethod] including new ones
+            if (_methodMetadata != null && _methodMetadata.Count > 0)
+            {
+                var grouped = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                foreach (var kvp in _methodMetadata)
+                {
+                    var name = kvp.Key;
+                    var category = kvp.Value.Category ?? "Uncategorized";
+                    if (!string.IsNullOrEmpty(categoryFilter) &&
+                        !category.Equals(categoryFilter, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.IsNullOrEmpty(searchFilter) &&
+                        name.IndexOf(searchFilter, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    if (!grouped.ContainsKey(category))
+                        grouped[category] = new List<string>();
+                    grouped[category].Add(name);
+                }
+
+                var result2 = new Dictionary<string, object>();
+                var totalCount2 = 0;
+                foreach (var cat in grouped.OrderBy(c => c.Key))
+                {
+                    var ms = cat.Value.OrderBy(m => m).ToList();
+                    result2[cat.Key] = includeParams
+                        ? (object)new { count = ms.Count, methods = ms.Select(m => new { name = m, description = _methodMetadata[m].Description }).ToList() }
+                        : (object)new { count = ms.Count, methods = ms };
+                    totalCount2 += ms.Count;
+                }
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    totalMethods = totalCount2,
+                    categories = result2.Keys.ToList(),
+                    categoryFilter,
+                    searchFilter,
+                    methods = result2
+                });
+            }
+
+            // Fallback: static hardcoded list (used only if scanner metadata unavailable)
             var methods = new Dictionary<string, List<string>>
             {
                 ["Core"] = new List<string> { "ping", "getVersion", "getConfiguration", "reloadConfiguration", "listMethods", "getMethodInfo", "getProjectInfo", "getOpenDocuments", "setActiveDocument", "openProject", "closeProject", "saveProject", "saveProjectAs" },
