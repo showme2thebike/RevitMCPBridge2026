@@ -925,8 +925,30 @@ namespace RevitMCPBridge2026.AgentFramework
             dialog.ShowDialog();
         }
 
-        // Knowledge base directory - embedded intelligence
-        private static readonly string KnowledgeDir = @"D:\RevitMCPBridge2026\knowledge";
+        // Knowledge base directory - resolved at runtime with fallbacks
+        private static readonly string KnowledgeDir = ResolveKnowledgeDir();
+
+        private static string ResolveKnowledgeDir()
+        {
+            // 1. Alongside the DLL (standard installed location)
+            var dllDir = Path.GetDirectoryName(
+                System.Reflection.Assembly.GetExecutingAssembly().Location) ?? "";
+            var dllRelative = Path.Combine(dllDir, "knowledge");
+            if (Directory.Exists(dllRelative)) return dllRelative;
+
+            // 2. Dev machine source path
+            var devPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".bimmonkey", "RevitMCPBridge2026", "knowledge");
+            if (Directory.Exists(devPath)) return devPath;
+
+            // 3. Legacy hardcoded path (D: drive server)
+            var legacyPath = @"D:\RevitMCPBridge2026\knowledge";
+            if (Directory.Exists(legacyPath)) return legacyPath;
+
+            // Return the DLL-relative path so error messages are meaningful
+            return dllRelative;
+        }
 
         // Core files to always load (small, essential for every session)
         private static readonly string[] CoreKnowledgeFiles = new[]
