@@ -2,7 +2,12 @@
 
 ## System Overview
 
+Two independent paths exist for AI-driven Revit automation:
+
 ```
+PATH A: Claude Code + MCP wrapper (external terminal)
+─────────────────────────────────────────────────────
+
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        Claude Code / AI Client                       │
 │                    (Natural Language Interface)                      │
@@ -22,28 +27,42 @@
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         Named Pipe Server                            │
 │                    \\.\pipe\RevitMCPBridge2026                       │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │                      MCPServer.cs                            │    │
-│  │  • Request parsing and routing                               │    │
-│  │  • Method dispatch (437+ methods)                            │    │
-│  │  • Response serialization                                    │    │
-│  └─────────────────────────────────────────────────────────────┘    │
+│  • Request parsing and routing                                       │
+│  • Method dispatch (705 methods)                                     │
+│  • Response serialization                                            │
 └─────────────────────────────────────┬───────────────────────────────┘
                                       │ Revit Idling Event
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          Revit 2026 API                              │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │                    Method Categories                         │    │
-│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────────────┐    │    │
-│  │  │  Walls  │ │  Rooms  │ │  Views  │ │  Intelligence   │    │    │
-│  │  └─────────┘ └─────────┘ └─────────┘ └─────────────────┘    │    │
-│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────────────┐    │    │
-│  │  │  Doors  │ │ Sheets  │ │  MEP    │ │   Structural    │    │    │
-│  │  └─────────┘ └─────────┘ └─────────┘ └─────────────────┘    │    │
-│  │  ... (17 categories total)                                   │    │
-│  └─────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────┘
+
+
+PATH B: Banana Chat (in-process Revit ribbon panel)
+────────────────────────────────────────────────────
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Banana Chat (Revit Ribbon)                       │
+│                       AgentChatPanel.cs                              │
+│  • Direct Anthropic API (claude-sonnet-4-6) — no wrapper, no Railway│
+│  • CoreKnowledgeFiles pre-loaded: cad-visual-rules.md,              │
+│    bimmonkey-backend-best-practices.md + 6 others                   │
+│  • CAD visual rules §1,4,7,8 injected into every system prompt      │
+└──────────┬──────────────────────────────┬───────────────────────────┘
+           │ Anthropic API (HTTPS)         │ Named Pipe (MCP methods)
+           ▼                              ▼
+┌──────────────────────┐   ┌─────────────────────────────────────────┐
+│   Claude API         │   │  NCS Classification Pipeline (in-process)│
+│   (claude-sonnet)    │   │  NcsViewClassifier.cs — 13-step tree     │
+│                      │   │  NcsSheetPacker.cs — bin-packing         │
+│   Handles:           │   │  classifyAndPackViews MCP method         │
+│   • Ambiguous views  │   │  → runs BEFORE any sheet creation        │
+│   • User chat        │   └────────────────┬────────────────────────┘
+│   • Plan decisions   │                    │ Revit Idling Event
+└──────────────────────┘                    ▼
+                             ┌──────────────────────────────────────┐
+                             │         Revit 2026 API               │
+                             └──────────────────────────────────────┘
 ```
 
 ## Core Components
@@ -74,6 +93,7 @@ Each category has a dedicated method file:
 | ViewMethods.cs | 12 | View management |
 | SheetMethods.cs | 11 | Sheet/viewport |
 | ScheduleMethods.cs | 34 | Schedule operations |
+| NcsClassifierMethods.cs | 1 | NCS classification + sheet packing (see below) |
 | ... | ... | ... |
 
 **Standard Method Pattern:**
@@ -93,7 +113,67 @@ public static string MethodName(UIApplication uiApp, JObject parameters)
 }
 ```
 
-### 3. Intelligence Layer
+### 3. NCS Classification Pipeline (in-process)
+
+Added in April 2026. Banana Chat now runs the same deterministic NCS/UDS sheet classification that the Railway daemon uses — entirely in-process via C#, with no network call required.
+
+```
+classifyAndPackViews (MCP method)
+  │
+  ├── NcsViewClassifier.ClassifyInventory()
+  │     13-step decision tree — assigns every view to an NCS slot
+  │     Confidence levels: blocked → definite → probable → ambiguous
+  │     Inputs: view name, viewType, scale, crop box, view template name
+  │
+  ├── NcsSheetPacker.PackInventory()
+  │     Bin-packs classified views onto ARCH D sheets (640 sq in)
+  │     Floor plans: one sheet per level (A1.1, A1.2 …)
+  │     Fill target: 75% — flags under-filled sheets for content
+  │
+  └── NcsSheetPacker.BuildPromptInventoryBlock()
+        Produces the structured 6-section text block injected into
+        Banana Chat context before Claude sees the sheet placement task
+```
+
+**New files:**
+
+| File | Purpose |
+|------|---------|
+| `src/NcsClassifier/NcsModels.cs` | Data types: NcsViewInfo, NcsClassifiedView, NcsPackedSheet, NcsPackedPlan, etc. |
+| `src/NcsClassifier/NcsViewClassifier.cs` | 13-step decision tree; renovation/level detection; permit checks |
+| `src/NcsClassifier/NcsSheetPacker.cs` | Bin-packing; floor plan per-level splitting; gap sheet detection; prompt block builder |
+| `src/NcsClassifier/NcsClassifierMethods.cs` | MCP-exposed `classifyAndPackViews` method |
+
+**Two generation paths — Railway daemon vs. Banana Chat:**
+
+| Path | Who calls it | Classification source | Network |
+|------|-------------|----------------------|---------|
+| Daemon (bimmonkey_run.py) | Railway backend | viewClassifier.js → sheetPacker.js (Node.js) | Yes — Railway |
+| Banana Chat (AgentChatPanel) | Eric/Barrett direct chat | NcsViewClassifier.cs → NcsSheetPacker.cs (C# in-process) | No |
+
+Both paths implement the same 13-step decision tree and produce the same NCS slot assignments. The C# port was created so Banana Chat gets equivalent deterministic pre-classification without needing Railway to be reachable.
+
+### 4. Banana Chat (AgentChatPanel)
+
+In-process AI assistant panel in the Revit ribbon. Uses the Anthropic API directly (not MCP wrapper / not Railway).
+
+**System prompt enhancements (April 2026):**
+- **CAD visual rules quick-ref** — sections 1, 4, 7, 8 of `cad-visual-rules.md` are extracted at startup and injected into every session's system prompt. Full reference available via `getKnowledgeFile`.
+- **CoreKnowledgeFiles** — the following files are always pre-loaded (not on-demand) into every Banana Chat session:
+  - `cad-visual-rules.md` — lineweight, scale, annotation, view template standards
+  - `bimmonkey-backend-best-practices.md` — NCS pipeline rules, exact regex patterns, planValidator signature
+
+**Sheet placement workflow (enforced in system prompt):**
+```
+Step 0: Call classifyAndPackViews FIRST — always, before createSheet or placeViewOnSheet
+Step 1: Review promptBlock — definite assignments are authoritative
+Step 2: Resolve ambiguous views
+Step 3: Create sheets in NCS order (G0→G1→A0→A1→…→E)
+Step 4: Place viewports; always append ` *` to sheet names
+Step 5: Audit for stacked viewports; fix label offsets
+```
+
+### 5. Intelligence Layer
 
 Five levels of autonomy:
 
@@ -134,7 +214,7 @@ Five levels of autonomy:
 │ Level 1: Basic Bridge                                           │
 │ ┌─────────────────────────────────────────────────────────────┐│
 │ │ Direct MCP → Revit API translation                          ││
-│ │ 437 methods                                                  ││
+│ │ 705 methods                                                  ││
 │ └─────────────────────────────────────────────────────────────┘│
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -186,16 +266,25 @@ using (var trans = new Transaction(doc, "Create Wall"))
 
 ```
 RevitMCPBridge2026/
-├── src/                        # C# source (70 files)
+├── src/                        # C# source
 │   ├── MCPServer.cs           # Named pipe server
 │   ├── RevitMCPBridge.cs      # Add-in entry point
-│   ├── *Methods.cs            # API method implementations
+│   ├── *Methods.cs            # API method implementations (705 methods total)
+│   ├── NcsClassifier/         # NCS classification pipeline (April 2026)
+│   │   ├── NcsModels.cs       # Data types for the pipeline
+│   │   ├── NcsViewClassifier.cs  # 13-step decision tree
+│   │   ├── NcsSheetPacker.cs  # Bin-packing + prompt block builder
+│   │   └── NcsClassifierMethods.cs  # classifyAndPackViews MCP method
+│   ├── AgentFramework/        # Banana Chat AI assistant panel
+│   │   └── AgentChatPanel.cs  # In-process Claude API client
 │   ├── AutonomousExecutor.cs  # Level 5 autonomy
 │   ├── ProactiveMonitor.cs    # Level 4 intelligence
 │   ├── CorrectionLearner.cs   # Level 3 learning
 │   └── ChangeTracker.cs       # Level 2 context
-├── knowledge/                  # Domain knowledge (113 files)
+├── knowledge/                  # Domain knowledge (113 files, ~1.5 MB)
 │   ├── _index.md              # Knowledge index
+│   ├── cad-visual-rules.md    # ⭐ CRITICAL: lineweight, scale, annotation, view templates
+│   ├── bimmonkey-backend-best-practices.md  # ⭐ CRITICAL: NCS pipeline rules + regex patterns
 │   ├── room-standards.md      # Room sizing
 │   ├── code-compliance.md     # Building codes
 │   └── ...
@@ -204,7 +293,8 @@ RevitMCPBridge2026/
 ├── docs/                       # Documentation
 ├── tests/                      # Test suites
 ├── scripts/                    # Build/deploy scripts
-└── data/                       # Sample data
+└── installer/                  # Inno Setup installer project
+    └── files/2026/            # DLL staging for installer build
 ```
 
 ## Integration Points
