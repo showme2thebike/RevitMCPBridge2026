@@ -225,8 +225,8 @@ namespace RevitMCPBridge
             var bananaButtonData = new PushButtonData("AIAssistant", "Banana\nChat", asm,
                 "RevitMCPBridge2026.AgentFramework.LaunchAgentCommand")
             {
-                ToolTip = "Chat with Claude about your model — ask questions, trigger generation, or let Claude operate Revit directly.",
-                LongDescription = "Opens the Banana Chat panel. Claude can read your model, create sheets, place views, run generation, and query your detail library."
+                ToolTip = "Chat with Banana Chat about your model — ask questions, trigger generation, or let it operate Revit directly.",
+                LongDescription = "Opens the Banana Chat panel. It can read your model, create sheets, place views, run generation, and query your detail library."
             };
             var bananaButton = aiPanel.AddItem(bananaButtonData) as PushButton;
             bananaButton.LargeImage = CreateButtonIcon("banana", 32);
@@ -282,7 +282,7 @@ namespace RevitMCPBridge
 
             var redlineLoadData = new PushButtonData("RedlineLoad", "Load", asm,
                 "RevitMCPBridge.Commands.RedlineLoadCommand")
-                { ToolTip = "Load a redline PDF for Claude to analyze",
+                { ToolTip = "Load a redline PDF for Banana Chat to analyze",
                   AvailabilityClassName = "RevitMCPBridge.Commands.RedlineNotAnalyzingAvailability" };
             var redlineLoadButton = redlinePanel.AddItem(redlineLoadData) as PushButton;
             redlineLoadButton.LargeImage = CreateButtonIcon("redline-load", 32);

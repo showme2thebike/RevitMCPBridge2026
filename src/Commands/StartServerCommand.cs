@@ -24,7 +24,7 @@ namespace RevitMCPBridge.Commands
                 
                 if (server.IsRunning)
                 {
-                    TaskDialog.Show("Start Server", "Claude Code MCP server is already running.");
+                    TaskDialog.Show("Start Server", "Banana Chat MCP server is already running.");
                     return Result.Succeeded;
                 }
 

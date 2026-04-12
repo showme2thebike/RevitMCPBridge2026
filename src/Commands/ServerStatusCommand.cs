@@ -48,7 +48,7 @@ namespace RevitMCPBridge.Commands
                     status.AppendLine();
 
                     if (pipeReady)
-                        status.AppendLine("The BIM Monkey server is ready. Claude can connect.");
+                        status.AppendLine("The BIM Monkey server is ready. Banana Chat can connect.");
                     else if (server.IsRunning)
                         status.AppendLine("Plugin reports Running but pipe is not yet accepting connections.\nWait a moment and recheck, or click Stop Server → Start Server.");
                     else

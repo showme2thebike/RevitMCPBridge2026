@@ -87,78 +87,72 @@ namespace RevitMCPBridge.Commands
             html.AppendLine("<p class='step'><span class='step-num'>6.</span> Generation runs in three phases: <strong>Phase 1</strong> — sheets and view placements; <strong>Phase 2</strong> — section and assembly details; <strong>Phase 3</strong> — door schedule, window schedule, room finish schedule, and keynote legend.</p>");
             html.AppendLine("<p class='step'><span class='step-num'>7.</span> Generated sheets are marked <code>*</code> in the Project Browser. Review results and add notes at <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a>.</p>");
 
-            // ── What Claude generates ──────────────────────────────────────────
-            html.AppendLine("<h2>What Claude Generates</h2>");
+            // ── What Banana Chat generates ────────────────────────────────────
+            html.AppendLine("<h2>What Banana Chat Generates</h2>");
             html.AppendLine("<p class='q'>Sheets &amp; Views (Phase 1)</p><p class='a'>Cover sheet, floor plans, reflected ceiling plans, elevations, building sections, and detail sheets — populated with existing views from your model, matched to your firm's layout style.</p>");
             html.AppendLine("<p class='q'>Construction Details (Phase 2)</p><p class='a'>New drafting views drawn from scratch: wall-roof connections, foundation conditions, window/door head-sill-jamb details, parapet sections. Existing unplaced details are placed first before any new ones are generated.</p>");
             html.AppendLine("<p class='q'>Schedules (Phase 3)</p><p class='a'>Door schedule, window schedule, room finish schedule, and keynote legend — created as live Revit schedules and placed on the appropriate sheets (G1.xx, A5.xx, G0.xx) automatically.</p>");
 
             // ── Banana Chat ────────────────────────────────────────────────────
             html.AppendLine("<h2>Banana Chat</h2>");
-            html.AppendLine("<p class='q'>What is Banana Chat?</p><p class='a'>Banana Chat is an AI assistant that lives inside Revit. Instead of switching to a separate terminal or web app, you talk to Claude directly from the BIM Monkey ribbon — and Claude can actually reach into your Revit model and do things. Ask it to build a CD set, place a view on a sheet, create a schedule, rename views, or just tell you what's in the model. It responds like a conversation and executes like a script.</p>");
-            html.AppendLine("<p class='a'>Under the hood it runs Claude Sonnet 4.6 with access to all 705 Revit endpoints. You control the conversation — start generation, change course mid-run, ask follow-up questions, and fix problems without leaving Revit.</p>");
+            html.AppendLine("<p class='q'>What is Banana Chat?</p><p class='a'>Banana Chat is an AI assistant that lives inside Revit. Instead of switching to a separate terminal or web app, you give instructions directly from the BIM Monkey ribbon — and Banana Chat can actually reach into your Revit model and do things. Ask it to build a CD set, place a view on a sheet, create a schedule, rename views, or just tell you what's in the model. It responds like a conversation and executes like a script.</p>");
+            html.AppendLine("<p class='a'>Under the hood it runs Claude Sonnet 4.6 with access to all 705 Revit endpoints. You control the conversation — start generation, change course mid-session, ask follow-up questions, and fix problems without leaving Revit.</p>");
             html.AppendLine("<p class='q'>Does it need my API key?</p><p class='a'>No setup required. Banana Chat reads your Anthropic API key and BIM Monkey API key automatically from Claude Code's settings file at startup. If a key can't be found, a settings dialog will appear — but for most users both keys are picked up automatically.</p>");
-            html.AppendLine("<p class='q'>What does it already know about my firm?</p><p class='a'>On startup, Banana Chat fetches your firm's current standards document from the BIM Monkey backend and loads it into every conversation automatically. It knows your sheet numbering conventions, detail naming patterns, schedule formats, and notes from past runs — so it starts from your practice, not a generic template.</p>");
+            html.AppendLine("<p class='q'>What does it already know about my firm?</p><p class='a'>On startup, Banana Chat fetches your firm's current standards document from the BIM Monkey backend and loads it into every conversation automatically. It knows your sheet numbering conventions, detail naming patterns, schedule formats, and notes from past sessions — so it starts from your practice, not a generic template.</p>");
             html.AppendLine("<p class='q'>What is proactive prompting?</p><p class='a'>Banana Chat watches Revit in the background. When it detects you've created a new elevation, detail, or a cluster of views in the last 15 minutes, it sends a message automatically: <em>\"I see you just created [view name] — ready to place it on a sheet?\"</em> You can reply yes or ignore it. Each view is prompted only once.</p>");
             html.AppendLine("<p class='q'>How do I send a message?</p><p class='a'>Type in the input box and press <strong>Enter</strong>. Press <strong>Shift+Enter</strong> to add a new line without sending.</p>");
             html.AppendLine("<p class='q'>Can I switch AI models?</p><p class='a'>Yes — open the settings dialog (gear icon) to switch between Claude Sonnet and Claude Haiku. Haiku is faster for quick lookups; Sonnet is better for complex tasks like layout and schedule creation.</p>");
 
             // ── Ribbon Buttons ─────────────────────────────────────────────────
             html.AppendLine("<h2>Ribbon Buttons</h2>");
-            html.AppendLine("<p class='q'>Web Platform (AI Enablement panel)</p><p class='a'>Opens <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a> in your browser — review runs, upload CD sets, view your training library, manage your team.</p>");
+            html.AppendLine("<p class='q'>Web Platform (AI Enablement panel)</p><p class='a'>Opens <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a> in your browser — review sessions, upload CD sets, view your training library, manage your team.</p>");
             html.AppendLine("<p class='q'>Banana Chat (AI Enablement panel)</p><p class='a'>Opens the Banana Chat panel — a live AI assistant running Claude Sonnet 4.6 that knows your Revit model and your firm's standards. Ask it anything: \"what views are on sheet A2.01?\", \"create a door schedule\", \"place the bathroom elevations on a sheet\". It reads your firm's standards doc automatically on startup and injects it into every conversation. It also watches what you create in Revit — when it sees you've made a new set of elevations or details, it prompts you to place them on a sheet. Press Enter to send (Shift+Enter for a new line).</p>");
-            html.AppendLine("<p class='q'>Start Server (Server Control panel)</p><p class='a'>Starts the BIM Monkey MCP server — the named pipe that gives Claude access to all 705 Revit endpoints. Must be clicked before your first session. Restarts automatically when you open a new project.</p>");
+            html.AppendLine("<p class='q'>Start Server (Server Control panel)</p><p class='a'>Starts the BIM Monkey MCP server — the named pipe that gives Banana Chat access to all 705 Revit endpoints. Must be clicked before your first session. Restarts automatically when you open a new project.</p>");
             html.AppendLine("<p class='q'>Stop Server (Server Control panel)</p><p class='a'>Stops the MCP server. Use this to reset a stale connection — always Stop → Start after switching project files if auto-restart didn't fire.</p>");
             html.AppendLine("<p class='q'>Server Status (Server Control panel)</p><p class='a'>Shows whether the MCP named pipe is running and ready for connections.</p>");
             html.AppendLine("<p class='q'>Check Model (Documentation panel)</p><p class='a'>Runs a pre-generation health check on your active Revit model — reviews room count and names, view types present, door and window counts, and title block. Returns a 0–100 health score, a pass/warning/fail checklist, and an estimated sheet count. Run this before generating to catch issues that would produce incomplete output.</p>");
             html.AppendLine("<p class='q'>Standards (Documentation panel)</p><p class='a'>Fetches your firm's library score from the BIM Monkey API — pages analyzed, projects uploaded, detail type coverage, and score breakdown. Also shows a <strong>Library Gaps</strong> list: detail types with missing or thin coverage (fewer than 5 examples), so you know exactly what to upload next to improve generation quality.</p>");
-            html.AppendLine("<p class='q'>Load (Redline Review panel)</p><p class='a'>Opens a file picker to load a redlined PDF. Claude analyzes the markup and extracts a structured list of changes, which become instructions for the next generation run.</p>");
-            html.AppendLine("<p class='q'>Cancel / Clear (Redline Review panel)</p><p class='a'>Cancel stops an in-progress redline analysis. Clear removes all loaded redline context so the next generation runs clean.</p>");
+            html.AppendLine("<p class='q'>Load (Redline Review panel)</p><p class='a'>Opens a file picker to load a redlined PDF. Banana Chat analyzes the markup and extracts a structured list of changes, which become instructions for the next generation session.</p>");
+            html.AppendLine("<p class='q'>Cancel / Clear (Redline Review panel)</p><p class='a'>Cancel stops an in-progress redline analysis. Clear removes all loaded redline context so the next generation session is clean.</p>");
             html.AppendLine("<p class='q'>FAQ (Additions panel)</p><p class='a'>Opens this page.</p>");
 
             // ── Training Library ───────────────────────────────────────────────
             html.AppendLine("<h2>Training Library</h2>");
             html.AppendLine("<p class='q'>What should I upload?</p><p class='a'>100% completed Construction Document sets only — permit-ready drawings, not works in progress. The quality of uploads directly determines the quality of generated output. Works in progress degrade results.</p>");
-            html.AppendLine("<p class='q'>How do I upload?</p><p class='a'>Go to <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a> → Upload tab. Drop in a PDF, select building type, click Analyze. Claude reads every page and adds it to your library automatically — no review step required.</p>");
-            html.AppendLine("<p class='q'>Does generated output feed back into the library?</p><p class='a'>Not automatically. Your training library is built from the CD sets <em>you upload</em> — only permit-ready drawings you've approved. Every run is logged at app.bimmonkey.ai where you can add notes to sheets and details. Those notes are applied as direct instructions on the next generation for that project, but they do not enter the training library.</p>");
+            html.AppendLine("<p class='q'>How do I upload?</p><p class='a'>Go to <a href='https://app.bimmonkey.ai'>app.bimmonkey.ai</a> → Upload tab. Drop in a PDF, select building type, click Analyze. Banana Chat reads every page and adds it to your library automatically — no review step required.</p>");
+            html.AppendLine("<p class='q'>Does generated output feed back into the library?</p><p class='a'>Not automatically. Your training library is built from the CD sets <em>you upload</em> — only permit-ready drawings you've approved. Notes and corrections you give Banana Chat during a session are applied as direct instructions on the next generation for that project, but they do not enter the training library.</p>");
             html.AppendLine("<p class='q'>How do I see my library health?</p><p class='a'>Click <strong>Standards</strong> in the Documentation panel. Your library score (0–100) shows coverage, depth, and breadth. Below the score, the Library Gaps section lists every detail type that is missing or has fewer than 5 examples — with a badge showing Missing or Thin. Upload completed CD sets that include those detail types to fill the gaps.</p>");
 
             // ── Troubleshooting ────────────────────────────────────────────────
             html.AppendLine("<h2>Troubleshooting</h2>");
 
-            html.AppendLine("<p class='q'>Claude can't connect to Revit / server isn't responding.</p>");
-            html.AppendLine("<p class='a'>The server must be running before Claude can send any commands. Reset it:</p>");
+            html.AppendLine("<p class='q'>Banana Chat can't connect to Revit / server isn't responding.</p>");
+            html.AppendLine("<p class='a'>The server must be running before Banana Chat can send any commands. Reset it:</p>");
             html.AppendLine("<p class='step'><span class='step-num'>1.</span> BIM Monkey tab → <strong>Server Control</strong> → click <strong>Stop Server</strong>, wait 2 seconds</p>");
             html.AppendLine("<p class='step'><span class='step-num'>2.</span> Click <strong>Start Server</strong> — confirm with Server Status before retrying</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>3.</span> Return to Claude Code and retry</p>");
+            html.AppendLine("<p class='step'><span class='step-num'>3.</span> Return to Banana Chat and retry</p>");
 
-            html.AppendLine("<p class='q'>I opened a different Revit file and Claude is still reading the old one.</p>");
+            html.AppendLine("<p class='q'>I opened a different Revit file and Banana Chat is still reading the old one.</p>");
             html.AppendLine("<p class='a'>The server binds to the document open at startup. You must restart it every time you switch files:</p>");
             html.AppendLine("<p class='step'><span class='step-num'>1.</span> Open your new project file in Revit</p>");
             html.AppendLine("<p class='step'><span class='step-num'>2.</span> BIM Monkey tab → <strong>Server Control</strong> → <strong>Stop Server</strong> then <strong>Start Server</strong></p>");
-            html.AppendLine("<p class='step'><span class='step-num'>3.</span> Claude will now read from the new active document</p>");
+            html.AppendLine("<p class='step'><span class='step-num'>3.</span> Banana Chat will now read from the new active document</p>");
 
             html.AppendLine("<p class='q'>Detail sheets (A4.xx) are empty after generation.</p>");
-            html.AppendLine("<p class='a'>Phase 2 (detail drafting views) was skipped or failed. This is the most common generation issue. In Claude Code, after Phase 1 completes, explicitly tell Claude: <em>\"Now execute Phase 2 — create and place all detail drafting views.\"</em> Phase 2 must always run after Phase 1.</p>");
+            html.AppendLine("<p class='a'>Phase 2 (detail drafting views) was skipped or failed. This is the most common generation issue. In Banana Chat, after Phase 1 completes, tell it: <em>\"Now execute Phase 2 — create and place all detail drafting views.\"</em> Phase 2 must always run after Phase 1.</p>");
 
             html.AppendLine("<p class='q'>Schedule sheets are empty after generation.</p>");
-            html.AppendLine("<p class='a'>Phase 3 (door schedule, window schedule, room finish, keynote legend) was skipped. Tell Claude: <em>\"Execute Phase 3 — create all schedules and place them on their sheets.\"</em></p>");
+            html.AppendLine("<p class='a'>Phase 3 (door schedule, window schedule, room finish, keynote legend) was skipped. Tell Banana Chat: <em>\"Execute Phase 3 — create all schedules and place them on their sheets.\"</em></p>");
 
             html.AppendLine("<p class='q'>Views on a detail sheet are all stacked on top of each other.</p>");
             html.AppendLine("<p class='a'>This happens when too many viewports are placed on one sheet, or when Phase 1 and Phase 2 both target the same sheet. Each detail sheet holds a maximum of 6 viewports comfortably. If you see stacking, run the generation again — the plan will split details across A4.02, A4.03, etc. as needed.</p>");
 
-            html.AppendLine("<p class='q'>Claude Code doesn't see the Revit tools.</p>");
-            html.AppendLine("<p class='a'>Claude Code must be opened from <code>Documents\\BIM Monkey\\</code> — the MCP config that connects to Revit lives there.</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>1.</span> Close any existing Claude Code session</p>");
-            html.AppendLine("<p class='step'><span class='step-num'>2.</span> Open Claude Code and set working directory to <code>Documents\\BIM Monkey</code></p>");
-            html.AppendLine("<p class='step'><span class='step-num'>3.</span> Confirm <code>revit-bridge</code> shows as connected in Claude's tool list</p>");
-
             html.AppendLine("<p class='q'>Commands time out.</p><p class='a'>Revit must not have any modal dialogs open. Dismiss all dialogs, click in the drawing area to give Revit focus, then retry the command.</p>");
 
             html.AppendLine("<p class='q'>Why does redline analysis take longer than other operations?</p>");
-            html.AppendLine("<p class='a'>Before Claude can read a redlined drawing, every page of the PDF has to be converted to an image. Claude then looks at each image the same way you would — finding the red circles, revision clouds, handwritten notes, and crossed-out items — rather than reading text from a data layer. That conversion step is what takes time.</p>");
+            html.AppendLine("<p class='a'>Before Banana Chat can read a redlined drawing, every page of the PDF has to be converted to an image. Banana Chat then looks at each image the same way you would — finding the red circles, revision clouds, handwritten notes, and crossed-out items — rather than reading text from a data layer. That conversion step is what takes time.</p>");
             html.AppendLine("<p class='a'>How long depends on the PDF. A 20-page set typically converts in 15–30 seconds. Larger sets take proportionally longer.</p>");
-            html.AppendLine("<p class='a'>If your redlines were added electronically in Acrobat or Bluebeam, the markup is stored as structured data inside the PDF and Claude can find it more reliably. If the drawings were printed, marked up by hand, and scanned back in — or if the PDF was flattened before delivery — there is no data layer. The only way to find the markup is to look at the pictures of the pages, which is slower and depends entirely on the image being legible.</p>");
+            html.AppendLine("<p class='a'>If your redlines were added electronically in Acrobat or Bluebeam, the markup is stored as structured data inside the PDF and Banana Chat can find it more reliably. If the drawings were printed, marked up by hand, and scanned back in — or if the PDF was flattened before delivery — there is no data layer. The only way to find the markup is to look at the pictures of the pages, which is slower and depends entirely on the image being legible.</p>");
             html.AppendLine("<p class='a'>If analysis comes back with no markup found on a file you know has redlines, that is almost always the cause — the PDF was scanned or flattened. Make sure you are loading the marked-up version of the file, not the original clean set.</p>");
 
             html.AppendLine("<p class='q'>Generation starts but nothing is created.</p>");
