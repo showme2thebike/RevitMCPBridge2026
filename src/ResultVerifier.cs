@@ -222,13 +222,89 @@ namespace RevitMCPBridge
         {
             var viewportId = result["result"]?["viewportId"]?.ToObject<long>() ?? 0;
 
+            if (viewportId == 0)
+            {
+                return new VerificationResult
+                {
+                    Verified = false,
+                    Method = "placeViewOnSheet",
+                    Message = "⚠ View placement returned no viewport ID",
+                    CommandSucceeded = true
+                };
+            }
+
+            // AABB overlap check — call getViewportBoundingBoxes and verify no viewports collide
+            var sheetId = parameters["sheetId"]?.ToObject<long>() ?? 0;
+            if (_executeMethod != null && sheetId > 0)
+            {
+                try
+                {
+                    var bbResult = await _executeMethod("getViewportBoundingBoxes",
+                        new JObject { ["sheetId"] = sheetId });
+                    var bbObj = JObject.Parse(bbResult);
+
+                    if (bbObj["success"]?.ToObject<bool>() == true)
+                    {
+                        var vpArray = bbObj["viewports"] as JArray;
+                        if (vpArray != null)
+                        {
+                            // Find the new viewport's box
+                            JToken newVp = null;
+                            foreach (var vp in vpArray)
+                            {
+                                if (vp["viewportId"]?.ToObject<long>() == viewportId)
+                                {
+                                    newVp = vp;
+                                    break;
+                                }
+                            }
+
+                            if (newVp != null)
+                            {
+                                var nBox = newVp["boxOutline"];
+                                double nMinX = nBox["minX"].Value<double>();
+                                double nMinY = nBox["minY"].Value<double>();
+                                double nMaxX = nBox["maxX"].Value<double>();
+                                double nMaxY = nBox["maxY"].Value<double>();
+
+                                foreach (var vp in vpArray)
+                                {
+                                    if (vp["viewportId"]?.ToObject<long>() == viewportId) continue;
+
+                                    var eBox = vp["boxOutline"];
+                                    double eMinX = eBox["minX"].Value<double>();
+                                    double eMinY = eBox["minY"].Value<double>();
+                                    double eMaxX = eBox["maxX"].Value<double>();
+                                    double eMaxY = eBox["maxY"].Value<double>();
+
+                                    // AABB overlap test (with 0.01ft tolerance to ignore shared edges)
+                                    bool overlaps = nMinX < eMaxX - 0.01 && nMaxX > eMinX + 0.01 &&
+                                                    nMinY < eMaxY - 0.01 && nMaxY > eMinY + 0.01;
+                                    if (overlaps)
+                                    {
+                                        var overlapView = vp["viewName"]?.ToString() ?? vp["viewportId"]?.ToString();
+                                        return new VerificationResult
+                                        {
+                                            Verified = false,
+                                            Method = "placeViewOnSheet",
+                                            Message = $"⚠ Viewport {viewportId} overlaps with '{overlapView}' on sheet {sheetId}",
+                                            CommandSucceeded = true,
+                                            ElementId = viewportId
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { /* Don't block verification on bbox errors */ }
+            }
+
             return new VerificationResult
             {
-                Verified = viewportId > 0,
+                Verified = true,
                 Method = "placeViewOnSheet",
-                Message = viewportId > 0 ?
-                    $"✓ View placed on sheet (viewport ID: {viewportId})" :
-                    "⚠ View placement returned no viewport ID",
+                Message = $"✓ View placed on sheet (viewport ID: {viewportId})",
                 CommandSucceeded = true,
                 ElementId = viewportId
             };
