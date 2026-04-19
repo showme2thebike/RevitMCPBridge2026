@@ -368,11 +368,15 @@ namespace RevitMCPBridge2026.AgentFramework
         /// </summary>
         public void NotifyInterrupted()
         {
+            // Cancel any in-flight RunAsync so it unwinds cleanly
+            _cancellationTokenSource?.Cancel();
+
             if (_sessionStartSent && !_sessionOutcomeSent)
             {
                 _sessionOutcomeSent = true;
                 var durationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
-                TelemetryService.SendSync(_bimMonkeyApiKey, "session_outcome",
+                // Fire-and-forget — Revit process stays alive so the thread pool request completes
+                TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
                     durationMs: durationMs,
                     metadata: new { outcome = "interrupted", stage = _currentStage, last_tool = _lastToolName, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
             }

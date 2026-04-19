@@ -74,6 +74,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private string _lastAssistantResponse;
         private string _lastToolCall;
         private int _feedbackMessageIndex = 0;
+        private volatile bool _isClosing = false;
 
         public AgentChatPanel(UIApplication uiApp)
         {
@@ -135,12 +136,16 @@ namespace RevitMCPBridge2026.AgentFramework
                     "What would you like to do?");
             }
 
-            // Cleanup and save on close
+            // Cleanup and save on close — window closes immediately; cleanup runs on background thread
             Closing += (s, e) =>
             {
-                _agent?.NotifyInterrupted(); // fires session_outcome=interrupted if mid-session
-                SaveSession();
-                DisconnectMCP();
+                _isClosing = true;
+                _agent?.NotifyInterrupted(); // fire-and-forget telemetry + cancel in-flight RunAsync
+                Task.Run(() =>
+                {
+                    try { SaveSession(); }    catch { }
+                    try { DisconnectMCP(); }  catch { }
+                });
             };
         }
 
@@ -1142,58 +1147,47 @@ namespace RevitMCPBridge2026.AgentFramework
             _agent.RegisterTools(ToolDefinitions.GetAllTools());
             _agent.SetToolExecutor(ExecuteMCPMethodAsync);
 
-            _agent.OnThinking += (msg) => Dispatcher.Invoke(() => ShowProgress(msg));
-            _agent.OnToolCall += (msg) => Dispatcher.Invoke(() => { _lastToolCall = msg; UpdateProgress(msg); AddToolMessage(msg, false); });
-            _agent.OnToolResult += (msg) => Dispatcher.Invoke(() => {
-                UpdateProgress(msg);
-                AddToolMessage(msg, true);
-                // Try to display image if the result contains an image path
-                TryDisplayImageFromResult(msg);
-            });
-            _agent.OnResponse += (msg) => Dispatcher.Invoke(() => AddAssistantMessage(msg));
-            _agent.OnError += (msg) => Dispatcher.Invoke(() => { AddErrorMessage(msg); HideProgress(); SetProcessing(false); });
-            _agent.OnComplete += () => Dispatcher.Invoke(() => { HideProgress(); SetProcessing(false); });
+            _agent.OnThinking += (msg) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => { if (!_isClosing) ShowProgress(msg); })); };
+            _agent.OnToolCall += (msg) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => { if (!_isClosing) { _lastToolCall = msg; UpdateProgress(msg); AddToolMessage(msg, false); } })); };
+            _agent.OnToolResult += (msg) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => { if (!_isClosing) { UpdateProgress(msg); AddToolMessage(msg, true); TryDisplayImageFromResult(msg); } })); };
+            _agent.OnResponse += (msg) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => { if (!_isClosing) AddAssistantMessage(msg); })); };
+            _agent.OnError += (msg) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => { if (!_isClosing) { AddErrorMessage(msg); HideProgress(); SetProcessing(false); } })); };
+            _agent.OnComplete += () => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => { if (!_isClosing) { HideProgress(); SetProcessing(false); } })); };
 
             // TOKEN USAGE — running cost display
-            _agent.OnUsage += (inputTokens, outputTokens) => Dispatcher.Invoke(() =>
-            {
+            _agent.OnUsage += (inputTokens, outputTokens) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => {
+                if (_isClosing) return;
                 double inM = inputTokens / 1_000_000.0;
                 double outM = outputTokens / 1_000_000.0;
-                // Per-model rates ($/MTok in / out)
                 double inRate, outRate;
                 if (_selectedModel.Contains("haiku"))      { inRate = 0.80;  outRate = 4.0; }
                 else if (_selectedModel.Contains("opus"))  { inRate = 15.0;  outRate = 75.0; }
-                else                                       { inRate = 3.0;   outRate = 15.0; } // sonnet default
+                else                                       { inRate = 3.0;   outRate = 15.0; }
                 double cost = inM * inRate + outM * outRate;
                 string inStr  = inputTokens  >= 1000 ? $"{inputTokens  / 1000}K" : inputTokens.ToString();
                 string outStr = outputTokens >= 1000 ? $"{outputTokens / 1000}K" : outputTokens.ToString();
                 _tokenText.Text = $"↑ {inStr}  ↓ {outStr}  ~${cost:F2}";
                 _tokenText.Visibility = Visibility.Visible;
-            });
+            })); };
 
             // LOCAL MODEL event - show when qwen2.5:7b is processing
-            _agent.OnLocalModel += (msg) => Dispatcher.Invoke(() => {
+            _agent.OnLocalModel += (msg) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => {
+                if (_isClosing) return;
                 UpdateProgress(msg);
                 if (msg.Contains("Processing with local"))
                     _statusText.Text = "Using Local (qwen2.5:7b)";
                 else if (msg.Contains("using Anthropic"))
                     _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
-            });
+            })); };
 
             // VERIFICATION event - show if commands actually worked
-            _agent.OnVerification += (result) => Dispatcher.Invoke(() => {
-                if (result != null)
-                {
-                    if (result.Verified)
-                    {
-                        AddToolMessage($"✅ Verified: {result.Message}", true);
-                    }
-                    else
-                    {
-                        AddToolMessage($"⚠️ Verification failed: {result.Message}", false);
-                    }
-                }
-            });
+            _agent.OnVerification += (result) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => {
+                if (_isClosing || result == null) return;
+                if (result.Verified)
+                    AddToolMessage($"✅ Verified: {result.Message}", true);
+                else
+                    AddToolMessage($"⚠️ Verification failed: {result.Message}", false);
+            })); };
 
             _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
 
