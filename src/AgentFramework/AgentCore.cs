@@ -72,6 +72,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private bool _sessionStartSent = false; // fire session_start once per AgentCore instance
         private int _sessionInputTokens = 0;
         private int _sessionOutputTokens = 0;
+        private DateTime _sessionStartTime;
 
         public AgentCore(string apiKey, string model = "claude-sonnet-4-6", string bimMonkeyApiKey = null)
         {
@@ -357,6 +358,7 @@ namespace RevitMCPBridge2026.AgentFramework
             if (!_sessionStartSent)
             {
                 _sessionStartSent = true;
+                _sessionStartTime = DateTime.UtcNow;
                 TelemetryService.Send(_bimMonkeyApiKey, "session_start");
             }
 
@@ -526,20 +528,26 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (response.StopReason == "end_turn") break;
                 }
 
+                var _completedDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
                 TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
-                    metadata: new { outcome = "completed", iterations = iteration });
+                    durationMs: _completedDurationMs,
+                    metadata: new { outcome = "completed", iterations = iteration, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
                 OnComplete?.Invoke();
             }
             catch (OperationCanceledException)
             {
+                var _cancelledDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
                 TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
-                    metadata: new { outcome = "interrupted" });
+                    durationMs: _cancelledDurationMs,
+                    metadata: new { outcome = "interrupted", input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
                 OnError?.Invoke("Operation cancelled");
             }
             catch (Exception ex)
             {
+                var _errorDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
                 TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
-                    metadata: new { outcome = "error", error = ex.Message });
+                    durationMs: _errorDurationMs,
+                    metadata: new { outcome = "error", error = ex.Message, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
                 OnError?.Invoke($"Agent error: {ex.Message}");
             }
         }
