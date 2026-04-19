@@ -73,10 +73,13 @@ Events posted to `/api/telemetry` via Bearer = BIM Monkey API key:
 **session_outcome stages:** `thinking` (Claude API in flight) · `executing` (Revit tool in flight) · `responding` (text delivered, idle)
 
 **Interrupted tracking — two layers:**
-1. `AgentChatPanel.Closing` → calls `_agent.NotifyInterrupted()` → `TelemetryService.SendSync` (blocks until HTTP completes)
-2. `AppDomain.CurrentDomain.ProcessExit` → same path (covers Revit crash/kill)
+1. `AgentChatPanel.Closing` → sets `_isClosing = true`, calls `_agent.NotifyInterrupted()` → fire-and-forget `TelemetryService.Send` (non-blocking; Revit process stays alive so thread pool completes it), then `SaveSession`/`DisconnectMCP` on `Task.Run` so UI thread never blocks
+2. `AppDomain.CurrentDomain.ProcessExit` → `TelemetryService.SendSync` (blocking, 3s timeout — process is dying so thread pool can't be trusted)
 
 `_sessionOutcomeSent` flag prevents double-firing when both paths trigger.
+
+**Banana Chat close — no UI thread blocking:**
+All agent event handlers use `Dispatcher.BeginInvoke` (async) not `Dispatcher.Invoke` (sync). Each handler checks `_isClosing` before and after the dispatch. This prevents the deadlock where RunAsync fires an event while the UI thread is blocked in the Closing handler.
 
 **callMCPMethod unwrap:** Claude routes most Revit calls through `callMCPMethod` wrapper. Before verification and telemetry, unwrap: real method = `block.Input["method"]`, real params = `block.Input["parameters"]`.
 
