@@ -115,7 +115,6 @@ namespace RevitMCPBridge.Commands
             int    score       = d["libraryScore"]?.Value<int>()      ?? 0;
             int    pages       = d["totalPages"]?.Value<int>()        ?? 0;
             int    projects    = d["totalProjects"]?.Value<int>()     ?? 0;
-            int    generations = d["totalGenerations"]?.Value<int>()  ?? 0;
             int    covered     = d["typesWithCoverage"]?.Value<int>() ?? 0;
             int    total       = d["totalDetailTypes"]?.Value<int>()  ?? 0;
 
@@ -181,7 +180,6 @@ namespace RevitMCPBridge.Commands
             html.AppendLine($"<div class='stat-row'><span class='stat-label'>Pages analyzed</span><span class='stat-val'>{pages:N0}</span></div>");
             html.AppendLine($"<div class='stat-row'><span class='stat-label'>Projects uploaded</span><span class='stat-val'>{projects:N0}</span></div>");
             html.AppendLine($"<div class='stat-row'><span class='stat-label'>Detail types covered</span><span class='stat-val'>{covered} / {total}</span></div>");
-            html.AppendLine($"<div class='stat-row'><span class='stat-label'>Generations run</span><span class='stat-val'>{generations:N0}</span></div>");
             html.AppendLine("</div>");
 
             // Score breakdown
