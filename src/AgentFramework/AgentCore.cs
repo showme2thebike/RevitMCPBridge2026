@@ -454,9 +454,16 @@ namespace RevitMCPBridge2026.AgentFramework
                                     var parsed = JObject.Parse(result);
                                     if (parsed["success"]?.ToObject<bool>() == true)
                                     {
+                                        // Unwrap callMCPMethod so verifier sees the real method name + params
+                                        var _verifyName   = block.Name == "callMCPMethod"
+                                            ? (block.Input?["method"]?.ToString() ?? "callMCPMethod")
+                                            : block.Name;
+                                        var _verifyParams = block.Name == "callMCPMethod"
+                                            ? (block.Input?["parameters"] as JObject ?? new JObject())
+                                            : block.Input;
                                         var verification = await _resultVerifier.VerifyAsync(
-                                            block.Name,
-                                            block.Input,
+                                            _verifyName,
+                                            _verifyParams,
                                             parsed);
 
                                         OnVerification?.Invoke(verification);
