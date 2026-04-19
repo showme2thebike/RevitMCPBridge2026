@@ -155,15 +155,25 @@ namespace RevitMCPBridge.Commands
 
         private static string ReadApiKey()
         {
-            var claudeMd = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                "BIM Monkey", "CLAUDE.md");
+            // 1. .bimops/config.json (saved by Banana Chat Settings dialog)
+            var configPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "config.json");
+            if (File.Exists(configPath))
+            {
+                try
+                {
+                    var cfg = JObject.Parse(File.ReadAllText(configPath));
+                    var key = cfg["bim_monkey_api_key"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(key)) return key;
+                }
+                catch { }
+            }
 
-            if (!File.Exists(claudeMd)) return null;
-
-            foreach (var line in File.ReadAllLines(claudeMd))
-                if (line.StartsWith("BIM_MONKEY_API_KEY="))
-                    return line.Substring("BIM_MONKEY_API_KEY=".Length).Trim();
+            // 2. CLAUDE.md fallback
+            var claudeMd = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "BIM Monkey", "CLAUDE.md");
+            if (File.Exists(claudeMd))
+                foreach (var line in File.ReadAllLines(claudeMd))
+                    if (line.StartsWith("BIM_MONKEY_API_KEY="))
+                        return line.Substring("BIM_MONKEY_API_KEY=".Length).Trim();
 
             return null;
         }
