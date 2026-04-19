@@ -17,11 +17,9 @@ using System.Runtime.InteropServices;
 // The following GUID is for the ID of the typelib if this project is exposed to COM
 [assembly: Guid("8b8b6f55-9c7a-4f5e-8d8a-1b2c3d4e5f61")]
 
-// Semantic Versioning: MAJOR.MINOR.PATCH.BUILD
-// MAJOR: Breaking API changes
-// MINOR: New features, backward compatible
-// PATCH: Bug fixes, backward compatible
-// BUILD: Auto-increment on each build
-[assembly: AssemblyVersion("2.0.0.0")]
-[assembly: AssemblyFileVersion("2.0.0.0")]
-[assembly: AssemblyInformationalVersion("2.0.0-production")]
+// Version convention: v{MAJOR}.{MINOR}.{YYYYMMDD}
+// AssemblyVersion uses short numeric form (each part max 65535)
+// InformationalVersion carries the full human-readable version string
+[assembly: AssemblyVersion("0.2.0.0")]
+[assembly: AssemblyFileVersion("0.2.0.0")]
+[assembly: AssemblyInformationalVersion("v0.2.20260419e")]
