@@ -401,7 +401,7 @@ namespace RevitMCPBridge
         /// <summary>
         /// Check door swing direction (egress direction check)
         /// </summary>
-        [MCPMethod("checkDoorSwing", Category = "Compliance", Description = "Check door swing direction for egress compliance")]
+        [MCPMethod("checkDoorSwing", Category = "Compliance", Description = "Check door swing direction (inward/outward) for all doors or a specific door. Pass requiredSwing='inward' or 'outward' for PASS/FAIL compliance audit.")]
         public static string CheckDoorSwing(UIApplication uiApp, JObject parameters)
         {
             try
@@ -413,67 +413,120 @@ namespace RevitMCPBridge
                     ? new ElementId(int.Parse(parameters["levelId"].ToString()))
                     : null;
 
+                var doorIdFilter = parameters["doorId"] != null
+                    ? new ElementId(int.Parse(parameters["doorId"].ToString()))
+                    : null;
+
+                // requiredSwing: "inward" or "outward" — if provided, adds PASS/FAIL per door
+                var requiredSwing = parameters["requiredSwing"]?.ToString()?.ToLower();
+
                 var collector = new FilteredElementCollector(doc)
                     .OfCategory(BuiltInCategory.OST_Doors)
                     .WhereElementIsNotElementType();
 
-                var doors = levelId != null
-                    ? collector.Where(d => d.LevelId == levelId).ToList()
-                    : collector.ToList();
+                var doors = collector
+                    .Where(d => levelId == null || d.LevelId == levelId)
+                    .Where(d => doorIdFilter == null || d.Id == doorIdFilter)
+                    .ToList();
 
                 foreach (var door in doors)
                 {
                     var fi = door as FamilyInstance;
                     if (fi == null) continue;
 
-                    var fromRoom = fi.FromRoom;
-                    var toRoom = fi.ToRoom;
                     var level = doc.GetElement(fi.LevelId) as Level;
                     var mark = fi.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.AsString();
-
-                    // Determine if door should swing in direction of egress
-                    // Egress typically goes FROM occupied space TO corridor/exit
+                    var fromRoom = fi.FromRoom;
+                    var toRoom = fi.ToRoom;
                     var fromRoomName = fromRoom?.Name ?? "Exterior";
                     var toRoomName = toRoom?.Name ?? "Exterior";
 
-                    var swingsToEgress = IsEgressDirection(fromRoomName, toRoomName);
-
-                    string status;
-                    string message;
-
-                    if (swingsToEgress)
+                    // Compute actual swing direction using FacingOrientation vs room centroid
+                    // FacingOrientation is the vector perpendicular to the door pointing toward
+                    // the side the door FACES (the side from which the swing is visible).
+                    // If FacingOrientation points AWAY from the interior room → door opens INWARD.
+                    // If FacingOrientation points TOWARD the interior room → door opens OUTWARD.
+                    string swingDirection = "unknown";
+                    string swingMethod = "unknown";
+                    try
                     {
-                        status = "PASS";
-                        message = $"Door swings toward egress path ({fromRoomName} → {toRoomName})";
+                        var facing = fi.FacingOrientation;
+                        var doorLoc = (fi.Location as LocationPoint)?.Point;
+
+                        if (doorLoc != null && facing != null)
+                        {
+                            // Try to get interior room centroid
+                            XYZ roomCentroid = null;
+                            Room interiorRoom = fromRoom ?? toRoom;
+                            if (interiorRoom != null)
+                            {
+                                var bb = interiorRoom.get_BoundingBox(null);
+                                if (bb != null)
+                                    roomCentroid = (bb.Min + bb.Max) / 2.0;
+                            }
+
+                            if (roomCentroid != null)
+                            {
+                                // Vector from door to interior room centroid
+                                var toRoom2 = (roomCentroid - doorLoc).Normalize();
+                                var dot = facing.DotProduct(toRoom2);
+                                // dot > 0: FacingOrientation points toward interior = door swings outward
+                                // dot < 0: FacingOrientation points away from interior = door swings inward
+                                swingDirection = dot < 0 ? "inward" : "outward";
+                                swingMethod = "facing_vs_room_centroid";
+                            }
+                            else
+                            {
+                                // No room — use FacingFlipped as fallback signal
+                                // FacingFlipped=false is typically the default (inward for standard residential families)
+                                swingDirection = fi.FacingFlipped ? "outward" : "inward";
+                                swingMethod = "facing_flipped_fallback";
+                            }
+                        }
                     }
-                    else
+                    catch { }
+
+                    string status = null;
+                    string message = null;
+                    if (!string.IsNullOrEmpty(requiredSwing) && swingDirection != "unknown")
                     {
-                        // Check if this door serves > 50 occupants (would require egress swing)
-                        // For now, mark as warning for review
-                        status = "WARNING";
-                        message = $"Door swings away from typical egress ({toRoomName} → {fromRoomName}) - verify occupant load";
+                        var pass = swingDirection == requiredSwing;
+                        status = pass ? "PASS" : "FAIL";
+                        message = pass
+                            ? $"Door swings {swingDirection} — meets requirement"
+                            : $"Door swings {swingDirection} — required {requiredSwing}";
                     }
 
                     results.Add(new
                     {
-                        ruleId = "EGR-005",
-                        ruleName = "Door Swing Direction",
                         elementId = (int)door.Id.Value,
-                        mark = mark,
+                        mark,
                         level = level?.Name,
+                        familyName = fi.Symbol?.Family?.Name,
+                        typeName = fi.Symbol?.Name,
                         fromRoom = fromRoomName,
                         toRoom = toRoomName,
-                        status = status,
-                        message = message
+                        swingDirection,
+                        swingMethod,
+                        facingFlipped = fi.FacingFlipped,
+                        handFlipped = fi.HandFlipped,
+                        status,
+                        message
                     });
                 }
+
+                int passCount = results.Count(r => ((dynamic)r).status == "PASS");
+                int failCount = results.Count(r => ((dynamic)r).status == "FAIL");
 
                 return JsonConvert.SerializeObject(new
                 {
                     success = true,
                     checkType = "door_swing",
-                    count = results.Count,
-                    results = results
+                    requiredSwing,
+                    totalDoors = results.Count,
+                    passCount = string.IsNullOrEmpty(requiredSwing) ? (int?)null : passCount,
+                    failCount = string.IsNullOrEmpty(requiredSwing) ? (int?)null : failCount,
+                    doors = results
                 });
             }
             catch (Exception ex)

@@ -541,6 +541,23 @@ namespace RevitMCPBridge
                         });
                     }
 
+                    // Origin guard: silent wall-host fallback places at (0,0) with no error
+                    var placedLoc = instance.Location as LocationPoint;
+                    if (placedLoc != null)
+                    {
+                        var pt = placedLoc.Point;
+                        if (Math.Abs(pt.X) < 0.1 && Math.Abs(pt.Y) < 0.1)
+                        {
+                            trans.RollBack();
+                            return JsonConvert.SerializeObject(new
+                            {
+                                success = false,
+                                error = "Placement landed at model origin (0,0) — family likely requires a wall host. Provide a hostId parameter with the target wall ID.",
+                                errorCode = "PLACEMENT_ORIGIN_FALLBACK"
+                            });
+                        }
+                    }
+
                     var instanceId = instance.Id.Value;
                     var familyName = familySymbol.Family.Name;
                     var typeName = familySymbol.Name;
@@ -788,16 +805,41 @@ namespace RevitMCPBridge
                     failureOptions.SetFailuresPreprocessor(new WarningSwallower());
                     trans.SetFailureHandlingOptions(failureOptions);
 
-                    var deletedIds = doc.Delete(elementIds);
+                    doc.Delete(elementIds);
 
                     trans.Commit();
+
+                    // Verify by element existence — doc.Delete() count is unreliable for pinned/protected elements
+                    var confirmedDeleted = elementIds.Where(id => doc.GetElement(id) == null).Select(id => (int)id.Value).ToList();
+                    var notDeletedIds = elementIds.Where(id => doc.GetElement(id) != null).ToList();
+
+                    // Diagnose why each element wasn't deleted
+                    var notDeletedDiag = notDeletedIds.Select(id =>
+                    {
+                        var el = doc.GetElement(id);
+                        string reason = "unknown";
+                        try
+                        {
+                            if (el.Pinned)
+                                reason = "pinned";
+                            else if (el.GroupId != ElementId.InvalidElementId)
+                                reason = $"in group {(int)el.GroupId.Value}";
+                            else if (el is Wall || el is Floor || el is RoofBase || el is Ceiling)
+                                reason = "system family — cannot be deleted directly";
+                            else
+                                reason = $"category={el.Category?.Name ?? "unknown"}, class={el.GetType().Name}";
+                        }
+                        catch { }
+                        return new { elementId = (int)id.Value, reason };
+                    }).ToList();
 
                     return JsonConvert.SerializeObject(new
                     {
                         success = true,
                         requestedCount = elementIds.Count,
-                        deletedCount = deletedIds.Count,
-                        deletedIds = deletedIds.Select(id => (int)id.Value).ToArray()
+                        deletedCount = confirmedDeleted.Count,
+                        deletedIds = confirmedDeleted.ToArray(),
+                        notDeleted = notDeletedDiag
                     });
                 }
             }

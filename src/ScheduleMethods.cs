@@ -991,27 +991,26 @@ namespace RevitMCPBridge2026
         /// <summary>
         /// Adds a filter to a schedule
         /// </summary>
-        [MCPMethod("addScheduleFilter", Category = "Schedule", Description = "Adds a filter to a schedule")]
+        [MCPMethod("addScheduleFilter", Category = "Schedule", Description = "Adds a filter to a schedule. Pass fieldName (e.g. 'NOTES') to look up by name, or fieldIndex as fallback. filterType: equals, contains, beginsWith, endsWith, notEquals, notContains, greater, less.")]
         public static string AddScheduleFilter(UIApplication uiApp, JObject parameters)
         {
             try
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                // Parse parameters
-                if (parameters["scheduleId"] == null || parameters["fieldIndex"] == null)
+                if (parameters["scheduleId"] == null)
                 {
                     return Newtonsoft.Json.JsonConvert.SerializeObject(new
                     {
                         success = false,
-                        error = "scheduleId and fieldIndex are required"
+                        error = "scheduleId is required. Provide fieldName or fieldIndex to identify the field."
                     });
                 }
 
                 var scheduleId = new ElementId(int.Parse(parameters["scheduleId"].ToString()));
-                var fieldIndex = int.Parse(parameters["fieldIndex"].ToString());
                 var filterType = parameters["filterType"]?.ToString()?.ToLower() ?? "equals";
                 var filterValue = parameters["value"]?.ToString() ?? "";
+                var fieldNameFilter = parameters["fieldName"]?.ToString();
 
                 // Get the schedule
                 var schedule = doc.GetElement(scheduleId) as ViewSchedule;
@@ -1082,6 +1081,64 @@ namespace RevitMCPBridge2026
                         });
                 }
 
+                // Resolve field — prefer name lookup over raw index
+                var fieldIds = schedule.Definition.GetFieldOrder();
+                ScheduleFieldId resolvedFieldId = null;
+                string resolvedFieldName = null;
+
+                if (!string.IsNullOrEmpty(fieldNameFilter))
+                {
+                    // Find field by name (case-insensitive)
+                    foreach (var fid in fieldIds)
+                    {
+                        var f = schedule.Definition.GetField(fid);
+                        if (f != null && f.GetName().IndexOf(fieldNameFilter, StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            resolvedFieldId = fid;
+                            resolvedFieldName = f.GetName();
+                            break;
+                        }
+                    }
+
+                    if (resolvedFieldId == null)
+                    {
+                        var availableFields = fieldIds
+                            .Select(fid => schedule.Definition.GetField(fid)?.GetName())
+                            .Where(n => n != null)
+                            .ToList();
+                        return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                        {
+                            success = false,
+                            error = $"Field '{fieldNameFilter}' not found in schedule. Available fields: {string.Join(", ", availableFields)}"
+                        });
+                    }
+                }
+                else if (parameters["fieldIndex"] != null)
+                {
+                    var fieldIndex = int.Parse(parameters["fieldIndex"].ToString());
+                    if (fieldIndex >= 0 && fieldIndex < fieldIds.Count)
+                    {
+                        resolvedFieldId = fieldIds[fieldIndex];
+                        resolvedFieldName = schedule.Definition.GetField(resolvedFieldId)?.GetName() ?? $"index {fieldIndex}";
+                    }
+                    else
+                    {
+                        return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                        {
+                            success = false,
+                            error = $"fieldIndex {fieldIndex} out of range. Schedule has {fieldIds.Count} fields (0–{fieldIds.Count - 1})."
+                        });
+                    }
+                }
+                else
+                {
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = "Provide fieldName (e.g. 'NOTES') or fieldIndex to identify the field to filter."
+                    });
+                }
+
                 using (var trans = new Transaction(doc, "Add Schedule Filter"))
                 {
                     trans.Start();
@@ -1089,40 +1146,15 @@ namespace RevitMCPBridge2026
                     failureOptions.SetFailuresPreprocessor(new WarningSwallower());
                     trans.SetFailureHandlingOptions(failureOptions);
 
-                    // Add the filter (Revit 2026 API uses ScheduleFieldId)
-                    var fieldId = new ScheduleFieldId(fieldIndex);
-
-                    // Get the field to determine value type
-                    var scheduleField = schedule.Definition.GetField(fieldId);
+                    var scheduleField = schedule.Definition.GetField(resolvedFieldId);
                     ScheduleFilter filter;
 
-                    if (scheduleField != null)
-                    {
-                        var fieldType = scheduleField.FieldType;
-                        var paramId = scheduleField.ParameterId;
-
-                        // Check if field is numeric by trying to parse value
-                        if (double.TryParse(filterValue, out double doubleVal))
-                        {
-                            // Numeric filter - use double constructor
-                            filter = new ScheduleFilter(fieldId, revitFilterType, doubleVal);
-                        }
-                        else if (int.TryParse(filterValue, out int intVal) && (filterValue == "0" || filterValue == "1"))
-                        {
-                            // Integer/boolean filter
-                            filter = new ScheduleFilter(fieldId, revitFilterType, intVal);
-                        }
-                        else
-                        {
-                            // String filter
-                            filter = new ScheduleFilter(fieldId, revitFilterType, filterValue);
-                        }
-                    }
+                    if (scheduleField != null && double.TryParse(filterValue, out double doubleVal))
+                        filter = new ScheduleFilter(resolvedFieldId, revitFilterType, doubleVal);
+                    else if (scheduleField != null && int.TryParse(filterValue, out int intVal) && (filterValue == "0" || filterValue == "1"))
+                        filter = new ScheduleFilter(resolvedFieldId, revitFilterType, intVal);
                     else
-                    {
-                        // Fallback to string filter
-                        filter = new ScheduleFilter(fieldId, revitFilterType, filterValue);
-                    }
+                        filter = new ScheduleFilter(resolvedFieldId, revitFilterType, filterValue);
 
                     schedule.Definition.AddFilter(filter);
 
@@ -1131,11 +1163,11 @@ namespace RevitMCPBridge2026
                     return Newtonsoft.Json.JsonConvert.SerializeObject(new
                     {
                         success = true,
-                        fieldIndex = fieldIndex,
+                        fieldName = resolvedFieldName,
                         filterType = filterType,
                         value = filterValue,
                         filterCount = schedule.Definition.GetFilterCount(),
-                        message = $"Filter added to field {fieldIndex}: {filterType} '{filterValue}'"
+                        message = $"Filter added: {resolvedFieldName} {filterType} '{filterValue}'"
                     });
                 }
             }

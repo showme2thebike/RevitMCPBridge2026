@@ -583,9 +583,42 @@ namespace RevitMCPBridge
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
+                // Optional level filter — avoids token blowout on large models
+                var levelFilter = parameters?["level"]?.ToString();
+                var wallTypeFilter = parameters?["wallType"]?.ToString();
+
+                // Pre-resolve level once so we compare by ElementId in the predicate (no per-wall API calls)
+                ElementId matchedLevelId = null;
+                if (!string.IsNullOrEmpty(levelFilter))
+                {
+                    var matchedLevel = new FilteredElementCollector(doc)
+                        .OfClass(typeof(Level))
+                        .Cast<Level>()
+                        .FirstOrDefault(l => l.Name.IndexOf(levelFilter, StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (matchedLevel == null)
+                        return ResponseBuilder.Error($"No level matching '{levelFilter}' found in this model.", "NOT_FOUND").Build();
+                    matchedLevelId = matchedLevel.Id;
+                }
+
                 var walls = new FilteredElementCollector(doc)
                     .OfClass(typeof(Wall))
                     .Cast<Wall>()
+                    .Where(w => {
+                        try
+                        {
+                            if (matchedLevelId != null)
+                            {
+                                var constraintId = w.get_Parameter(BuiltInParameter.WALL_BASE_CONSTRAINT)?.AsElementId();
+                                if (constraintId == null || constraintId != matchedLevelId) return false;
+                            }
+                            if (!string.IsNullOrEmpty(wallTypeFilter))
+                            {
+                                if (w.WallType?.Name?.IndexOf(wallTypeFilter, StringComparison.OrdinalIgnoreCase) < 0) return false;
+                            }
+                            return true;
+                        }
+                        catch { return true; }
+                    })
                     .Select(w => {
                         // Get wall location curve
                         var locationCurve = w.Location as LocationCurve;
@@ -599,9 +632,11 @@ namespace RevitMCPBridge
                             endPoint = curve.GetEndPoint(1);
                         }
 
-                        // Get level info
-                        var baseLevel = doc.GetElement(w.get_Parameter(BuiltInParameter.WALL_BASE_CONSTRAINT)?.AsElementId() ?? ElementId.InvalidElementId) as Level;
-                        var topLevel = doc.GetElement(w.get_Parameter(BuiltInParameter.WALL_HEIGHT_TYPE)?.AsElementId() ?? ElementId.InvalidElementId) as Level;
+                        // Get level info — null-check before calling GetElement
+                        var baseLevelId = w.get_Parameter(BuiltInParameter.WALL_BASE_CONSTRAINT)?.AsElementId();
+                        var topLevelId = w.get_Parameter(BuiltInParameter.WALL_HEIGHT_TYPE)?.AsElementId();
+                        var baseLevel = (baseLevelId != null && baseLevelId != ElementId.InvalidElementId) ? doc.GetElement(baseLevelId) as Level : null;
+                        var topLevel = (topLevelId != null && topLevelId != ElementId.InvalidElementId) ? doc.GetElement(topLevelId) as Level : null;
 
                         return new
                         {

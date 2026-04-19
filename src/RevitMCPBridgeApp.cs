@@ -10,6 +10,7 @@ using Autodesk.Revit.UI;
 using Autodesk.Revit.UI.Events;
 using Autodesk.Revit.Attributes;
 using Serilog;
+using RevitMCPBridge.Commands;
 
 namespace RevitMCPBridge
 {
@@ -196,7 +197,22 @@ namespace RevitMCPBridge
                 try { ApplyButtonKeyTips(); }
                 catch (Exception ex) { Log.Warning($"Could not set button KeyTips: {ex.Message}"); }
 
-                // Server starts manually via Start Server button — not auto-started
+                // Auto-start server on Revit startup (respects Settings → Auto-start toggle, default: on)
+                try
+                {
+                    var settings = MCPSettings.Load();
+                    if (settings.AutoStartServer)
+                    {
+                        var server = new MCPServer();
+                        SetServer(server);
+                        server.Start();
+                        Log.Information("MCP Server auto-started on Revit startup");
+                    }
+                }
+                catch (Exception autoEx)
+                {
+                    Log.Warning(autoEx, "MCP Server auto-start failed (non-fatal — use Start Server button)");
+                }
 
                 return Result.Succeeded;
             }
@@ -323,6 +339,7 @@ namespace RevitMCPBridge
             // Map button name suffix → KeyTip letter
             var keyTips = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
+                { "AIAssistant",       "B" },  // Banana Chat — Alt→BM→B
                 { "OpenClaude",        "C" },
                 { "BimMonkeyPlatform", "W" },
                 { "StartMCPServer",    "1" },

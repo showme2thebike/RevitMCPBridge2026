@@ -358,6 +358,10 @@ namespace RevitMCPBridge
                     allRooms = allRooms.Where(r => r.LevelId == levelElementId);
                 }
 
+                // Detect whether volume computation is enabled (rooms have volume > 0 only when it is)
+                var anyRoomWithVolume = allRooms.Any(r => r.Volume > 0);
+                var volumeComputationEnabled = anyRoomWithVolume;
+
                 var roomList = new List<object>();
                 foreach (var r in allRooms)
                 {
@@ -395,6 +399,7 @@ namespace RevitMCPBridge
 
                 return ResponseBuilder.Success()
                     .With("roomCount", roomList.Count)
+                    .With("volumeComputationEnabled", volumeComputationEnabled)
                     .With("rooms", roomList)
                     .Build();
             }

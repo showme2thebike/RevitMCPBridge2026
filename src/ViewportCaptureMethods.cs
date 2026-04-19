@@ -140,31 +140,50 @@ namespace RevitMCPBridge
                 // Export the image
                 doc.ExportImage(options);
 
-                // Verify file was created (Revit adds extension)
+                // Verify file was created — Revit renames exported files by appending view type/name
                 var actualPath = outputPath;
                 if (!File.Exists(actualPath))
                 {
-                    // Revit appends " - ViewType - ViewName" to exported files
                     var basePath = Path.ChangeExtension(outputPath, null);
                     var viewTypeName = view.ViewType.ToString();
+
+                    // Try known patterns first
                     var possiblePaths = new[]
                     {
                         outputPath,
                         $"{basePath}{extension}",
                         $"{basePath} - {view.Name}{extension}",
-                        $"{basePath} - {viewTypeName} - {view.Name}{extension}"  // Revit 2026 format
+                        $"{basePath} - {viewTypeName} - {view.Name}{extension}"
                     };
-
                     actualPath = possiblePaths.FirstOrDefault(File.Exists);
+
+                    // Fallback: scan the directory for any file whose name starts with the base filename
+                    if (string.IsNullOrEmpty(actualPath) || !File.Exists(actualPath))
+                    {
+                        var exportDir = Path.GetDirectoryName(outputPath);
+                        var baseFileName = Path.GetFileNameWithoutExtension(outputPath);
+                        if (Directory.Exists(exportDir))
+                        {
+                            actualPath = Directory.GetFiles(exportDir, $"{baseFileName}*{extension}")
+                                .OrderByDescending(File.GetCreationTime)
+                                .FirstOrDefault();
+                        }
+                    }
                 }
 
                 if (string.IsNullOrEmpty(actualPath) || !File.Exists(actualPath))
                 {
+                    // List what's in the temp dir to help diagnose
+                    var exportDir = Path.GetDirectoryName(outputPath);
+                    var dirContents = Directory.Exists(exportDir)
+                        ? string.Join(", ", Directory.GetFiles(exportDir).Select(Path.GetFileName).Take(10))
+                        : "directory not found";
                     return JsonConvert.SerializeObject(new
                     {
                         success = false,
-                        error = "Image export completed but file not found at expected location",
-                        expectedPath = outputPath
+                        error = "Image export completed but file not found. Revit may have used an unexpected filename.",
+                        expectedPath = outputPath,
+                        dirContents
                     });
                 }
 

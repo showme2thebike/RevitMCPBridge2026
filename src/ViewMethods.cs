@@ -909,20 +909,39 @@ namespace RevitMCPBridge
                     var finalCropBox = view.CropBox;
                     double actualWidth = finalCropBox.Max.X - finalCropBox.Min.X;
                     double actualHeight = finalCropBox.Max.Y - finalCropBox.Min.Y;
-                    return ResponseBuilder.Success()
+
+                    // Detect template override: crop set but not active = template is controlling it
+                    string templateName = null;
+                    bool templateOverridingCrop = false;
+                    if (hasTemplate)
+                    {
+                        var tmpl = doc.GetElement(view.ViewTemplateId) as View;
+                        templateName = tmpl?.Name;
+                        // If cropBoxActive is false despite our attempt to set it, template is locking it
+                        templateOverridingCrop = !view.CropBoxActive;
+                    }
+
+                    var builder = ResponseBuilder.Success()
                         .With("viewId", (int)viewId.Value)
                         .With("cropBoxActive", view.CropBoxActive)
                         .With("hasViewTemplate", hasTemplate)
+                        .With("templateName", templateName)
                         .With("cropMethod", cropMethod)
-                        .With("cropError", cropError)
                         .With("requested", new { width = requestedWidth, height = requestedHeight })
                         .With("actual", new { width = actualWidth, height = actualHeight })
                         .With("actualCropBox", new
                         {
                             min = new { x = finalCropBox.Min.X, y = finalCropBox.Min.Y, z = finalCropBox.Min.Z },
                             max = new { x = finalCropBox.Max.X, y = finalCropBox.Max.Y, z = finalCropBox.Max.Z }
-                        })
-                        .Build();
+                        });
+
+                    if (templateOverridingCrop)
+                        builder = builder.WithMessage(
+                            $"WARNING: cropBoxActive is false — the view template '{templateName}' is controlling the crop region. " +
+                            "The crop coordinates were written but may not display. To fix: detach the view from the template " +
+                            "(call setViewTemplate with templateId=null), set the crop, then reapply the template if needed.");
+
+                    return builder.Build();
                 }
             }
             catch (Exception ex)

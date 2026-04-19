@@ -323,13 +323,32 @@ Use to find specific files like Revit models, PDFs, or scripts.",
             {
                 new ToolDefinition
                 {
+                    Name = "projectNoteStore",
+                    Description = @"Save a project-specific note visible on the web platform (app.bimmonkey.ai/brain).
+Use this when Barrett says 'note for this project', 'save that for this project', or gives project-specific instructions.
+Notes are scoped to the current project and appear in the Project Notes section of the Brain page.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            note        = new { type = "string", description = "The note content to save" },
+                            projectName = new { type = "string", description = "Project name (use current Revit document title if not specified)" }
+                        },
+                        required = new[] { "note", "projectName" }
+                    }
+                },
+                new ToolDefinition
+                {
                     Name = "memoryStore",
                     Description = @"Store a memory for future sessions. Use this to remember:
 - Important decisions made during this session
 - User preferences and corrections
 - Project-specific information learned
 - Errors encountered and how they were solved
-- Useful patterns discovered",
+- Useful patterns discovered
+
+Set replaceExisting=true when UPDATING a known fact (e.g. Barrett corrects a preference). This prevents contradictory memories from accumulating — the old fact is removed before the new one is stored.",
                     InputSchema = new
                     {
                         type = "object",
@@ -339,7 +358,8 @@ Use to find specific files like Revit models, PDFs, or scripts.",
                             memoryType = new { type = "string", description = "Type: decision, fact, preference, context, outcome, error, correction" },
                             project = new { type = "string", description = "Optional project name this relates to" },
                             importance = new { type = "integer", description = "Importance 1-10 (10=critical, default=5)" },
-                            tags = new { type = "array", description = "Optional tags for categorization" }
+                            tags = new { type = "array", description = "Optional tags for categorization" },
+                            replaceExisting = new { type = "boolean", description = "If true, remove all prior memories with same project+memoryType before storing. Use when updating/correcting an existing fact." }
                         },
                         required = new[] { "content" }
                     }
@@ -489,6 +509,147 @@ Captures key outcomes, decisions, problems solved, and next steps.",
                         type = "object",
                         properties = new { },
                         required = new string[] { }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "getModelWarnings",
+                    Description = "Get all Revit model warnings — duplicate elements, unjoined walls, missing hosts, etc. Call this when the user asks about model health, warnings, issues, or errors in the model.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new { },
+                        required = new string[] { }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "checkDoorSwing",
+                    Description = "Verify door swing direction for all doors or a specific door. Call this when asked about door swing direction, inward/outward swing, or door compliance.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            doorId = new { type = "integer", description = "Optional: check a specific door by ID. Omit to check all doors." }
+                        },
+                        required = new string[] { }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "getUnplacedViews",
+                    Description = "Get all views not yet placed on any sheet. Call this before classifyAndPackViews to understand scope, or when asked what views still need to be placed.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new { },
+                        required = new string[] { }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "placeViewOnSheet",
+                    Description = "WRITE — Places a single view (floor plan, elevation, section, drafting) onto a sheet. GUARD: Before calling, verify the view is in classifyAndPackViews output and is assigned to this sheet. NEVER place a BLOCKED view (name contains: Copy, Working, DNP, do not plot, bim monkey, _temp, _archive). After calling, verify with getViewportsOnSheet.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            sheetId = new { type = "integer", description = "Sheet element ID" },
+                            viewId = new { type = "integer", description = "View element ID" },
+                            location = new { type = "object", description = "Optional {x, y} placement point in sheet coordinates" }
+                        },
+                        required = new[] { "sheetId", "viewId" }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "createSheet",
+                    Description = "WRITE — Creates a sheet with the given number and name (idempotent — returns existing sheet if number already used). GUARD: Call getSheets first to confirm the sheet does not already exist. Append ' *' to the sheet name.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            sheetNumber = new { type = "string", description = "Sheet number (e.g. A1.1)" },
+                            sheetName = new { type = "string", description = "Sheet name — append ' *'" },
+                            titleblockId = new { type = "integer", description = "Optional titleblock family symbol ID" }
+                        },
+                        required = new[] { "sheetNumber", "sheetName" }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "setViewportLabelOffset",
+                    Description = "WRITE — Moves the view title label for a viewport. ALWAYS use auto:true — it computes offsetX and offsetY from the viewport's actual bounding box height so the label sits just below the bottom edge. Never pass a fixed offsetY value like -0.188; tall viewports need larger offsets.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            viewportId = new { type = "integer", description = "Viewport element ID" },
+                            auto = new { type = "boolean", description = "true = compute offset from bounding box (recommended). false = use offsetX/offsetY directly." },
+                            inset = new { type = "number", description = "Horizontal inset from left edge when using auto:true (default 0)" },
+                            offsetX = new { type = "number", description = "Manual X offset in feet (only used when auto:false)" },
+                            offsetY = new { type = "number", description = "Manual Y offset in feet (only used when auto:false)" }
+                        },
+                        required = new[] { "viewportId" }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "alignViewportEdge",
+                    Description = "WRITE — Aligns one viewport's edge to match a reference viewport's edge. Use edge='bottom' for interior elevation rows (aligns floor lines). Use edge='top','left','right','centerX','centerY' for other alignments. Defaults to dryRun:true — always show proposed delta before executing. PREFER this over moveViewport when aligning viewports relative to each other.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            viewportId = new { type = "integer", description = "Viewport to move" },
+                            referenceViewportId = new { type = "integer", description = "Viewport to align against" },
+                            edge = new { type = "string", description = "Which edge to align: top, bottom, left, right, centerX, centerY" },
+                            dryRun = new { type = "boolean", description = "true = preview only (default); false = execute" }
+                        },
+                        required = new[] { "viewportId", "referenceViewportId", "edge" }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "moveViewport",
+                    Description = "WRITE — Moves a viewport to an absolute position on its sheet. GUARD: ALWAYS call with dryRun:true first and show the user the proposed position and delta. Only call with dryRun:false after the user explicitly confirms. Use alignViewportEdge instead when aligning viewports relative to each other.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            viewportId = new { type = "integer", description = "Viewport element ID" },
+                            x = new { type = "number", description = "Target X coordinate in sheet space (feet)" },
+                            y = new { type = "number", description = "Target Y coordinate in sheet space (feet)" },
+                            dryRun = new { type = "boolean", description = "true = preview only, no changes; false = execute move. Always call true first." }
+                        },
+                        required = new[] { "viewportId", "x", "y" }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "placeFamilyInstance",
+                    Description = "WRITE — Places a family instance at a point on a level. GUARD: For wall-hosted families (light switches, outlets, doors, windows), always provide hostId (a wall element ID from getWallsInView). After placing, check returned location — if x and y are both < 0.1, placement silently failed at model origin; retry with a valid hostId.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            familyName = new { type = "string", description = "Family name" },
+                            typeName = new { type = "string", description = "Type name within the family" },
+                            x = new { type = "number", description = "X coordinate in model space (feet)" },
+                            y = new { type = "number", description = "Y coordinate in model space (feet)" },
+                            z = new { type = "number", description = "Z coordinate in model space (feet)" },
+                            levelId = new { type = "integer", description = "Level element ID" },
+                            hostId = new { type = "integer", description = "Host element ID — required for wall-hosted families" },
+                            rotation = new { type = "number", description = "Rotation in degrees" }
+                        },
+                        required = new[] { "familyName", "typeName", "x", "y" }
                     }
                 }
             };
@@ -785,13 +946,15 @@ Captures key outcomes, decisions, problems solved, and next steps.",
                 new ToolDefinition
                 {
                     Name = "getWalls",
-                    Description = "Get all walls in the model or on a specific level.",
+                    Description = "Get walls in the model. ALWAYS filter by level on large models (169 walls = truncation). Use level='Level 1' to scope results.",
                     InputSchema = new
                     {
                         type = "object",
                         properties = new
                         {
-                            levelId = new { type = "integer", description = "Filter by level ID (optional)" }
+                            level    = new { type = "string",  description = "Filter by level name (case-insensitive contains match). Strongly recommended on large models." },
+                            wallType = new { type = "string",  description = "Filter by wall type name (case-insensitive contains match)" },
+                            levelId  = new { type = "integer", description = "Filter by level ID (alternative to level name)" }
                         },
                         required = new string[] { }
                     }
@@ -799,33 +962,42 @@ Captures key outcomes, decisions, problems solved, and next steps.",
                 new ToolDefinition
                 {
                     Name = "getDoors",
-                    Description = "Get all doors in the model with their properties.",
+                    Description = "Get all doors with types, host walls, and from/to rooms. Call this when asked about doors, door schedule, door count, or door types. Use level filter to avoid truncation on large models.",
                     InputSchema = new
                     {
                         type = "object",
-                        properties = new { },
+                        properties = new
+                        {
+                            level = new { type = "string", description = "Filter by level name (case-insensitive contains match, e.g. 'Level 1')" }
+                        },
                         required = new string[] { }
                     }
                 },
                 new ToolDefinition
                 {
                     Name = "getWindows",
-                    Description = "Get all windows in the model with their properties.",
+                    Description = "Get all windows with types and host walls. Call this when asked about windows, window schedule, window count, or glazing. Use level filter to avoid truncation on large models.",
                     InputSchema = new
                     {
                         type = "object",
-                        properties = new { },
+                        properties = new
+                        {
+                            level = new { type = "string", description = "Filter by level name (case-insensitive contains match, e.g. 'Level 2')" }
+                        },
                         required = new string[] { }
                     }
                 },
                 new ToolDefinition
                 {
                     Name = "getRooms",
-                    Description = "Get all rooms in the model with their names, numbers, and areas.",
+                    Description = "Get all rooms with names, numbers, areas, and levels. Call this when asked about rooms, spaces, areas, program, or room layout.",
                     InputSchema = new
                     {
                         type = "object",
-                        properties = new { },
+                        properties = new
+                        {
+                            level = new { type = "string", description = "Filter by level name (case-insensitive contains match)" }
+                        },
                         required = new string[] { }
                     }
                 },
@@ -870,6 +1042,14 @@ Captures key outcomes, decisions, problems solved, and next steps.",
             {
                 new ToolDefinition
                 {
+                    Name = "getModelInventorySummary",
+                    Description = @"Single call that answers Barrett's first question every session: how many views, how many sheets, what's unplaced, what's empty.
+Returns: totalViews, placedViews, unplacedViews, totalSheets, emptySheets count, viewsByType breakdown, emptySheetsDetail list.
+Use this at session start before any other query. Follow up with getUnplacedViews or getSheets for detail.",
+                    InputSchema = new { type = "object", properties = new { }, required = new string[] { } }
+                },
+                new ToolDefinition
+                {
                     Name = "getSheets",
                     Description = "Get all sheets in the project with their numbers and names.",
                     InputSchema = new
@@ -881,14 +1061,42 @@ Captures key outcomes, decisions, problems solved, and next steps.",
                 },
                 new ToolDefinition
                 {
-                    Name = "getViews",
-                    Description = "Get all views in the project, optionally filtered by type.",
+                    Name = "getViewsSummary",
+                    Description = @"Get ALL views in one lightweight call: id, name, viewType, isOnSheet, sheetNumber only.
+USE THIS FIRST for any inventory, audit, or counting task.
+Optional filters: viewType (FloorPlan, Section, Elevation, ThreeD, etc.), isOnSheet (true/false).
+Pagination: use limit + offset if the model has >100 views (response includes totalCount and hasMore).
+Returns: { totalCount, returnedCount, offset, hasMore, views[] }
+Use getViews with compact=false only when you need crop dimensions, phase, template, or detail level.",
                     InputSchema = new
                     {
                         type = "object",
                         properties = new
                         {
-                            viewType = new { type = "string", description = "Filter by type: FloorPlan, CeilingPlan, Elevation, Section, ThreeD, Legend, Schedule, Sheet" }
+                            viewType  = new { type = "string",  description = "Optional: filter by view type (FloorPlan, CeilingPlan, Elevation, Section, ThreeD, Legend, Detail, DraftingView)" },
+                            isOnSheet = new { type = "boolean", description = "Optional: true = only placed views, false = only unplaced views" },
+                            limit     = new { type = "integer", description = "Optional: max views to return. Use with offset for pagination on large models." },
+                            offset    = new { type = "integer", description = "Optional: skip this many views (for pagination). Default 0." }
+                        },
+                        required = new string[] { }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "getViews",
+                    Description = "Get views with optional filters and pagination. compact=true (default) returns id/name/viewType/isOnSheet/sheetNumber. compact=false adds crop dimensions, phase, template, detail level. Default limit 75 in compact mode. Use getViewsSummary instead for full model inventory.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            viewType        = new { type = "string",  description = "Filter by type: FloorPlan, CeilingPlan, Elevation, Section, ThreeD, Legend, Schedule, Sheet, Detail, DraftingView" },
+                            isOnSheet       = new { type = "boolean", description = "true = only sheet-placed views, false = only unplaced views" },
+                            compact         = new { type = "boolean", description = "false to include cropBox, phase, template, detailLevel (default: true)" },
+                            limit           = new { type = "integer", description = "Max views to return (default 75 in compact mode, unlimited otherwise)" },
+                            offset          = new { type = "integer", description = "Pagination offset" },
+                            namePattern     = new { type = "string",  description = "Case-insensitive substring filter on view name" },
+                            excludeIfContains = new { type = "array", description = "Exclude views whose names contain any of these strings" }
                         },
                         required = new string[] { }
                     }

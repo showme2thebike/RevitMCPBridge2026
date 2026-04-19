@@ -862,8 +862,42 @@ namespace RevitMCPBridge
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                var elementIds = parameters["elementIds"].ToObject<int[]>()
+                var requestedIds = parameters["elementIds"].ToObject<int[]>()
                     .Select(id => new ElementId(id)).ToList();
+
+                // Pre-flight: diagnose each element before attempting deletion
+                var diagnostics = new List<object>();
+                var deletableIds = new List<ElementId>();
+                foreach (var eid in requestedIds)
+                {
+                    var el = doc.GetElement(eid);
+                    if (el == null)
+                    {
+                        diagnostics.Add(new { id = (int)eid.Value, reason = "Element not found — may have already been deleted" });
+                        continue;
+                    }
+                    if (el.Pinned)
+                    {
+                        diagnostics.Add(new { id = (int)eid.Value, name = el.Name, category = el.Category?.Name, reason = "Element is pinned — unpin it first" });
+                        continue;
+                    }
+                    if (el is ViewSheet sheet && sheet.GetAllPlacedViews().Count > 0)
+                    {
+                        diagnostics.Add(new { id = (int)eid.Value, name = el.Name, category = "ViewSheet", reason = $"Sheet has {sheet.GetAllPlacedViews().Count} placed view(s) — remove viewports first, or delete is allowed (Revit removes them automatically)" });
+                    }
+                    deletableIds.Add(eid);
+                }
+
+                if (deletableIds.Count == 0)
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        deletedCount = 0,
+                        error = "No elements could be deleted",
+                        diagnostics
+                    });
+                }
 
                 using (var trans = new Transaction(doc, "Delete Elements"))
                 {
@@ -872,14 +906,15 @@ namespace RevitMCPBridge
                     failureOptions.SetFailuresPreprocessor(new WarningSwallower());
                     trans.SetFailureHandlingOptions(failureOptions);
 
-                    doc.Delete(elementIds);
-
+                    var actuallyDeleted = doc.Delete(deletableIds);
                     trans.Commit();
 
                     return JsonConvert.SerializeObject(new
                     {
-                        success = true,
-                        deletedCount = elementIds.Count
+                        success = actuallyDeleted.Count > 0,
+                        deletedCount = actuallyDeleted.Count,
+                        requestedCount = requestedIds.Count,
+                        diagnostics = diagnostics.Count > 0 ? diagnostics : null
                     });
                 }
             }

@@ -69,10 +69,13 @@ namespace RevitMCPBridge2026.AgentFramework
         public event Action<int, int> OnUsage; // (totalInputTokens, totalOutputTokens) — fires after each API call
 
         private string _bimMonkeyApiKey;
-        private bool _sessionStartSent = false; // fire session_start once per AgentCore instance
+        private bool _sessionStartSent = false;   // fire session_start once per AgentCore instance
+        private bool _sessionOutcomeSent = false;  // guard against double-firing session_outcome
         private int _sessionInputTokens = 0;
         private int _sessionOutputTokens = 0;
         private DateTime _sessionStartTime;
+        private string _lastToolName = null;       // most recent tool call — included in interrupted outcome
+        private string _currentStage = null;      // "thinking" | "executing" | "responding"
 
         public AgentCore(string apiKey, string model = "claude-sonnet-4-6", string bimMonkeyApiKey = null)
         {
@@ -110,6 +113,20 @@ namespace RevitMCPBridge2026.AgentFramework
             if (!string.IsNullOrEmpty(projectContext))
             {
                 _localProcessor.InjectKnowledge(projectContext);
+            }
+
+            // Send session_outcome=interrupted if the process is killed mid-session
+            AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
+        }
+
+        private void OnProcessExit(object sender, EventArgs e)
+        {
+            if (_sessionStartSent && !_sessionOutcomeSent)
+            {
+                var durationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                TelemetryService.SendSync(_bimMonkeyApiKey, "session_outcome",
+                    durationMs: durationMs,
+                    metadata: new { outcome = "interrupted", stage = _currentStage, last_tool = _lastToolName, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
             }
         }
 
@@ -346,6 +363,22 @@ namespace RevitMCPBridge2026.AgentFramework
         }
 
         /// <summary>
+        /// Called when the chat window closes. Sends session_outcome=interrupted
+        /// synchronously if a session was in progress and outcome hasn't fired yet.
+        /// </summary>
+        public void NotifyInterrupted()
+        {
+            if (_sessionStartSent && !_sessionOutcomeSent)
+            {
+                _sessionOutcomeSent = true;
+                var durationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                TelemetryService.SendSync(_bimMonkeyApiKey, "session_outcome",
+                    durationMs: durationMs,
+                    metadata: new { outcome = "interrupted", stage = _currentStage, last_tool = _lastToolName, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
+            }
+        }
+
+        /// <summary>
         /// Run the agent with a user message - THE AGENTIC LOOP
         /// Now with LOCAL MODEL routing for simple commands
         /// </summary>
@@ -411,6 +444,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 while (iteration < maxIterations && !token.IsCancellationRequested)
                 {
                     iteration++;
+                    _currentStage = "thinking";
                     OnThinking?.Invoke($"Thinking... (step {iteration})");
 
                     var response = await CallClaudeAsync(systemPrompt, token);
@@ -424,6 +458,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     {
                         if (block.Type == "text")
                         {
+                            _currentStage = "responding";
                             OnResponse?.Invoke(block.Text);
                             assistantContent.Add(block);
                         }
@@ -440,6 +475,8 @@ namespace RevitMCPBridge2026.AgentFramework
                                 var _telToolName = block.Name == "callMCPMethod"
                                     ? (block.Input?["method"]?.ToString() ?? "callMCPMethod")
                                     : block.Name;
+                                _lastToolName = _telToolName;
+                                _currentStage = "executing";
                                 var _t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                                 var result = await _executeToolAsync(block.Name, block.Input);
                                 var _durMs = (int)((System.Diagnostics.Stopwatch.GetTimestamp() - _t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
@@ -536,6 +573,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 }
 
                 var _completedDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                _sessionOutcomeSent = true;
                 TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
                     durationMs: _completedDurationMs,
                     metadata: new { outcome = "completed", iterations = iteration, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
@@ -544,6 +582,7 @@ namespace RevitMCPBridge2026.AgentFramework
             catch (OperationCanceledException)
             {
                 var _cancelledDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                _sessionOutcomeSent = true;
                 TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
                     durationMs: _cancelledDurationMs,
                     metadata: new { outcome = "interrupted", input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
@@ -552,6 +591,7 @@ namespace RevitMCPBridge2026.AgentFramework
             catch (Exception ex)
             {
                 var _errorDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                _sessionOutcomeSent = true;
                 TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
                     durationMs: _errorDurationMs,
                     metadata: new { outcome = "error", error = ex.Message, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });

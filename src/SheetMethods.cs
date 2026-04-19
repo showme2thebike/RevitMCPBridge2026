@@ -1185,6 +1185,8 @@ namespace RevitMCPBridge
                     return ResponseBuilder.Error("Location required: pass x/y, newLocation:{x,y}, or location:{x,y}", "MISSING_PARAMETER").Build();
                 }
 
+                var dryRun = parameters["dryRun"]?.ToObject<bool>() ?? false;
+
                 var viewport = doc.GetElement(viewportId) as Viewport;
                 if (viewport == null)
                 {
@@ -1193,6 +1195,18 @@ namespace RevitMCPBridge
 
                 // Get current center
                 var currentCenter = viewport.GetBoxCenter();
+
+                if (dryRun)
+                {
+                    return ResponseBuilder.Success()
+                        .With("dryRun", true)
+                        .With("viewportId", (int)viewportId.Value)
+                        .With("currentCenter", new[] { currentCenter.X, currentCenter.Y, currentCenter.Z })
+                        .With("proposedCenter", new[] { locX, locY, 0.0 })
+                        .With("delta", new[] { locX - currentCenter.X, locY - currentCenter.Y, 0.0 })
+                        .With("message", "DRY RUN — no changes made. Call again with dryRun:false to execute.")
+                        .Build();
+                }
                 var targetPoint = new XYZ(locX, locY, 0);  // Z should always be 0 for sheet
 
                 // Calculate the movement delta
@@ -1685,10 +1699,21 @@ namespace RevitMCPBridge
                     return ResponseBuilder.Error("Viewport not found", "ELEMENT_NOT_FOUND").Build();
                 }
 
-                // Get offset values - can be array or individual x,y,z params
+                // auto:true — compute offset from viewport bounding box so label sits just below bottom edge
+                var autoMode = parameters["auto"]?.ToObject<bool>() ?? false;
                 double offsetX = 0, offsetY = 0, offsetZ = 0;
 
-                if (parameters["offset"] != null)
+                if (autoMode)
+                {
+                    // LabelOffset is relative to the label's DEFAULT position (already at bottom of viewport),
+                    // NOT relative to viewport box center. Using -(vpHeight/2) is wrong and produces extreme
+                    // offsets like -0.549 for large viewports, pushing labels off-screen.
+                    // Use a small fixed tight offset from the default label position instead.
+                    var inset = parameters["inset"]?.ToObject<double>() ?? 0.0;
+                    offsetX = inset;
+                    offsetY = -0.060; // ~3/4" below default position — tight and consistent
+                }
+                else if (parameters["offset"] != null)
                 {
                     var offsetArray = parameters["offset"].ToObject<double[]>();
                     offsetX = offsetArray.Length > 0 ? offsetArray[0] : 0;
@@ -1722,6 +1747,122 @@ namespace RevitMCPBridge
                         .With("previousOffset", new[] { oldOffset.X, oldOffset.Y, oldOffset.Z })
                         .With("newOffset", new[] { newOffset.X, newOffset.Y, newOffset.Z })
                         .WithMessage("Label offset updated. Positive Y moves title up, negative moves down.")
+                        .Build();
+                }
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Align one viewport edge to match another viewport's edge — eliminates hand-computed coordinates
+        /// </summary>
+        [MCPMethod("alignViewportEdge", Category = "Sheet", Description = "Align a viewport edge (top/bottom/left/right/centerX/centerY) to match the same edge of a reference viewport. Use edge='bottom' to align floor lines across an interior elevation row. Returns dryRun preview by default.")]
+        public static string AlignViewportEdge(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                var viewportId    = new ElementId(int.Parse(parameters["viewportId"].ToString()));
+                var referenceId   = new ElementId(int.Parse(parameters["referenceViewportId"].ToString()));
+                var edge          = parameters["edge"]?.ToString()?.ToLower() ?? "bottom";
+                var dryRun        = parameters["dryRun"]?.ToObject<bool>() ?? true;
+
+                var vp  = doc.GetElement(viewportId)  as Viewport;
+                var ref_ = doc.GetElement(referenceId) as Viewport;
+
+                if (vp == null)
+                    return ResponseBuilder.Error("viewportId not found", "ELEMENT_NOT_FOUND").Build();
+                if (ref_ == null)
+                    return ResponseBuilder.Error("referenceViewportId not found", "ELEMENT_NOT_FOUND").Build();
+
+                var vpOutline  = vp.GetBoxOutline();
+                var refOutline = ref_.GetBoxOutline();
+
+                if (vpOutline == null || refOutline == null)
+                    return ResponseBuilder.Error("Could not get bounding box for one or both viewports", "BOUNDING_BOX_ERROR").Build();
+
+                var vpCenter  = vp.GetBoxCenter();
+                var refCenter = ref_.GetBoxCenter();
+
+                var vpW  = vpOutline.MaximumPoint.X  - vpOutline.MinimumPoint.X;
+                var vpH  = vpOutline.MaximumPoint.Y  - vpOutline.MinimumPoint.Y;
+                var refW = refOutline.MaximumPoint.X - refOutline.MinimumPoint.X;
+                var refH = refOutline.MaximumPoint.Y - refOutline.MinimumPoint.Y;
+
+                // Compute target center for the moving viewport based on which edge to align
+                double newX = vpCenter.X;
+                double newY = vpCenter.Y;
+
+                switch (edge)
+                {
+                    case "top":
+                        // Align top edges: refCenter.Y + refH/2 == newY + vpH/2
+                        newY = (refCenter.Y + refH / 2.0) - vpH / 2.0;
+                        break;
+                    case "bottom":
+                        // Align bottom edges (floor lines for interior elevations):
+                        // refCenter.Y - refH/2 == newY - vpH/2
+                        newY = (refCenter.Y - refH / 2.0) + vpH / 2.0;
+                        break;
+                    case "left":
+                        newX = (refCenter.X - refW / 2.0) + vpW / 2.0;
+                        break;
+                    case "right":
+                        newX = (refCenter.X + refW / 2.0) - vpW / 2.0;
+                        break;
+                    case "centerx":
+                        newX = refCenter.X;
+                        break;
+                    case "centery":
+                        newY = refCenter.Y;
+                        break;
+                    default:
+                        return ResponseBuilder.Error($"Unknown edge '{edge}'. Use: top, bottom, left, right, centerX, centerY", "INVALID_PARAMETER").Build();
+                }
+
+                var deltaX = newX - vpCenter.X;
+                var deltaY = newY - vpCenter.Y;
+
+                if (dryRun)
+                {
+                    return ResponseBuilder.Success()
+                        .With("dryRun", true)
+                        .With("edge", edge)
+                        .With("viewportId", (int)viewportId.Value)
+                        .With("referenceViewportId", (int)referenceId.Value)
+                        .With("currentCenter", new[] { vpCenter.X, vpCenter.Y })
+                        .With("proposedCenter", new[] { newX, newY })
+                        .With("delta", new[] { deltaX, deltaY })
+                        .With("message", $"DRY RUN — will align {edge} edge. Call with dryRun:false to execute.")
+                        .Build();
+                }
+
+                using (var trans = new Transaction(doc, "Align Viewport Edge"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    try { var sp = vp.LookupParameter("Saved Position"); if (sp != null && !sp.IsReadOnly) sp.Set(ElementId.InvalidElementId); } catch { }
+
+                    vp.SetBoxCenter(new XYZ(newX, newY, 0));
+                    doc.Regenerate();
+
+                    var actual = vp.GetBoxCenter();
+                    trans.Commit();
+
+                    return ResponseBuilder.Success()
+                        .With("edge", edge)
+                        .With("viewportId", (int)viewportId.Value)
+                        .With("referenceViewportId", (int)referenceId.Value)
+                        .With("previousCenter", new[] { vpCenter.X, vpCenter.Y })
+                        .With("newCenter", new[] { actual.X, actual.Y })
+                        .With("delta", new[] { actual.X - vpCenter.X, actual.Y - vpCenter.Y })
                         .Build();
                 }
             }
@@ -3613,6 +3754,25 @@ namespace RevitMCPBridge
                         }
                     }
 
+                    // Positional detail numbering — bottom-right = 1, count left then up
+                    // Formula: number = ((rows-1-row) * cols) + (cols-1-col) + 1
+                    // where row/col are 0-indexed from top-left (matching placement loop)
+                    var detailNumbering = parameters["detailNumbering"]?.ToString()?.ToLower();
+                    if (detailNumbering == "positional" && placements.Count > 0)
+                    {
+                        foreach (dynamic p in placements)
+                        {
+                            int col = p.gridPosition.column;
+                            int row = p.gridPosition.row;
+                            int detailNum = ((rows - 1 - row) * columns) + (columns - 1 - col) + 1;
+                            var vpId = new ElementId((int)p.viewportId);
+                            var vp = doc.GetElement(vpId) as Viewport;
+                            var detailParam = vp?.get_Parameter(BuiltInParameter.VIEWPORT_DETAIL_NUMBER);
+                            if (detailParam != null && !detailParam.IsReadOnly)
+                                detailParam.Set(detailNum.ToString());
+                        }
+                    }
+
                     trans.Commit();
                 }
 
@@ -4486,6 +4646,18 @@ namespace RevitMCPBridge
                     .Cast<ViewSheet>()
                     .Where(s => !s.IsPlaceholder)
                     .ToList();
+
+                // Idempotency: return existing sheet if number already used
+                var existingSheet = existingSheets.FirstOrDefault(s => s.SheetNumber == sheetNumber);
+                if (existingSheet != null)
+                {
+                    return ResponseBuilder.Success()
+                        .With("sheetId", (int)existingSheet.Id.Value)
+                        .With("sheetNumber", existingSheet.SheetNumber)
+                        .With("sheetName", existingSheet.Name)
+                        .With("alreadyExisted", true)
+                        .Build();
+                }
 
                 // Find titleblock instances and count usage
                 var titleblockUsage = new Dictionary<ElementId, int>();

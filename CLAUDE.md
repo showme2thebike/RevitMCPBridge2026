@@ -26,15 +26,23 @@ powershell.exe -Command "Compress-Archive -Path 'dist/BimMonkeySetup.exe' -Desti
 cp "C:/Users/echra/.bimmonkey/bimmonkey-ai-git/dist/BimMonkeySetup.zip" \
    "C:/Users/echra/.bimmonkey/bimmonkey-ai-git/frontend/public/BimMonkeySetup.zip"
 
-# 5. Commit and push — Netlify auto-deploys and serves the new zip
+# 5. *** UPDATE VERSION STRING in both install pages — must match AssemblyInfo.cs InformationalVersion ***
+# Format: v0.2.YYYYMMDD  (e.g. v0.2.20260417)
+# File 1: frontend/src/pages/Install.jsx  — search for "Windows · Revit 2024"
+# File 2: landing/install.html            — search for "Windows · Revit 2024"
+# Also update Properties/AssemblyInfo.cs  — AssemblyInformationalVersion line
+
+# 6. Commit and push — Netlify auto-deploys and serves the new zip
 cd "C:/Users/echra/.bimmonkey/bimmonkey-ai-git"
-git add dist/BimMonkeySetup.exe dist/BimMonkeySetup.zip frontend/public/BimMonkeySetup.zip
+git add dist/BimMonkeySetup.exe dist/BimMonkeySetup.zip frontend/public/BimMonkeySetup.zip \
+        frontend/src/pages/Install.jsx landing/install.html
 git commit -m "..." && git push
 ```
 
-> **WARNING:** Steps 2 and 4 are both required on every build.
+> **WARNING:** Steps 2, 4, and 5 are all required on every build.
 > Skipping step 2 → installer packages the old DLL (plugin changes don't appear).
 > Skipping step 4 → bimmonkey.ai/install serves the old zip.
+> Skipping step 5 → install pages show the wrong version number to users.
 > GitHub Releases are NOT used for the install download.
 
 ## BIM Monkey API
@@ -48,6 +56,29 @@ BIM_MONKEY_API_KEY=bm_...   # firm-specific key in CLAUDE.md in Documents\BimMon
 - C# .NET Framework 4.8, Revit 2026 add-in
 - All document modifications must be in Transaction blocks
 - Restart Revit after deploying new DLL
+
+## Telemetry Architecture (AgentCore.cs + TelemetryService.cs)
+Events posted to `/api/telemetry` via Bearer = BIM Monkey API key:
+
+| Event | When | Key metadata |
+|---|---|---|
+| `session_start` | First user message per AgentCore instance | — |
+| `chat_message` | Every user message | `chars`, `words` (no content) |
+| `tool_call` | Every MCP call completes | `toolName`, `durationMs`, `success` |
+| `quality_failure` | `ResultVerifier.Verified=false` | `toolName`, `reason` |
+| `api_error` | Anthropic API error | `error` |
+| `session_outcome` | Session ends (any path) | `outcome`, `stage`, `last_tool`, `input_tokens`, `output_tokens`, `durationMs` |
+
+**session_outcome outcomes:** `completed` · `interrupted` · `error`
+**session_outcome stages:** `thinking` (Claude API in flight) · `executing` (Revit tool in flight) · `responding` (text delivered, idle)
+
+**Interrupted tracking — two layers:**
+1. `AgentChatPanel.Closing` → calls `_agent.NotifyInterrupted()` → `TelemetryService.SendSync` (blocks until HTTP completes)
+2. `AppDomain.CurrentDomain.ProcessExit` → same path (covers Revit crash/kill)
+
+`_sessionOutcomeSent` flag prevents double-firing when both paths trigger.
+
+**callMCPMethod unwrap:** Claude routes most Revit calls through `callMCPMethod` wrapper. Before verification and telemetry, unwrap: real method = `block.Input["method"]`, real params = `block.Input["parameters"]`.
 
 ## Named Pipe Keepalive
 The pipe can drop silently after ~15-20 sequential writes during heavy generation runs.

@@ -676,8 +676,12 @@ namespace RevitMCPBridge
                         doorId = (int)d.Id.Value,
                         mark = d.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.AsString(),
                         typeName = d.Symbol.Name,
-                        width = d.get_Parameter(BuiltInParameter.DOOR_WIDTH)?.AsDouble() ?? 0,
-                        height = d.get_Parameter(BuiltInParameter.DOOR_HEIGHT)?.AsDouble() ?? 0,
+                        width = d.get_Parameter(BuiltInParameter.DOOR_WIDTH)?.AsDouble()
+                            ?? d.Symbol?.get_Parameter(BuiltInParameter.DOOR_WIDTH)?.AsDouble()
+                            ?? d.Symbol?.LookupParameter("Width")?.AsDouble() ?? 0,
+                        height = d.get_Parameter(BuiltInParameter.DOOR_HEIGHT)?.AsDouble()
+                            ?? d.Symbol?.get_Parameter(BuiltInParameter.DOOR_HEIGHT)?.AsDouble()
+                            ?? d.Symbol?.LookupParameter("Height")?.AsDouble() ?? 0,
                         level = doc.GetElement(d.LevelId)?.Name,
                         fromRoom = d.FromRoom?.Number,
                         toRoom = d.ToRoom?.Number,
@@ -715,8 +719,12 @@ namespace RevitMCPBridge
                         windowId = (int)w.Id.Value,
                         mark = w.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.AsString(),
                         typeName = w.Symbol.Name,
-                        width = w.get_Parameter(BuiltInParameter.WINDOW_WIDTH)?.AsDouble() ?? 0,
-                        height = w.get_Parameter(BuiltInParameter.WINDOW_HEIGHT)?.AsDouble() ?? 0,
+                        width = w.get_Parameter(BuiltInParameter.WINDOW_WIDTH)?.AsDouble()
+                            ?? w.Symbol?.get_Parameter(BuiltInParameter.WINDOW_WIDTH)?.AsDouble()
+                            ?? w.Symbol?.LookupParameter("Width")?.AsDouble() ?? 0,
+                        height = w.get_Parameter(BuiltInParameter.WINDOW_HEIGHT)?.AsDouble()
+                            ?? w.Symbol?.get_Parameter(BuiltInParameter.WINDOW_HEIGHT)?.AsDouble()
+                            ?? w.Symbol?.LookupParameter("Height")?.AsDouble() ?? 0,
                         sillHeight = w.get_Parameter(BuiltInParameter.INSTANCE_SILL_HEIGHT_PARAM)?.AsDouble() ?? 0,
                         level = doc.GetElement(w.LevelId)?.Name,
                         comments = w.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)?.AsString()
@@ -749,18 +757,41 @@ namespace RevitMCPBridge
                 }
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                var doors = new FilteredElementCollector(doc)
+                var levelFilter = parameters?["level"]?.ToString();
+
+                // Pre-resolve level to avoid per-element doc.GetElement calls and enable helpful error messages
+                ElementId matchedLevelId = null;
+                if (!string.IsNullOrEmpty(levelFilter))
+                {
+                    var allLevels = new FilteredElementCollector(doc)
+                        .OfClass(typeof(Level)).Cast<Level>().ToList();
+                    var matchedLevel = allLevels.FirstOrDefault(l => l.Name.IndexOf(levelFilter, StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (matchedLevel == null)
+                    {
+                        var available = string.Join(", ", allLevels.Select(l => l.Name));
+                        return ResponseBuilder.Error($"No level matching '{levelFilter}' found. Available levels: {available}", "NOT_FOUND").Build();
+                    }
+                    matchedLevelId = matchedLevel.Id;
+                }
+
+                var offset = parameters?["offset"]?.Value<int>() ?? 0;
+                var limit  = parameters?["limit"]?.Value<int>()  ?? 0;
+
+                var allDoors = new FilteredElementCollector(doc)
                     .OfClass(typeof(FamilyInstance))
                     .OfCategory(BuiltInCategory.OST_Doors)
                     .Cast<FamilyInstance>()
+                    .Where(d => matchedLevelId == null || d.LevelId == matchedLevelId)
                     .Select(d => {
-                        // Get location point
                         var location = d.Location as LocationPoint;
                         var point = location?.Point;
-
-                        // Get host wall ID
                         var hostId = d.Host?.Id.Value ?? -1;
-
+                        var dWidth = d.get_Parameter(BuiltInParameter.DOOR_WIDTH)?.AsDouble()
+                            ?? d.Symbol?.get_Parameter(BuiltInParameter.DOOR_WIDTH)?.AsDouble()
+                            ?? d.Symbol?.LookupParameter("Width")?.AsDouble() ?? 0;
+                        var dHeight = d.get_Parameter(BuiltInParameter.DOOR_HEIGHT)?.AsDouble()
+                            ?? d.Symbol?.get_Parameter(BuiltInParameter.DOOR_HEIGHT)?.AsDouble()
+                            ?? d.Symbol?.LookupParameter("Height")?.AsDouble() ?? 0;
                         return new
                         {
                             doorId = (int)d.Id.Value,
@@ -768,8 +799,8 @@ namespace RevitMCPBridge
                             typeName = d.Symbol?.Name ?? "Unknown",
                             typeId = d.Symbol != null ? (int)d.Symbol.Id.Value : 0,
                             mark = d.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.AsString(),
-                            width = d.get_Parameter(BuiltInParameter.DOOR_WIDTH)?.AsDouble() ?? 0,
-                            height = d.get_Parameter(BuiltInParameter.DOOR_HEIGHT)?.AsDouble() ?? 0,
+                            width = dWidth,
+                            height = dHeight,
                             level = doc.GetElement(d.LevelId)?.Name,
                             hostWallId = (int)hostId,
                             location = point != null ? new { x = point.X, y = point.Y, z = point.Z } : null,
@@ -779,9 +810,17 @@ namespace RevitMCPBridge
                     })
                     .ToList();
 
+                var totalCount = allDoors.Count;
+                var page = limit > 0
+                    ? allDoors.Skip(offset).Take(limit).ToList()
+                    : allDoors.Skip(offset).ToList();
+
                 return ResponseBuilder.Success()
-                    .With("doorCount", doors.Count)
-                    .With("doors", doors)
+                    .With("totalCount", totalCount)
+                    .With("returnedCount", page.Count)
+                    .With("offset", offset)
+                    .With("truncated", offset + page.Count < totalCount)
+                    .With("doors", page)
                     .Build();
             }
             catch (Exception ex)
@@ -804,18 +843,41 @@ namespace RevitMCPBridge
                 }
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                var windows = new FilteredElementCollector(doc)
+                var levelFilter = parameters?["level"]?.ToString();
+
+                // Pre-resolve level to avoid per-element doc.GetElement calls and enable helpful error messages
+                ElementId matchedLevelId = null;
+                if (!string.IsNullOrEmpty(levelFilter))
+                {
+                    var allLevels = new FilteredElementCollector(doc)
+                        .OfClass(typeof(Level)).Cast<Level>().ToList();
+                    var matchedLevel = allLevels.FirstOrDefault(l => l.Name.IndexOf(levelFilter, StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (matchedLevel == null)
+                    {
+                        var available = string.Join(", ", allLevels.Select(l => l.Name));
+                        return ResponseBuilder.Error($"No level matching '{levelFilter}' found. Available levels: {available}", "NOT_FOUND").Build();
+                    }
+                    matchedLevelId = matchedLevel.Id;
+                }
+
+                var offset = parameters?["offset"]?.Value<int>() ?? 0;
+                var limit  = parameters?["limit"]?.Value<int>()  ?? 0;
+
+                var allWindows = new FilteredElementCollector(doc)
                     .OfClass(typeof(FamilyInstance))
                     .OfCategory(BuiltInCategory.OST_Windows)
                     .Cast<FamilyInstance>()
+                    .Where(w => matchedLevelId == null || w.LevelId == matchedLevelId)
                     .Select(w => {
-                        // Get location point
                         var location = w.Location as LocationPoint;
                         var point = location?.Point;
-
-                        // Get host wall ID
                         var hostId = w.Host?.Id.Value ?? -1;
-
+                        var wWidth = w.get_Parameter(BuiltInParameter.WINDOW_WIDTH)?.AsDouble()
+                            ?? w.Symbol?.get_Parameter(BuiltInParameter.WINDOW_WIDTH)?.AsDouble()
+                            ?? w.Symbol?.LookupParameter("Width")?.AsDouble() ?? 0;
+                        var wHeight = w.get_Parameter(BuiltInParameter.WINDOW_HEIGHT)?.AsDouble()
+                            ?? w.Symbol?.get_Parameter(BuiltInParameter.WINDOW_HEIGHT)?.AsDouble()
+                            ?? w.Symbol?.LookupParameter("Height")?.AsDouble() ?? 0;
                         return new
                         {
                             windowId = (int)w.Id.Value,
@@ -823,8 +885,8 @@ namespace RevitMCPBridge
                             typeName = w.Symbol?.Name ?? "Unknown",
                             typeId = w.Symbol != null ? (int)w.Symbol.Id.Value : 0,
                             mark = w.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.AsString(),
-                            width = w.get_Parameter(BuiltInParameter.WINDOW_WIDTH)?.AsDouble() ?? 0,
-                            height = w.get_Parameter(BuiltInParameter.WINDOW_HEIGHT)?.AsDouble() ?? 0,
+                            width = wWidth,
+                            height = wHeight,
                             sillHeight = w.get_Parameter(BuiltInParameter.INSTANCE_SILL_HEIGHT_PARAM)?.AsDouble() ?? 0,
                             level = doc.GetElement(w.LevelId)?.Name,
                             hostWallId = (int)hostId,
@@ -833,9 +895,17 @@ namespace RevitMCPBridge
                     })
                     .ToList();
 
+                var totalCount = allWindows.Count;
+                var page = limit > 0
+                    ? allWindows.Skip(offset).Take(limit).ToList()
+                    : allWindows.Skip(offset).ToList();
+
                 return ResponseBuilder.Success()
-                    .With("windowCount", windows.Count)
-                    .With("windows", windows)
+                    .With("totalCount", totalCount)
+                    .With("returnedCount", page.Count)
+                    .With("offset", offset)
+                    .With("truncated", offset + page.Count < totalCount)
+                    .With("windows", page)
                     .Build();
             }
             catch (Exception ex)

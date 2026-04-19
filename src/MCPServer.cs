@@ -833,6 +833,9 @@ namespace RevitMCPBridge
                     case "getViews":
                         return await GetViews(parameters);
 
+                    case "getViewsSummary":
+                        return await GetViewsSummary(parameters);
+
                     case "exportViewImage":
                         return await ExportViewImage(parameters);
 
@@ -1077,6 +1080,9 @@ namespace RevitMCPBridge
 
                     case "getEmptySheets":
                         return await GetEmptySheets(parameters);
+
+                    case "getModelInventorySummary":
+                        return await GetModelInventorySummary(parameters);
 
                     case "validateTextSizes":
                         return await ValidateTextSizes(parameters);
@@ -5075,6 +5081,11 @@ namespace RevitMCPBridge
                     var offset = parameters?["offset"]?.ToObject<int?>() ?? 0;
                     var excludeIfContains = parameters?["excludeIfContains"]?.ToObject<List<string>>() ?? new List<string>();
                     var isOnSheetFilter = parameters?["isOnSheet"]?.ToObject<bool?>();
+                    // compact=true (default): return only id/name/viewType/isOnSheet/sheetNumber/sheetName.
+                    // Set compact=false to include cropBox, renovationCondition, template, phase, etc.
+                    var compact = parameters?["compact"]?.ToObject<bool?>() ?? true;
+                    // Default limit of 75 to prevent token blowout on large models.
+                    if (limit == 0 && compact == true) limit = 75;
 
                     // Start with all non-template views
                     IEnumerable<View> collector = new FilteredElementCollector(doc)
@@ -5265,31 +5276,43 @@ namespace RevitMCPBridge
                         }
                         catch { }
 
-                        views.Add(new
+                        if (compact == true)
                         {
-                            id = view.Id.Value,
-                            name = view.Name,
-                            viewType = view.ViewType.ToString(),
-                            planSubType,
-                            level = (view as ViewPlan)?.GenLevel?.Name,
-                            scale = scale,
-                            isActive = view.Id == doc.ActiveView?.Id,
-                            isOnSheet = sheetInfo.sheetNumber != null,
-                            sheetNumber = sheetInfo.sheetNumber,
-                            sheetName = sheetInfo.sheetName,
-                            // C1 — crop box geometry
-                            cropWidthFt,
-                            cropHeightFt,
-                            // C2 — renovation condition
-                            renovationCondition,
-                            isExisting = renovationCondition == "existing",
-                            // C4 — visual classification signals
-                            viewTemplate = viewTemplateName,
-                            detailLevel,
-                            discipline,
-                            phase = viewPhaseName,
-                            phaseFilter = phaseFilterName,
-                        });
+                            views.Add(new
+                            {
+                                id = view.Id.Value,
+                                name = view.Name,
+                                viewType = view.ViewType.ToString(),
+                                isOnSheet = sheetInfo.sheetNumber != null,
+                                sheetNumber = sheetInfo.sheetNumber,
+                                sheetName = sheetInfo.sheetName,
+                            });
+                        }
+                        else
+                        {
+                            views.Add(new
+                            {
+                                id = view.Id.Value,
+                                name = view.Name,
+                                viewType = view.ViewType.ToString(),
+                                planSubType,
+                                level = (view as ViewPlan)?.GenLevel?.Name,
+                                scale = scale,
+                                isActive = view.Id == doc.ActiveView?.Id,
+                                isOnSheet = sheetInfo.sheetNumber != null,
+                                sheetNumber = sheetInfo.sheetNumber,
+                                sheetName = sheetInfo.sheetName,
+                                cropWidthFt,
+                                cropHeightFt,
+                                renovationCondition,
+                                isExisting = renovationCondition == "existing",
+                                viewTemplate = viewTemplateName,
+                                detailLevel,
+                                discipline,
+                                phase = viewPhaseName,
+                                phaseFilter = phaseFilterName,
+                            });
+                        }
                     }
 
                     return JsonConvert.SerializeObject(new
@@ -5303,6 +5326,99 @@ namespace RevitMCPBridge
                             limit = limit > 0 ? limit : totalMatching,
                             activeView = doc.ActiveView?.Name,
                             views = views
+                        }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    return ResponseBuilder.FromException(ex).Build();
+                }
+            });
+        }
+
+        // ── getViewsSummary ───────────────────────────────────────────────────────
+        // Ultra-compact: id, name, viewType, isOnSheet, sheetNumber only.
+        // No crop data, templates, phase, or detail level. Returns ALL views in one
+        // call without hitting the token truncation limit (~142 views ≈ 8K chars).
+        // Use getViews with compact=false when you need full detail on specific views.
+        private Task<string> GetViewsSummary(JObject parameters)
+        {
+            return Task.Run(() =>
+            {
+                try
+                {
+                    var uiApp = RevitMCPBridgeApp.GetUIApplication();
+                    if (uiApp?.ActiveUIDocument?.Document == null)
+                        return JsonConvert.SerializeObject(new { success = false, error = "No active document" });
+
+                    var doc = uiApp.ActiveUIDocument.Document;
+
+                    // Optional filters
+                    var viewTypeFilter  = parameters?["viewType"]?.ToString();
+                    var isOnSheetFilter = parameters?["isOnSheet"]?.ToObject<bool?>();
+
+                    // Build sheet placement index
+                    var viewToSheet = new Dictionary<long, string>();
+                    foreach (var vp in new FilteredElementCollector(doc)
+                        .OfClass(typeof(Viewport)).Cast<Viewport>())
+                    {
+                        if (!viewToSheet.ContainsKey(vp.ViewId.Value))
+                        {
+                            var sheet = doc.GetElement(vp.SheetId) as ViewSheet;
+                            if (sheet != null)
+                                viewToSheet[vp.ViewId.Value] = sheet.SheetNumber;
+                        }
+                    }
+                    foreach (var ssi in new FilteredElementCollector(doc)
+                        .OfClass(typeof(ScheduleSheetInstance)).Cast<ScheduleSheetInstance>())
+                    {
+                        if (!viewToSheet.ContainsKey(ssi.ScheduleId.Value))
+                        {
+                            var sheet = doc.GetElement(ssi.OwnerViewId) as ViewSheet;
+                            if (sheet != null)
+                                viewToSheet[ssi.ScheduleId.Value] = sheet.SheetNumber;
+                        }
+                    }
+
+                    IEnumerable<View> collector = new FilteredElementCollector(doc)
+                        .OfClass(typeof(View)).Cast<View>().Where(v => !v.IsTemplate);
+
+                    if (!string.IsNullOrEmpty(viewTypeFilter) &&
+                        Enum.TryParse<ViewType>(viewTypeFilter, true, out var vt))
+                        collector = collector.Where(v => v.ViewType == vt);
+
+                    if (isOnSheetFilter.HasValue)
+                        collector = isOnSheetFilter.Value
+                            ? collector.Where(v => viewToSheet.ContainsKey(v.Id.Value))
+                            : collector.Where(v => !viewToSheet.ContainsKey(v.Id.Value));
+
+                    // Optional pagination — use when model has >100 views to avoid truncation
+                    var offsetParam = parameters?["offset"]?.ToObject<int?>() ?? 0;
+                    var limitParam  = parameters?["limit"]?.ToObject<int?>();
+
+                    var allViews = collector.Select(v => new
+                    {
+                        id          = v.Id.Value,
+                        name        = v.Name,
+                        viewType    = v.ViewType.ToString(),
+                        isOnSheet   = viewToSheet.ContainsKey(v.Id.Value),
+                        sheetNumber = viewToSheet.TryGetValue(v.Id.Value, out var sn) ? sn : null,
+                    }).ToList();
+
+                    var totalCount = allViews.Count;
+                    var views = limitParam.HasValue
+                        ? allViews.Skip(offsetParam).Take(limitParam.Value).ToList()
+                        : allViews.Skip(offsetParam).ToList();
+
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        result  = new {
+                            totalCount,
+                            returnedCount = views.Count,
+                            offset = offsetParam,
+                            hasMore = offsetParam + views.Count < totalCount,
+                            views
                         }
                     });
                 }
@@ -6939,11 +7055,11 @@ namespace RevitMCPBridge
                 {
                     var doc = uiApp.ActiveUIDocument.Document;
 
-                    // Get all views
+                    // Get all placeable views (exclude templates and sheets — sheets can't be placed as viewports)
                     var allViews = new FilteredElementCollector(doc)
                         .OfClass(typeof(View))
                         .Cast<View>()
-                        .Where(v => !v.IsTemplate && v.CanBePrinted)
+                        .Where(v => !v.IsTemplate && v.CanBePrinted && !(v is ViewSheet))
                         .ToList();
 
                     // Get all views that are placed on sheets
@@ -6960,7 +7076,7 @@ namespace RevitMCPBridge
                         }
                     }
 
-                    // Find unplaced views
+                    // Find unplaced views (include level for floor/ceiling plans)
                     var unplacedViews = allViews
                         .Where(v => !placedViewIds.Contains((long)v.Id.Value))
                         .Select(v => new
@@ -6968,7 +7084,8 @@ namespace RevitMCPBridge
                             id = v.Id.Value,
                             name = v.Name,
                             viewType = v.ViewType.ToString(),
-                            scale = v.Scale
+                            scale = v.Scale,
+                            level = (v as ViewPlan)?.GenLevel?.Name
                         })
                         .ToList();
 
@@ -7028,6 +7145,69 @@ namespace RevitMCPBridge
                 catch (Exception ex)
                 {
                     Log.Error(ex, "Error getting empty sheets");
+                    return ResponseBuilder.FromException(ex).Build();
+                }
+            });
+        }
+
+        /// <summary>
+        /// Single-call model inventory: view counts by type, sheet count, placed/unplaced, empty sheets.
+        /// Barrett's first question every session — answer it in one call.
+        /// </summary>
+        private Task<string> GetModelInventorySummary(JObject parameters)
+        {
+            return ExecuteInRevitContext(uiApp =>
+            {
+                try
+                {
+                    var doc = uiApp.ActiveUIDocument.Document;
+
+                    // All non-template, non-sheet placeable views
+                    var allViews = new FilteredElementCollector(doc)
+                        .OfClass(typeof(View)).Cast<View>()
+                        .Where(v => !v.IsTemplate && v.CanBePrinted && !(v is ViewSheet))
+                        .ToList();
+
+                    // Sheet placement index
+                    var placedViewIds = new HashSet<long>();
+                    var sheets = new FilteredElementCollector(doc)
+                        .OfClass(typeof(ViewSheet)).Cast<ViewSheet>().ToList();
+                    foreach (var sheet in sheets)
+                        foreach (var vid in sheet.GetAllPlacedViews())
+                            placedViewIds.Add((long)vid.Value);
+
+                    // Views by type
+                    var byType = allViews
+                        .GroupBy(v => v.ViewType.ToString())
+                        .Select(g => new { viewType = g.Key, total = g.Count(), unplaced = g.Count(v => !placedViewIds.Contains((long)v.Id.Value)) })
+                        .OrderByDescending(x => x.total)
+                        .ToList();
+
+                    // Empty sheets
+                    var emptySheets = sheets
+                        .Where(s => s.GetAllPlacedViews().Count == 0)
+                        .Select(s => new { sheetNumber = s.SheetNumber, sheetName = s.Name })
+                        .OrderBy(s => s.sheetNumber)
+                        .ToList();
+
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        result = new
+                        {
+                            totalViews    = allViews.Count,
+                            placedViews   = placedViewIds.Count,
+                            unplacedViews = allViews.Count - placedViewIds.Count,
+                            totalSheets   = sheets.Count,
+                            emptySheets   = emptySheets.Count,
+                            viewsByType   = byType,
+                            emptySheetsDetail = emptySheets
+                        }
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Error getting model inventory summary");
                     return ResponseBuilder.FromException(ex).Build();
                 }
             });
