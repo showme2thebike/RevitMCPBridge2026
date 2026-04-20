@@ -22,4 +22,4 @@ using System.Runtime.InteropServices;
 // InformationalVersion carries the full human-readable version string
 [assembly: AssemblyVersion("0.2.0.0")]
 [assembly: AssemblyFileVersion("0.2.0.0")]
-[assembly: AssemblyInformationalVersion("v0.2.20260419h")]
+[assembly: AssemblyInformationalVersion("v0.2.20260419i")]

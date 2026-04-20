@@ -910,9 +910,10 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             var formatted = new List<object>();
 
-            // Rolling window: keep last 30 messages to bound context growth.
-            var history = _conversationHistory.Count > 30
-                ? _conversationHistory.Skip(_conversationHistory.Count - 30).ToList()
+            // Rolling window: keep last 5 messages. Banana Chat is short discrete tasks;
+            // standing context lives in the system prompt (firm memory, project notes).
+            var history = _conversationHistory.Count > 5
+                ? _conversationHistory.Skip(_conversationHistory.Count - 5).ToList()
                 : _conversationHistory;
 
             // API requires first message to be a plain user text message.
@@ -924,6 +925,14 @@ namespace RevitMCPBridge2026.AgentFramework
                 history[0].Content is List<object>))  // List<object> = tool_result blocks
             {
                 history = history.Skip(1).ToList();
+            }
+
+            // If stripping orphans emptied the window entirely, seed with a minimal
+            // context-reset message so the API never receives an empty messages array.
+            if (history.Count == 0)
+            {
+                formatted.Add(new { role = "user", content = "[session context reset — continue]" });
+                return formatted;
             }
 
             foreach (var msg in history)

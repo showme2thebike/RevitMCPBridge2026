@@ -108,42 +108,22 @@ namespace RevitMCPBridge2026.AgentFramework
                 InitializeAgent();
             }
 
-            // Check for previous session
-            var previousSession = LoadSession();
-            bool sessionRestored = false;
+            // Always start fresh — session restore removed; all persistent knowledge
+            // lives in the system prompt (firm memory, corrections, CAD rules).
+            AddAssistantMessage("Hello! I'm your Revit AI assistant. I can help you with:\n\n" +
+                "• Placing and organizing annotations\n" +
+                "• Finding information about elements\n" +
+                "• Managing sheets and views\n" +
+                "• Intelligent placement with collision avoidance\n\n" +
+                "What would you like to do?");
 
-            if (previousSession != null && previousSession.Messages.Count > 0)
-            {
-                Loaded += (s, e) =>
-                {
-                    if (AskToContinueSession(previousSession))
-                    {
-                        RestoreSession(previousSession);
-                        AddAssistantMessage("Welcome back! I remember our previous conversation. What would you like to continue working on?");
-                    }
-                };
-                sessionRestored = true; // suppress default welcome; Loaded handler covers both paths
-            }
-
-            if (!sessionRestored)
-            {
-                // Welcome message for new session
-                AddAssistantMessage("Hello! I'm your Revit AI assistant. I can help you with:\n\n" +
-                    "• Placing and organizing annotations\n" +
-                    "• Finding information about elements\n" +
-                    "• Managing sheets and views\n" +
-                    "• Intelligent placement with collision avoidance\n\n" +
-                    "What would you like to do?");
-            }
-
-            // Cleanup and save on close — window closes immediately; cleanup runs on background thread
+            // Cleanup on close — window closes immediately; cleanup runs on background thread
             Closing += (s, e) =>
             {
                 _isClosing = true;
                 _agent?.NotifyInterrupted(); // fire-and-forget telemetry + cancel in-flight RunAsync
                 Task.Run(() =>
                 {
-                    try { SaveSession(); }    catch { }
                     try { DisconnectMCP(); }  catch { }
                 });
             };
@@ -381,11 +361,9 @@ namespace RevitMCPBridge2026.AgentFramework
         // Config file path - use user's home directory for portability
         private static readonly string ConfigDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops");
         private static readonly string ConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "config.json");
-        private static readonly string SessionPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "session.json");
         private static readonly string DefaultModel = "claude-sonnet-4-6";
 
-        // Session data for persistence
-        private List<ChatMessage> _sessionMessages = new List<ChatMessage>();
+        private List<string> _sessionMessages = new List<string>(); // retained for ClearChat
         private string _sessionProjectName;
 
         private void LoadConfig()
@@ -518,309 +496,11 @@ namespace RevitMCPBridge2026.AgentFramework
             }
         }
 
-        #region Session Persistence
+        #region Session Persistence (removed — sessions always start fresh)
 
-        /// <summary>
-        /// Message types for session persistence
-        /// </summary>
-        public class ChatMessage
-        {
-            public string Type { get; set; }  // "user", "assistant", "tool", "error", "system"
-            public string Content { get; set; }
-            public DateTime Timestamp { get; set; }
-        }
-
-        /// <summary>
-        /// Session data structure
-        /// </summary>
-        public class SessionData
-        {
-            public string ProjectName { get; set; }
-            public string LastTask { get; set; }
-            public DateTime SavedAt { get; set; }
-            public List<ChatMessage> Messages { get; set; } = new List<ChatMessage>();
-        }
-
-        /// <summary>
-        /// Save the current session to disk (called on window close)
-        /// </summary>
-        private void SaveSession()
-        {
-            try
-            {
-                // Update project name from current document
-                _sessionProjectName = _uiApp?.ActiveUIDocument?.Document?.Title ?? _sessionProjectName ?? "Unknown";
-
-                // Force immediate save (bypass debounce)
-                _lastSaveTime = DateTime.MinValue;
-                SaveSessionInternal();
-
-                System.Diagnostics.Debug.WriteLine($"Session saved on close: {_sessionMessages.Count} messages");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error saving session: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Load a previous session if it exists
-        /// </summary>
-        private SessionData LoadSession()
-        {
-            try
-            {
-                if (File.Exists(SessionPath))
-                {
-                    var json = File.ReadAllText(SessionPath);
-                    return JsonConvert.DeserializeObject<SessionData>(json);
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error loading session: {ex.Message}");
-            }
-            return null;
-        }
-
-        /// <summary>
-        /// Track a message for session persistence
-        /// </summary>
-        private void TrackMessage(string type, string content)
-        {
-            _sessionMessages.Add(new ChatMessage
-            {
-                Type = type,
-                Content = content,
-                Timestamp = DateTime.Now
-            });
-
-            // AUTO-SAVE: Save session immediately after each message
-            // This ensures persistence even if Revit crashes
-            SaveSessionAsync();
-        }
-
-        // Debounce timer to avoid too-frequent saves
-        private DateTime _lastSaveTime = DateTime.MinValue;
-        private readonly object _saveLock = new object();
-
-        /// <summary>
-        /// Save session asynchronously with debouncing
-        /// </summary>
-        private void SaveSessionAsync()
-        {
-            // Debounce: only save if at least 2 seconds since last save
-            lock (_saveLock)
-            {
-                if ((DateTime.Now - _lastSaveTime).TotalSeconds < 2)
-                {
-                    return; // Skip, will save on next message or on close
-                }
-                _lastSaveTime = DateTime.Now;
-            }
-
-            // Save on background thread to avoid UI lag
-            Task.Run(() =>
-            {
-                try
-                {
-                    SaveSessionInternal();
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Auto-save error: {ex.Message}");
-                }
-            });
-        }
-
-        /// <summary>
-        /// Internal save method (thread-safe)
-        /// </summary>
-        private void SaveSessionInternal()
-        {
-            try
-            {
-                if (!Directory.Exists(ConfigDir))
-                {
-                    Directory.CreateDirectory(ConfigDir);
-                }
-
-                string projectName;
-                List<ChatMessage> messagesToSave;
-                string lastMessage;
-
-                // Get data on UI thread if needed
-                lock (_saveLock)
-                {
-                    projectName = _sessionProjectName ?? "Unknown";
-                    lastMessage = _lastUserMessage ?? "";
-
-                    // Keep last 50 messages
-                    messagesToSave = _sessionMessages.Count > 50
-                        ? _sessionMessages.Skip(_sessionMessages.Count - 50).ToList()
-                        : _sessionMessages.ToList();
-                }
-
-                var session = new SessionData
-                {
-                    ProjectName = projectName,
-                    LastTask = lastMessage,
-                    SavedAt = DateTime.Now,
-                    Messages = messagesToSave
-                };
-
-                var json = JsonConvert.SerializeObject(session, Formatting.Indented);
-
-                // Write to temp file first, then rename (atomic operation)
-                var tempPath = SessionPath + ".tmp";
-                File.WriteAllText(tempPath, json);
-
-                if (File.Exists(SessionPath))
-                {
-                    File.Delete(SessionPath);
-                }
-                File.Move(tempPath, SessionPath);
-
-                System.Diagnostics.Debug.WriteLine($"Session auto-saved: {messagesToSave.Count} messages");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in SaveSessionInternal: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Restore messages from a previous session
-        /// </summary>
-        private void RestoreSession(SessionData session)
-        {
-            _sessionMessages = session.Messages.ToList();
-            _sessionProjectName = session.ProjectName;
-            _lastUserMessage = session.LastTask;
-
-            // CRITICAL: Restore the AgentCore's conversation history
-            // This ensures the AI remembers the previous context
-            if (_agent != null)
-            {
-                var historyItems = session.Messages
-                    .Where(m => m.Type == "user" || m.Type == "assistant")
-                    .Select(m => new ChatHistoryItem
-                    {
-                        Role = m.Type,
-                        Content = m.Content
-                    })
-                    .ToList();
-
-                _agent.RestoreHistory(historyItems);
-                System.Diagnostics.Debug.WriteLine($"Restored {historyItems.Count} messages to AgentCore");
-            }
-
-            // Show last 20 messages in UI
-            var messagesToShow = session.Messages.Count > 20
-                ? session.Messages.Skip(session.Messages.Count - 20)
-                : session.Messages;
-
-            foreach (var msg in messagesToShow)
-            {
-                switch (msg.Type)
-                {
-                    case "user":
-                        RestoreUserMessage(msg.Content);
-                        break;
-                    case "assistant":
-                        RestoreAssistantMessage(msg.Content);
-                        break;
-                    case "tool":
-                        RestoreToolMessage(msg.Content);
-                        break;
-                }
-            }
-
-            // Add continuation message
-            AddSystemMessage($"--- Session restored from {session.SavedAt:g} ---");
-            if (!string.IsNullOrEmpty(session.LastTask))
-            {
-                AddSystemMessage($"Last task: {session.LastTask}");
-            }
-        }
-
-        // Restore methods without tracking (to avoid duplicating in session)
-        private void RestoreUserMessage(string text)
-        {
-            var border = new Border
-            {
-                Background = new SolidColorBrush(Color.FromRgb(0, 120, 212)),
-                CornerRadius = new CornerRadius(12, 12, 0, 12),
-                Padding = new Thickness(12),
-                Margin = new Thickness(50, 8, 8, 8),
-                HorizontalAlignment = HorizontalAlignment.Right,
-                Opacity = 0.7  // Slightly faded to show it's from previous session
-            };
-            border.Child = new TextBlock { Text = text, Foreground = Brushes.White, TextWrapping = TextWrapping.Wrap, FontSize = 14 };
-            _chatHistory.Children.Add(border);
-        }
-
-        private void RestoreAssistantMessage(string text)
-        {
-            var border = new Border
-            {
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
-                CornerRadius = new CornerRadius(12, 12, 12, 0),
-                Padding = new Thickness(12),
-                Margin = new Thickness(8, 8, 50, 8),
-                Opacity = 0.7
-            };
-            border.Child = new TextBlock { Text = text, Foreground = Brushes.White, TextWrapping = TextWrapping.Wrap, FontSize = 14 };
-            _chatHistory.Children.Add(border);
-        }
-
-        private void RestoreToolMessage(string text)
-        {
-            var border = new Border
-            {
-                Background = new SolidColorBrush(Color.FromRgb(35, 35, 35)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(100, 100, 100)),
-                BorderThickness = new Thickness(0, 0, 0, 2),
-                Padding = new Thickness(10),
-                Margin = new Thickness(20, 4, 20, 4),
-                Opacity = 0.7
-            };
-            border.Child = new TextBlock
-            {
-                Text = text,
-                Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160)),
-                TextWrapping = TextWrapping.Wrap,
-                FontSize = 12,
-                FontFamily = new FontFamily("Consolas")
-            };
-            _chatHistory.Children.Add(border);
-        }
-
-        /// <summary>
-        /// Show dialog to ask user if they want to continue previous session
-        /// </summary>
-        private bool AskToContinueSession(SessionData session)
-        {
-            var timeSince = DateTime.Now - session.SavedAt;
-            string timeDesc;
-            if (timeSince.TotalMinutes < 60)
-                timeDesc = $"{(int)timeSince.TotalMinutes} minutes ago";
-            else if (timeSince.TotalHours < 24)
-                timeDesc = $"{(int)timeSince.TotalHours} hours ago";
-            else
-                timeDesc = $"{(int)timeSince.TotalDays} days ago";
-
-            var result = System.Windows.MessageBox.Show(
-                $"Found a previous session from {timeDesc}.\n\n" +
-                $"Project: {session.ProjectName}\n" +
-                $"Last task: {(session.LastTask?.Length > 50 ? session.LastTask.Substring(0, 50) + "..." : session.LastTask ?? "None")}\n\n" +
-                "Would you like to continue where you left off?",
-                "Continue Previous Session?",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
-
-            return result == MessageBoxResult.Yes;
-        }
+        // Session save/restore removed in v0.2.20260419i. All persistent knowledge
+        // lives in the system prompt (firm memory, corrections, CAD rules).
+        private void TrackMessage(string type, string content) { }
 
         #endregion
 
