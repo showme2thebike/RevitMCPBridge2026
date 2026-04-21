@@ -12,6 +12,7 @@ using System.Net.Http;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Autodesk.Revit.UI;
+using Serilog;
 using RevitMCPBridge; // For VerificationResult
 using RevitMCPBridge.Helpers;
 
@@ -44,6 +45,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private string _firmStandardsDoc;     // fetched from Railway on init, injected into every prompt
         private string _correctionsKnowledge; // fetched from plugin on init, injected into every prompt
         private string _librarySummary;        // compact approved-examples summary from Railway, injected into every prompt
+        private string _projectNotes;          // fetched from Railway on init, injected into every prompt
         private string _memoryContext;         // last session summary + top facts from local memories.json
         private string _cadVisualRulesQuickRef; // loaded from knowledge/cad-visual-rules.md on init
         private static readonly string PreferencesPath = Path.Combine(
@@ -68,6 +70,9 @@ namespace RevitMCPBridge2026.AgentFramework
         private StreamReader _mcpReader;
         private StreamWriter _mcpWriter;
         private readonly object _pipeLock = new object();
+
+        // Playwright MCP client — browser tools
+        private PlaywrightMCPClient _playwright;
 
         // Feedback tracking - what was the last action for thumbs up/down
         private string _lastUserMessage;
@@ -108,6 +113,9 @@ namespace RevitMCPBridge2026.AgentFramework
                 InitializeAgent();
             }
 
+            // Focus input box every time window is activated (covers first open and reopen)
+            Activated += (s, e) => _inputTextBox?.Focus();
+
             // Always start fresh — session restore removed; all persistent knowledge
             // lives in the system prompt (firm memory, corrections, CAD rules).
             AddAssistantMessage("Hello! I'm your Revit AI assistant. I can help you with:\n\n" +
@@ -124,7 +132,8 @@ namespace RevitMCPBridge2026.AgentFramework
                 _agent?.NotifyInterrupted(); // fire-and-forget telemetry + cancel in-flight RunAsync
                 Task.Run(() =>
                 {
-                    try { DisconnectMCP(); }  catch { }
+                    try { DisconnectMCP(); }
+                    catch (Exception ex) { Log.Warning(ex, "MCP disconnect on panel close failed — pipe may still be open"); }
                 });
             };
         }
@@ -824,7 +833,30 @@ namespace RevitMCPBridge2026.AgentFramework
         private void InitializeAgent()
         {
             _agent = new AgentCore(_apiKey, _selectedModel, _bimMonkeyApiKey);
-            _agent.RegisterTools(ToolDefinitions.GetAllTools());
+
+            // Start Playwright MCP and merge its browser_* tools with Revit tools
+            var allTools = new System.Collections.Generic.List<ToolDefinition>(ToolDefinitions.GetAllTools());
+            Task.Run(async () =>
+            {
+                try
+                {
+                    _playwright?.Dispose();
+                    _playwright = new PlaywrightMCPClient();
+                    var playwrightTools = await _playwright.StartAsync();
+                    if (playwrightTools.Count > 0)
+                    {
+                        allTools.AddRange(playwrightTools);
+                        _agent.RegisterTools(allTools);
+                        System.Diagnostics.Debug.WriteLine($"[Playwright] {playwrightTools.Count} browser tools registered");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Playwright] Init failed: {ex.Message}");
+                }
+            });
+
+            _agent.RegisterTools(allTools);
             _agent.SetToolExecutor(ExecuteMCPMethodAsync);
 
             _agent.OnThinking += (msg) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => { if (!_isClosing) ShowProgress(msg); })); };
@@ -981,6 +1013,28 @@ namespace RevitMCPBridge2026.AgentFramework
                         {
                             _librarySummary = summary;
                             System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Library summary loaded ({summary.Length} chars)");
+                        }
+                    }
+
+                    // 4. Project notes saved from previous Banana Chat sessions
+                    var notesResp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/firms/project-notes");
+                    if (notesResp.IsSuccessStatusCode)
+                    {
+                        var notesBody = await notesResp.Content.ReadAsStringAsync();
+                        var notesObj  = JObject.Parse(notesBody);
+                        var notesArr  = notesObj["notes"] as Newtonsoft.Json.Linq.JArray;
+                        if (notesArr != null && notesArr.Count > 0)
+                        {
+                            var sb = new System.Text.StringBuilder();
+                            foreach (var note in notesArr)
+                            {
+                                var proj = note["project_name"]?.ToString();
+                                var text = note["note"]?.ToString();
+                                if (!string.IsNullOrWhiteSpace(text))
+                                    sb.AppendLine(string.IsNullOrWhiteSpace(proj) ? $"- {text}" : $"- [{proj}]: {text}");
+                            }
+                            _projectNotes = sb.ToString().Trim();
+                            System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Project notes loaded ({notesArr.Count} notes)");
                         }
                     }
                 }
@@ -1186,11 +1240,103 @@ namespace RevitMCPBridge2026.AgentFramework
                 _mcpReader = null;
                 _mcpPipe = null;
             }
+
+            // Shut down Playwright process
+            try { _playwright?.Dispose(); _playwright = null; } catch { }
         }
 
         /// <summary>
         /// Query the BIM Monkey approved library on Railway using the firm's API key.
         /// </summary>
+        private async Task<string> HandleCompareViewToLibraryAsync(JObject parameters)
+        {
+            if (_playwright == null || !_playwright.IsConnected)
+                return JsonConvert.SerializeObject(new { success = false, error = "Playwright not connected — browser tools unavailable." });
+            if (string.IsNullOrEmpty(_apiKey))
+                return JsonConvert.SerializeObject(new { success = false, error = "Anthropic API key not configured." });
+
+            try
+            {
+                // 1. Capture the current Revit view
+                var captureParams = new JObject { ["width"] = 1200, ["height"] = 900 };
+                if (parameters?["viewId"] != null) captureParams["viewId"] = parameters["viewId"];
+                var captureJson = await ExecuteMCPWithRetryAsync("captureViewportToBase64", captureParams);
+                var capture = JObject.Parse(captureJson);
+                if (capture["success"]?.ToObject<bool>() != true)
+                    return JsonConvert.SerializeObject(new { success = false, error = "Failed to capture Revit view: " + capture["error"] });
+                var revitBase64 = capture["result"]?["base64"]?.ToString();
+                var viewName = capture["result"]?["viewName"]?.ToString() ?? "current view";
+                if (string.IsNullOrEmpty(revitBase64))
+                    return JsonConvert.SerializeObject(new { success = false, error = "Revit view capture returned no image data." });
+
+                // 2. Navigate to the library reference URL and screenshot it
+                var libraryUrl = parameters?["libraryUrl"]?.ToString();
+                if (string.IsNullOrEmpty(libraryUrl))
+                    libraryUrl = "https://app.bimmonkey.ai/library";
+
+                // Auth + navigate
+                await _playwright.CallToolAsync("browser_navigate", new JObject
+                {
+                    ["url"] = $"https://app.bimmonkey.ai/api/auth/headless?key={_bimMonkeyApiKey}"
+                });
+                await _playwright.CallToolAsync("browser_navigate", new JObject { ["url"] = libraryUrl });
+                await Task.Delay(1500); // let page render
+
+                var libraryBase64 = await _playwright.CallToolForBase64Async("browser_take_screenshot", new JObject());
+                if (string.IsNullOrEmpty(libraryBase64))
+                    return JsonConvert.SerializeObject(new { success = false, error = "Failed to screenshot library page." });
+
+                // 3. Send both images to Claude for comparison
+                var question = parameters?["question"]?.ToString()
+                    ?? "Compare the Revit drawing (image 1) against the library reference (image 2). Identify: what matches, what differs, and any quality or standards issues.";
+
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.Timeout = TimeSpan.FromSeconds(90);
+                    client.DefaultRequestHeaders.Add("x-api-key", _apiKey);
+                    client.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
+
+                    var requestBody = new
+                    {
+                        model = "claude-sonnet-4-6",
+                        max_tokens = 2048,
+                        messages = new[]
+                        {
+                            new
+                            {
+                                role = "user",
+                                content = new object[]
+                                {
+                                    new { type = "text", text = $"Image 1 — Current Revit view: {viewName}" },
+                                    new { type = "image", source = new { type = "base64", media_type = "image/png", data = revitBase64 } },
+                                    new { type = "text", text = $"Image 2 — Library reference: {libraryUrl}" },
+                                    new { type = "image", source = new { type = "base64", media_type = "image/png", data = libraryBase64 } },
+                                    new { type = "text", text = question }
+                                }
+                            }
+                        }
+                    };
+
+                    var json = Newtonsoft.Json.JsonConvert.SerializeObject(requestBody);
+                    var content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
+                    var response = await client.PostAsync("https://api.anthropic.com/v1/messages", content);
+                    var body = await response.Content.ReadAsStringAsync();
+                    var parsed = JObject.Parse(body);
+                    var analysis = parsed["content"]?[0]?["text"]?.ToString() ?? body;
+
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        result = new { viewName, libraryUrl, analysis, comparedAt = DateTime.Now.ToString("o") }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { success = false, error = ex.Message });
+            }
+        }
+
         private async Task<string> HandleQueryLibraryAsync(JObject parameters)
         {
             if (string.IsNullOrEmpty(_bimMonkeyApiKey))
@@ -1240,6 +1386,24 @@ namespace RevitMCPBridge2026.AgentFramework
                 return await Task.FromResult(JsonConvert.SerializeObject(new { success = true, fileName = fileName, content = content }));
             }
 
+            // Playwright browser tools — route to Playwright MCP process
+            if (methodName.StartsWith("browser_") && _playwright != null && _playwright.IsConnected)
+            {
+                // Silently inject headless auth before any navigation to app.bimmonkey.ai
+                if (methodName == "browser_navigate" && !string.IsNullOrEmpty(_bimMonkeyApiKey))
+                {
+                    var url = parameters?["url"]?.ToString() ?? "";
+                    if (url.Contains("app.bimmonkey.ai") && !url.Contains("/api/auth/headless"))
+                    {
+                        await _playwright.CallToolAsync("browser_navigate", new JObject
+                        {
+                            ["url"] = $"https://app.bimmonkey.ai/api/auth/headless?key={_bimMonkeyApiKey}"
+                        });
+                    }
+                }
+                return await _playwright.CallToolAsync(methodName, parameters);
+            }
+
             // Handle vision analysis - needs API key which we have locally
             if (methodName == "analyzeView")
             {
@@ -1254,6 +1418,12 @@ namespace RevitMCPBridge2026.AgentFramework
                     ["params"] = parameters
                 };
                 return await ExecuteMCPWithRetryAsync("analyzeView", parameters);
+            }
+
+            // Compare current Revit view against a library reference screenshot
+            if (methodName == "compareViewToLibrary")
+            {
+                return await HandleCompareViewToLibraryAsync(parameters);
             }
 
             // BIM Monkey: query the approved library on Railway
@@ -2486,6 +2656,10 @@ namespace RevitMCPBridge2026.AgentFramework
                     ? ""
                     : $"\n\nAPPROVED EXAMPLES LIBRARY (details/sheets this firm has approved — use as quality benchmark):\n{_librarySummary}\n";
 
+                var projectNotesBlock = string.IsNullOrWhiteSpace(_projectNotes)
+                    ? ""
+                    : $"\n\nPROJECT NOTES (architect's saved instructions from past sessions — apply automatically):\n{_projectNotes}\n";
+
                 var memoryBlock = string.IsNullOrWhiteSpace(_memoryContext)
                     ? ""
                     : $"\n\nMEMORY FROM PREVIOUS SESSIONS (what you learned and did last time):\n{_memoryContext}\n";
@@ -2511,7 +2685,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     "- When Barrett mentions a project: memoryRecall with the project name\n\n" +
                     "The goal: Barrett should never have to tell you the same thing twice.\n";
 
-                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{memoryBlock}{persistentIntelBlock}
+                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{projectNotesBlock}{memoryBlock}{persistentIntelBlock}
 
 CURRENT PROJECT: {projectName}
 

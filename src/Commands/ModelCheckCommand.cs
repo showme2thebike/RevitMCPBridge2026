@@ -20,6 +20,7 @@ namespace RevitMCPBridge.Commands
     public class ModelCheckCommand : IExternalCommand
     {
         private const string ApiBase = "https://bimmonkey-production.up.railway.app";
+        private static readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
@@ -133,12 +134,11 @@ namespace RevitMCPBridge.Commands
         {
             try
             {
-                using (var client = new HttpClient())
+                using (var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post, $"{ApiBase}/api/model/health-check"))
                 {
-                    client.Timeout = TimeSpan.FromSeconds(15);
-                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
-                    var content  = new StringContent(payload.ToString(), Encoding.UTF8, "application/json");
-                    var response = client.PostAsync($"{ApiBase}/api/model/health-check", content).GetAwaiter().GetResult();
+                    req.Headers.Add("Authorization", $"Bearer {apiKey}");
+                    req.Content = new StringContent(payload.ToString(), Encoding.UTF8, "application/json");
+                    var response = _http.SendAsync(req).GetAwaiter().GetResult();
                     if (!response.IsSuccessStatusCode) return null;
                     var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
                     return JObject.Parse(body);

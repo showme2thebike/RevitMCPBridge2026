@@ -6,6 +6,7 @@ using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using Serilog;
 using RevitMCPBridge;
 using RevitMCPBridge.Helpers;
 
@@ -1142,9 +1143,9 @@ namespace RevitMCPBridge2026
                                 });
                             }
                         }
-                        catch (Exception)
+                        catch (Exception ex)
                         {
-                            // Skip types that can't be modified
+                            Log.Debug(ex, "Skipping text type that could not be modified");
                         }
                     }
 

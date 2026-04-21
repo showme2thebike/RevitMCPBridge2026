@@ -46,34 +46,39 @@ namespace RevitMCPBridge
         }
 
         // ── State transitions ───────────────────────────────────────────────────
+        // Each method locks the job object so pipe-thread status reads (getExecutionStatus)
+        // can't observe a partially-written state — e.g. Status=Running but StartedAt still null.
 
         public static void SetRunning(string jobId)
         {
             if (_jobs.TryGetValue(jobId, out var job))
-            {
-                job.Status    = JobStatus.Running;
-                job.StartedAt = DateTime.UtcNow;
-            }
+                lock (job)
+                {
+                    job.Status    = JobStatus.Running;
+                    job.StartedAt = DateTime.UtcNow;
+                }
         }
 
         public static void SetComplete(string jobId, string resultJson)
         {
             if (_jobs.TryGetValue(jobId, out var job))
-            {
-                job.ResultJson   = resultJson;
-                job.Status       = JobStatus.Complete;
-                job.CompletedAt  = DateTime.UtcNow;
-            }
+                lock (job)
+                {
+                    job.ResultJson  = resultJson;
+                    job.Status      = JobStatus.Complete;
+                    job.CompletedAt = DateTime.UtcNow;
+                }
         }
 
         public static void SetFailed(string jobId, string error)
         {
             if (_jobs.TryGetValue(jobId, out var job))
-            {
-                job.Error       = error;
-                job.Status      = JobStatus.Failed;
-                job.CompletedAt = DateTime.UtcNow;
-            }
+                lock (job)
+                {
+                    job.Error       = error;
+                    job.Status      = JobStatus.Failed;
+                    job.CompletedAt = DateTime.UtcNow;
+                }
         }
 
         // ── Read ───────────────────────────────────────────────────────────────
@@ -87,6 +92,7 @@ namespace RevitMCPBridge
         public static void Evict()
         {
             var cutoff = DateTime.UtcNow.AddHours(-2);
+            var toRemove = new System.Collections.Generic.List<string>();
             foreach (var kv in _jobs)
             {
                 var j = kv.Value;
@@ -94,9 +100,11 @@ namespace RevitMCPBridge
                     && j.CompletedAt.HasValue
                     && j.CompletedAt.Value < cutoff)
                 {
-                    _jobs.TryRemove(kv.Key, out _);
+                    toRemove.Add(kv.Key);
                 }
             }
+            foreach (var key in toRemove)
+                _jobs.TryRemove(key, out _);
         }
     }
 }

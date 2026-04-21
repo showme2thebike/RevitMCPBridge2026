@@ -17,6 +17,7 @@ namespace RevitMCPBridge.Commands
     public class StandardsCommand : IExternalCommand
     {
         private const string ApiBase = "https://bimmonkey-production.up.railway.app";
+        private static readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
@@ -77,11 +78,10 @@ namespace RevitMCPBridge.Commands
         {
             try
             {
-                using (var client = new HttpClient())
+                using (var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, $"{ApiBase}/api/standards"))
                 {
-                    client.Timeout = TimeSpan.FromSeconds(10);
-                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
-                    var response = client.GetAsync($"{ApiBase}/api/standards").GetAwaiter().GetResult();
+                    req.Headers.Add("Authorization", $"Bearer {apiKey}");
+                    var response = _http.SendAsync(req).GetAwaiter().GetResult();
                     if (!response.IsSuccessStatusCode) return null;
                     var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
                     return JObject.Parse(body);
