@@ -576,29 +576,38 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (response.StopReason == "end_turn") break;
                 }
 
-                var _completedDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
-                _sessionOutcomeSent = true;
-                TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
-                    durationMs: _completedDurationMs,
-                    metadata: new { outcome = "completed", iterations = iteration, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
+                if (!_sessionOutcomeSent)
+                {
+                    _sessionOutcomeSent = true;
+                    var _completedDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                    TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
+                        durationMs: _completedDurationMs,
+                        metadata: new { outcome = "completed", iterations = iteration, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
+                }
                 OnComplete?.Invoke();
             }
             catch (OperationCanceledException)
             {
-                var _cancelledDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
-                _sessionOutcomeSent = true;
-                TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
-                    durationMs: _cancelledDurationMs,
-                    metadata: new { outcome = "interrupted", input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
+                if (!_sessionOutcomeSent)
+                {
+                    _sessionOutcomeSent = true;
+                    var _cancelledDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                    TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
+                        durationMs: _cancelledDurationMs,
+                        metadata: new { outcome = "interrupted", input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
+                }
                 OnError?.Invoke("Operation cancelled");
             }
             catch (Exception ex)
             {
-                var _errorDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
-                _sessionOutcomeSent = true;
-                TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
-                    durationMs: _errorDurationMs,
-                    metadata: new { outcome = "error", error = ex.Message, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
+                if (!_sessionOutcomeSent)
+                {
+                    _sessionOutcomeSent = true;
+                    var _errorDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                    TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
+                        durationMs: _errorDurationMs,
+                        metadata: new { outcome = "error", error = ex.Message, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
+                }
                 OnError?.Invoke($"Agent error: {ex.Message}");
             }
         }
@@ -818,6 +827,10 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             return await Task.Run(() =>
             {
+                HttpWebRequest request = null;
+                // Wire the cancellation token to request.Abort() so Stop/close actually
+                // kills the in-flight HTTP call instead of letting it run for 5 minutes.
+                CancellationTokenRegistration reg = default;
                 try
                 {
                     var requestBody = new
@@ -834,12 +847,14 @@ namespace RevitMCPBridge2026.AgentFramework
                         NullValueHandling = NullValueHandling.Ignore
                     });
 
-                    var request = (HttpWebRequest)WebRequest.Create("https://api.anthropic.com/v1/messages");
+                    request = (HttpWebRequest)WebRequest.Create("https://api.anthropic.com/v1/messages");
                     request.Method = "POST";
                     request.ContentType = "application/json";
                     request.Headers.Add("x-api-key", _apiKey);
                     request.Headers.Add("anthropic-version", "2023-06-01");
                     request.Timeout = 300000; // 5 minutes
+
+                    reg = token.Register(() => request.Abort());
 
                     var data = Encoding.UTF8.GetBytes(json);
                     request.ContentLength = data.Length;
@@ -863,6 +878,12 @@ namespace RevitMCPBridge2026.AgentFramework
                         return result;
                     }
                 }
+                catch (WebException ex) when (token.IsCancellationRequested)
+                {
+                    // Abort() due to cancellation — convert to OperationCanceledException
+                    // so RunAsync's catch block handles it as an expected stop, not an error.
+                    throw new OperationCanceledException("Claude API call cancelled by user", token);
+                }
                 catch (WebException ex)
                 {
                     string errorBody = "";
@@ -878,11 +899,15 @@ namespace RevitMCPBridge2026.AgentFramework
                     OnError?.Invoke($"API Error: {errMsg}");
                     return null;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!token.IsCancellationRequested)
                 {
                     TelemetryService.Send(_bimMonkeyApiKey, "api_error", errorMessage: ex.Message);
                     OnError?.Invoke($"HTTP Error: {ex.Message}");
                     return null;
+                }
+                finally
+                {
+                    reg.Dispose();
                 }
             }, token);
         }
@@ -910,10 +935,10 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             var formatted = new List<object>();
 
-            // Rolling window: keep last 5 messages. Banana Chat is short discrete tasks;
+            // Rolling window: keep last 30 messages. Enough for multi-step sessions;
             // standing context lives in the system prompt (firm memory, project notes).
-            var history = _conversationHistory.Count > 5
-                ? _conversationHistory.Skip(_conversationHistory.Count - 5).ToList()
+            var history = _conversationHistory.Count > 30
+                ? _conversationHistory.Skip(_conversationHistory.Count - 30).ToList()
                 : _conversationHistory;
 
             // API requires first message to be a plain user text message.
@@ -988,6 +1013,15 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private string GetDefaultSystemPrompt()
         {
+            var browserSection = !string.IsNullOrEmpty(_bimMonkeyApiKey) ? @"
+
+BROWSER TOOLS — you have access to browser_* tools (Playwright headless Chromium).
+- You can browse app.bimmonkey.ai to pull content from the user's own BIM Monkey account — their drawing library, approved details, project notes, and firm standards. Authentication is handled automatically.
+- Use browser_navigate to go to any app.bimmonkey.ai page (e.g. /library, /projects), browser_take_screenshot to show it visually.
+- PREFER browser_evaluate over browser_snapshot for extracting lists or tables — snapshot truncates on large pages. Use browser_evaluate to run document.querySelectorAll and return structured data as JSON.
+- NEVER fill in missing data from memory when browser content is truncated. If a response is cut off, call browser_evaluate to extract the remaining data, or tell the user what was and wasn't retrieved.
+- Use this when the user asks about their library, wants to reference an approved detail, or needs content from their account." : "";
+
             return @"You are BIM Monkey — an on-call BIM manager and Revit expert embedded directly inside Autodesk Revit.
 
 You have two modes:
@@ -1001,7 +1035,7 @@ Key capabilities:
 - Trigger a full or scoped CD generation run via triggerGeneration
 - Query the firm's approved drawing library via queryLibrary
 - Run code compliance checks by calling detectBuildingConditions then reasoning about the results
-- Identify missing details by comparing model conditions against the approved library
+- Identify missing details by comparing model conditions against the approved library" + browserSection + @"
 
 Rules:
 - Always call the model first before answering questions about the current project (use getModelInfo, getRooms, getViews, detectBuildingConditions as needed)
