@@ -1485,7 +1485,9 @@ namespace RevitMCPBridge2026.AgentFramework
         // Retry configuration
         private const int MaxRetryAttempts = 3;
         private const int InitialRetryDelayMs = 500;
-        private const int MCPTimeoutMs = 30000;
+        // 2 minutes — heavy methods like getModelInventorySummary need time on large models.
+        // 30s was too short: client would bail, server kept running, retries stacked up.
+        private const int MCPTimeoutMs = 120000;
 
         /// <summary>
         /// Execute MCP method with automatic retry and enhanced error handling
@@ -1545,8 +1547,10 @@ namespace RevitMCPBridge2026.AgentFramework
 
                     if (string.IsNullOrEmpty(response))
                     {
-                        // Empty response - likely connection issue
-                        DisconnectMCP();
+                        // Empty response — pipe disconnected mid-request.
+                        // ForceClosePipe resets the connection; EnsureMCPConnection will
+                        // reconnect on the next attempt. Full DisconnectMCP is overkill here.
+                        ForceClosePipe();
                         lastError = "Empty response from MCP server";
 
                         if (attempt < MaxRetryAttempts)
@@ -1596,12 +1600,11 @@ namespace RevitMCPBridge2026.AgentFramework
                 catch (MCPTimeoutException timeoutEx)
                 {
                     lastError = timeoutEx.Message;
-                    // Timeouts often indicate Revit is busy - give it time
-                    if (attempt < MaxRetryAttempts)
-                    {
-                        await Task.Delay(InitialRetryDelayMs * attempt * 2);
-                        continue;
-                    }
+                    // DO NOT retry on timeout. The original Revit action is still running
+                    // in MCPRequestHandler's queue. Retrying would stack more of the same
+                    // heavy work, causing a queue storm and further freezing Revit.
+                    // Return the timeout error immediately so Claude can try a lighter approach.
+                    break;
                 }
                 catch (Exception ex)
                 {
