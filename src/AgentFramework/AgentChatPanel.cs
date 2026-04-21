@@ -1504,28 +1504,31 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 try
                 {
-                    // WRITE under lock — prevents concurrent writes corrupting the stream
-                    StreamReader readerCapture;
-                    lock (_pipeLock)
+                    // WRITE on a thread pool thread — Connect(5000) and WriteLine are
+                    // blocking calls; running them on the STA/UI thread causes "Not Responding".
+                    // Returns the reader capture so the read phase can use the same stream.
+                    var readerCapture = await Task.Run(() =>
                     {
-                        try
+                        lock (_pipeLock)
                         {
-                            EnsureMCPConnection();
-                            _mcpWriter.WriteLine(requestJson);
-                            readerCapture = _mcpReader;
+                            try
+                            {
+                                EnsureMCPConnection();
+                                _mcpWriter.WriteLine(requestJson);
+                                return _mcpReader;
+                            }
+                            catch (IOException ioEx)
+                            {
+                                ForceClosePipe();
+                                throw new MCPConnectionException("Write failed", ioEx);
+                            }
                         }
-                        catch (IOException ioEx)
-                        {
-                            ForceClosePipe();
-                            throw new MCPConnectionException("Write failed", ioEx);
-                        }
-                    }
+                    });
 
                     // READ outside the lock with a real timeout via Task.WhenAny.
-                    // ReadLine() is blocking — running it in Task.Run lets us race it
-                    // against a timeout. On timeout we ForceClosePipe() which causes
-                    // the stuck ReadLine() to throw IOException and the task to complete.
-                    // The orphaned task exception is intentionally not observed.
+                    // ReadLine() is blocking — Task.Run puts it on a thread pool thread.
+                    // On timeout, ForceClosePipe() disposes the stream, causing the
+                    // stuck ReadLine() to throw so its Task completes (exception ignored).
                     var readTask    = Task.Run(() => readerCapture?.ReadLine());
                     var timeoutTask = Task.Delay(MCPTimeoutMs);
                     var winner      = await Task.WhenAny(readTask, timeoutTask);
