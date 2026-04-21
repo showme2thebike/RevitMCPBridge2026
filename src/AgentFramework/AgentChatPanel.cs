@@ -2739,7 +2739,7 @@ If setViewCropBox returns cropBoxActive:false and templateName is set, the view 
 VIEWPORT ALIGNMENT RULES:
 Use alignViewportEdge instead of computing coordinates manually. It eliminates hand-math and is exact.
 For interior elevation rows: ALWAYS align by edge='bottom' (the floor line / maxY). Never align by top edge — top edges differ per viewport height and will misalign the floor datum.
-For label offsets: ALWAYS call setViewportLabelOffset with auto:true — it computes offsetX and offsetY from the viewport's actual bounding box. Never use a fixed value like -0.188; tall viewports have taller heights and need larger offsets.
+For label offsets: NEVER use auto:true on setViewportLabelOffset — it is broken for large viewports and will misplace labels. Instead, call getViewportBoundingBoxes to read the existing offsets, then match manually. Never use a fixed value like -0.188 — read the actual bounding box first.
 alignViewportEdge defaults to dryRun:true — show the user the proposed delta before executing.
 
 CLASSIFICATION PIPELINE — NON-NEGOTIABLE:
