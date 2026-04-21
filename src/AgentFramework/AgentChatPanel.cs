@@ -1206,42 +1206,57 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private void EnsureMCPConnection()
         {
-            lock (_pipeLock)
+            // Must be called under _pipeLock
+            if (_mcpPipe == null || !_mcpPipe.IsConnected)
             {
-                if (_mcpPipe == null || !_mcpPipe.IsConnected)
-                {
-                    // Dispose old connection if exists
-                    _mcpWriter?.Dispose();
-                    _mcpReader?.Dispose();
-                    _mcpPipe?.Dispose();
+                try { _mcpWriter?.Dispose(); } catch { }
+                try { _mcpReader?.Dispose(); } catch { }
+                try { _mcpPipe?.Dispose();   } catch { }
 
-                    // Create new connection
-                    _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2026", PipeDirection.InOut);
-                    _mcpPipe.Connect(5000);
-                    _mcpWriter = new StreamWriter(_mcpPipe) { AutoFlush = true };
-                    _mcpReader = new StreamReader(_mcpPipe);
-                }
+                _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2026", PipeDirection.InOut);
+                _mcpPipe.Connect(5000);
+                _mcpWriter = new StreamWriter(_mcpPipe) { AutoFlush = true };
+                _mcpReader = new StreamReader(_mcpPipe);
             }
+        }
+
+        /// <summary>
+        /// Force-close the pipe streams WITHOUT acquiring _pipeLock.
+        /// Calling this while another thread is blocked in ReadLine() inside _pipeLock
+        /// causes ReadLine() to throw IOException, which releases _pipeLock so callers
+        /// waiting on it can proceed. Safe to call from any thread.
+        /// </summary>
+        private void ForceClosePipe()
+        {
+            var pipe   = _mcpPipe;
+            var writer = _mcpWriter;
+            var reader = _mcpReader;
+            // Null first so EnsureMCPConnection won't reuse these objects
+            _mcpPipe   = null;
+            _mcpWriter = null;
+            _mcpReader = null;
+            try { writer?.Dispose(); } catch { }
+            try { reader?.Dispose(); } catch { }
+            try { pipe?.Dispose();   } catch { }
         }
 
         private void DisconnectMCP()
         {
             _proactiveTimer?.Stop();
-
-            // Save learned preferences before pipe closes — synchronous, direct, no MCP needed
             SavePreferences();
 
+            // Step 1: Force-close the pipe WITHOUT the lock.
+            // If a thread is blocked in ReadLine() inside lock(_pipeLock), disposing the
+            // pipe causes ReadLine() to throw IOException, which releases _pipeLock.
+            // Without this step, acquiring _pipeLock below would deadlock.
+            ForceClosePipe();
+
+            // Step 2: Acquire lock to ensure the reader thread has fully exited its lock block
             lock (_pipeLock)
             {
-                _mcpWriter?.Dispose();
-                _mcpReader?.Dispose();
-                _mcpPipe?.Dispose();
-                _mcpWriter = null;
-                _mcpReader = null;
-                _mcpPipe = null;
+                // Fields already nulled in ForceClosePipe — nothing to do
             }
 
-            // Shut down Playwright process
             try { _playwright?.Dispose(); _playwright = null; } catch { }
         }
 
@@ -1489,31 +1504,41 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 try
                 {
-                    var response = await Task.Run(() =>
+                    // WRITE under lock — prevents concurrent writes corrupting the stream
+                    StreamReader readerCapture;
+                    lock (_pipeLock)
                     {
-                        lock (_pipeLock)
+                        try
                         {
-                            try
-                            {
-                                EnsureMCPConnection();
-                                _mcpWriter.WriteLine(requestJson);
-
-                                // Read with timeout simulation via check
-                                var result = _mcpReader.ReadLine();
-                                return result;
-                            }
-                            catch (IOException ioEx)
-                            {
-                                // Pipe broken - need to reconnect
-                                DisconnectMCP();
-                                throw new MCPConnectionException("Connection lost", ioEx);
-                            }
-                            catch (TimeoutException)
-                            {
-                                throw new MCPTimeoutException($"Method '{methodName}' timed out");
-                            }
+                            EnsureMCPConnection();
+                            _mcpWriter.WriteLine(requestJson);
+                            readerCapture = _mcpReader;
                         }
-                    });
+                        catch (IOException ioEx)
+                        {
+                            ForceClosePipe();
+                            throw new MCPConnectionException("Write failed", ioEx);
+                        }
+                    }
+
+                    // READ outside the lock with a real timeout via Task.WhenAny.
+                    // ReadLine() is blocking — running it in Task.Run lets us race it
+                    // against a timeout. On timeout we ForceClosePipe() which causes
+                    // the stuck ReadLine() to throw IOException and the task to complete.
+                    // The orphaned task exception is intentionally not observed.
+                    var readTask    = Task.Run(() => readerCapture?.ReadLine());
+                    var timeoutTask = Task.Delay(MCPTimeoutMs);
+                    var winner      = await Task.WhenAny(readTask, timeoutTask);
+
+                    if (winner == timeoutTask)
+                    {
+                        ForceClosePipe(); // breaks the stuck ReadLine in readTask
+                        throw new MCPTimeoutException($"Method '{methodName}' timed out after {MCPTimeoutMs / 1000}s");
+                    }
+
+                    string response;
+                    try   { response = await readTask; }
+                    catch (Exception ioEx) { throw new MCPConnectionException("Read failed", ioEx); }
 
                     if (string.IsNullOrEmpty(response))
                     {
