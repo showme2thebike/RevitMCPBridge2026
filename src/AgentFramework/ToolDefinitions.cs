@@ -16,25 +16,17 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             var tools = new List<ToolDefinition>();
 
-            // BIM MONKEY: Generation and library tools
-            tools.AddRange(GetBimMonkeyTools());
+            // UNIVERSAL: callMCPMethod gives access to all 705 Revit methods.
+            // Only tools that DON'T go through the MCP pipe get discrete definitions here.
+            tools.AddRange(GetUniversalTools());   // callMCPMethod, listAllMethods, getMethodInfo, knowledge
+            tools.AddRange(GetBimMonkeyTools());   // queryLibrary, analyzeView, compareViewToLibrary
+            tools.AddRange(GetFileTools());        // readFile, writeFile, listDirectory, …
+            tools.AddRange(GetMemoryTools());      // memoryStore, memoryRecall, …
 
-            // UNIVERSAL ACCESS: These tools give access to ALL 700+ MCP methods
-            tools.AddRange(GetUniversalTools());
-
-            // FILE OPERATIONS: Read, write, browse files like Claude Code
-            tools.AddRange(GetFileTools());
-
-            // MEMORY: Persistent memory across sessions like Claude Code
-            tools.AddRange(GetMemoryTools());
-
-            // Add curated tool categories (with descriptions for common tasks)
-            tools.AddRange(GetProjectTools());
-            tools.AddRange(GetSpatialIntelligenceTools());
-            tools.AddRange(GetAnnotationTools());
-            tools.AddRange(GetElementTools());
-            tools.AddRange(GetViewSheetTools());
-            tools.AddRange(GetScheduleTools());
+            // Revit-specific curated tools are INTENTIONALLY OMITTED here.
+            // All of them are accessible via callMCPMethod. Registering them as
+            // discrete tools wastes ~13K tokens per API call for zero extra capability.
+            // Guardrails for key methods live in the system prompt instead.
 
             return tools;
         }
@@ -48,18 +40,45 @@ namespace RevitMCPBridge2026.AgentFramework
                 new ToolDefinition
                 {
                     Name = "queryLibrary",
-                    Description = @"Query the firm's approved BIM Monkey drawing library on the server.
-Use this to look up approved reference sheets, check what drawings exist for a project, or find examples for gap analysis.
-Requires the BIM Monkey API key (set in Settings).
-Common endpoints: 'sheets' (list all approved sheets), 'projects' (list all library projects).
-Pass projectName to filter to a specific project (e.g. '24 02 1710 NE 70th').",
+                    Description = "Query the firm's approved BIM Monkey drawing library. Endpoints: 'sheets', 'projects'. Pass projectName to filter.",
                     InputSchema = new
                     {
                         type = "object",
                         properties = new
                         {
-                            endpoint = new { type = "string", description = "API endpoint to call: 'sheets', 'projects'. Default: 'sheets'." },
-                            projectName = new { type = "string", description = "Optional project name to filter results (e.g. '24 02 1710 NE 70th')." }
+                            endpoint    = new { type = "string", description = "API endpoint: 'sheets' or 'projects'. Default: 'sheets'." },
+                            projectName = new { type = "string", description = "Optional project name filter." }
+                        },
+                        required = new string[] { }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "analyzeView",
+                    Description = "VISUAL VERIFICATION: Capture the current view/sheet and analyze it with AI vision. Use after placing elements to confirm they appear correctly.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            viewId   = new { type = "integer", description = "View or sheet ID to analyze (optional, uses active view)" },
+                            question = new { type = "string",  description = "What to look for or verify" }
+                        },
+                        required = new[] { "question" }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "compareViewToLibrary",
+                    Description = "VISUAL QC: Capture current Revit view and compare against a library reference using AI vision. Returns analysis of what matches, what differs, and quality issues.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            viewId     = new { type = "integer", description = "View or sheet ID to compare (optional, uses active view)" },
+                            libraryUrl = new { type = "string",  description = "URL of library reference page to screenshot. Defaults to /library." },
+                            question   = new { type = "string",  description = "What to compare or verify." }
                         },
                         required = new string[] { }
                     }
@@ -1144,6 +1163,22 @@ Use getViews with compact=false only when you need crop dimensions, phase, templ
                             question = new { type = "string", description = "What to look for or verify (e.g., 'Are the viewports placed correctly?', 'Is the drafting view visible on the sheet?')" }
                         },
                         required = new[] { "question" }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "compareViewToLibrary",
+                    Description = "VISUAL QC: Capture the current Revit view and compare it side-by-side against a library reference using AI vision. Use this to verify generated drawings match approved firm standards. Returns a detailed analysis of what matches, what differs, and any quality issues.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            viewId = new { type = "integer", description = "View or sheet ID to compare (optional, uses active view)" },
+                            libraryUrl = new { type = "string", description = "URL of the library reference page to screenshot (e.g. https://app.bimmonkey.ai/library/project/123/sheet/456). Defaults to /library." },
+                            question = new { type = "string", description = "What to compare or verify (e.g. 'Does this floor plan match the approved layout?')" }
+                        },
+                        required = new string[] { }
                     }
                 },
                 new ToolDefinition

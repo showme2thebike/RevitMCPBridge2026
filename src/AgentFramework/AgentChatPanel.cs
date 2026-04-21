@@ -2695,45 +2695,25 @@ namespace RevitMCPBridge2026.AgentFramework
                     ? ""
                     : $"\n\nMEMORY FROM PREVIOUS SESSIONS (what you learned and did last time):\n{_memoryContext}\n";
 
-                var persistentIntelBlock = "\n\nPERSISTENT INTELLIGENCE — CRITICAL:\n" +
-                    "You have a memory system that survives across sessions. Use it constantly.\n\n" +
-                    "STORE A CORRECTION immediately when:\n" +
-                    "- Barrett says no, wrong, don't do that, that's not right, actually, stop\n" +
-                    "- A tool call fails and you learn why\n" +
-                    "- You place something incorrectly and Barrett fixes it\n" +
-                    "- Barrett states a preference (I always want..., never put..., use X not Y)\n" +
-                    "Call: memoryStoreCorrection with whatISaid, whatWasWrong, correctApproach, category\n\n" +
-                    "STORE A MEMORY after important decisions:\n" +
-                    "- Sheet numbering pattern for this project\n" +
-                    "- View template names that are set up\n" +
-                    "- Family names and type names available in this model\n" +
-                    "- Key project facts (building type, occupancy, jurisdiction)\n" +
-                    "Call: memoryStore with content, memoryType (decision/fact/preference), importance 7-9\n" +
-                    "IMPORTANT: If Barrett corrects or changes a known preference/fact, call memoryStore with replaceExisting=true so contradictory memories don't stack up.\n\n" +
-                    "RECALL MEMORIES when starting a task:\n" +
-                    "- Before placing sheets: memoryRecall with query 'sheet layout preferences'\n" +
-                    "- Before placing views: memoryRecall with query 'view template names'\n" +
-                    "- When Barrett mentions a project: memoryRecall with the project name\n\n" +
-                    "The goal: Barrett should never have to tell you the same thing twice.\n";
+                var persistentIntelBlock = "\n\nMEMORY: Call memoryStoreCorrection immediately when Barrett corrects you. Call memoryStore after key decisions (sheet numbering, template names, family names). Use replaceExisting=true when updating a known fact. The goal: Barrett never repeats himself.";
 
                 var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{projectNotesBlock}{memoryBlock}{persistentIntelBlock}
 
 CURRENT PROJECT: {projectName}
 
-YOUR CAPABILITIES:
-- Query model data: getProjectInfo, getViews, getSheets, getElements, getRooms, getLevels, getWalls, getDoors, getWindows
-- VISUAL VERIFICATION: analyzeView - SEE what you're doing! Capture and analyze views to verify your work
-- Capture visuals: captureViewport (take screenshots of current view)
-- Spatial analysis: checkForOverlaps, suggestPlacementLocation, findEmptySpaceOnSheet
-- Create elements: createWall, placeDoor, placeWindow, placeFamilyInstance
-- Annotations: placeTextNote, placeKeynote, tagElements
-- Sheets/Views: createSheet, placeViewOnSheet, duplicateView
+USE callMCPMethod FOR ALL REVIT OPERATIONS. Key methods (use listAllMethods to discover more):
+- Inventory: getModelInventorySummary, getViewsSummary, getSheets, getUnplacedViews
+- Read: getProjectInfo, getLevels, getRooms, getWalls, getDoors, getWindows, getViewportBoundingBoxes
+- Sheets: createSheet (always append ' *' to name), placeViewOnSheet, placeMultipleViewsOnSheet, placeScheduleOnSheet
+- Views: getViews, setActiveView, duplicateView, setViewTemplate, setViewCropBox
+- Layout: classifyAndPackViews, getSheetLayoutRecommendation, getRecommendedScale, alignViewportEdge, moveViewport, setViewportLabelOffset
+- Annotate: createTextNote, tagDoor, tagRoom, tagAllByCategory, getViewportsOnSheet, getDraftingViewBounds
+- Elements: placeFamilyInstance, setParameter, deleteElements, getElementById
+- Spatial: getSheetLayout, getViewportBoundingBoxes, findEmptySpaceOnSheet, checkForOverlaps
+- Schedules: getSchedules, placeScheduleOnSheet
+- Visual: captureViewport, analyzeView, compareViewToLibrary
 
-ACCESS ALL 705 METHODS:
-The curated tools above are a small subset. Use callMCPMethod to call ANY of the 705 registered Revit methods.
-Example: callMCPMethod with method=""classifyAndPackViews"", parameters={{}}
-Example: callMCPMethod with method=""moveViewToSheet"", parameters={{""viewId"":875149,""targetSheetId"":123}}
-Use listAllMethods to discover available methods by category. Always prefer callMCPMethod over guessing.
+createSheet: ALWAYS append ' *' to the sheet name. Call getSheets first to confirm the sheet doesn't already exist.
 
 SHEET PLACEMENT WORKFLOW — always follow this order:
 0. START HERE: callMCPMethod with method=""classifyAndPackViews"" — runs the full NCS/UDS classification pipeline and returns a pre-assigned sheet layout. The promptBlock is authoritative — do not deviate from definite assignments, only the ambiguous views are yours to place.
