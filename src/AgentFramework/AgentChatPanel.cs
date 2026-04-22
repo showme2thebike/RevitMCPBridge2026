@@ -1289,13 +1289,14 @@ namespace RevitMCPBridge2026.AgentFramework
                 if (string.IsNullOrEmpty(libraryUrl))
                     libraryUrl = "https://app.bimmonkey.ai/library";
 
-                // Auth + navigate
+                // Auth: Railway validates the key and 302-redirects to app.bimmonkey.ai/library?_bmk=key.
+                // React's PlaywrightAuthHandler reads _bmk and saves it to localStorage on the correct origin.
+                // We are already on the library page after the redirect — no second navigate needed.
                 await _playwright.CallToolAsync("browser_navigate", new JObject
                 {
-                    ["url"] = $"https://app.bimmonkey.ai/api/auth/headless?key={_bimMonkeyApiKey}"
+                    ["url"] = $"https://bimmonkey-production.up.railway.app/api/auth/headless?key={_bimMonkeyApiKey}"
                 });
-                await _playwright.CallToolAsync("browser_navigate", new JObject { ["url"] = libraryUrl });
-                await Task.Delay(1500); // let page render
+                await Task.Delay(2500); // wait for redirect + React mount + useEffect to set localStorage
 
                 var libraryBase64 = await _playwright.CallToolForBase64Async("browser_take_screenshot", new JObject());
                 if (string.IsNullOrEmpty(libraryBase64))

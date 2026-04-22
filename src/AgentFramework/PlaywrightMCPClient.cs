@@ -19,10 +19,14 @@ namespace RevitMCPBridge2026.AgentFramework
         private Process _process;
         private StreamWriter _writer;
         private StreamReader _reader;
-        private readonly object _lock = new object();
-        private int _nextId = 1;
-        private bool _disposed = false;
+        private readonly object _writeLock = new object();
 
+        // Async reader loop — routes responses to waiting callers by JSON-RPC id
+        private readonly Dictionary<int, TaskCompletionSource<JObject>> _pending = new Dictionary<int, TaskCompletionSource<JObject>>();
+        private readonly object _pendingLock = new object();
+        private int _nextId = 1;
+
+        private bool _disposed = false;
         public bool IsConnected { get; private set; } = false;
 
         /// <summary>
@@ -53,35 +57,29 @@ namespace RevitMCPBridge2026.AgentFramework
                     }
                 };
                 _process.StartInfo.Environment["PATH"] = augmentedPath;
-                _process.ErrorDataReceived += (s, e) => { }; // discard stderr to prevent buffer deadlock
+                _process.ErrorDataReceived += (s, e) => { };
 
                 _process.Start();
                 _writer = _process.StandardInput;
                 _reader = _process.StandardOutput;
 
-                // Drain stderr asynchronously — never reading it causes the process to deadlock
-                // when startup warnings fill the stderr buffer
                 _process.BeginErrorReadLine();
 
-                // Initialize
+                // Start the async reader loop before sending any requests
+                StartReaderLoop();
+
                 var initResponse = await SendRequestAsync("initialize", new JObject
                 {
                     ["protocolVersion"] = "2024-11-05",
                     ["capabilities"] = new JObject(),
-                    ["clientInfo"] = new JObject
-                    {
-                        ["name"] = "banana-chat",
-                        ["version"] = "1.0"
-                    }
+                    ["clientInfo"] = new JObject { ["name"] = "banana-chat", ["version"] = "1.0" }
                 });
 
                 if (initResponse == null)
                     return new List<ToolDefinition>();
 
-                // Notify initialized
                 await SendNotificationAsync("notifications/initialized");
 
-                // Get tools list
                 var toolsResponse = await SendRequestAsync("tools/list", new JObject());
                 if (toolsResponse == null)
                     return new List<ToolDefinition>();
@@ -112,9 +110,147 @@ namespace RevitMCPBridge2026.AgentFramework
         }
 
         /// <summary>
-        /// Call a Playwright tool by name with the given arguments.
+        /// Background loop that continuously reads stdout and routes responses to waiting callers.
+        /// Notifications (no id field) are silently discarded.
         /// </summary>
-        public async Task<string> CallToolAsync(string toolName, JObject arguments)
+        private void StartReaderLoop()
+        {
+            Task.Run(async () =>
+            {
+                while (!_disposed)
+                {
+                    try
+                    {
+                        var line = await _reader.ReadLineAsync();
+                        if (line == null) break; // process closed stdout
+
+                        if (string.IsNullOrWhiteSpace(line)) continue;
+
+                        JObject obj;
+                        try { obj = JObject.Parse(line); }
+                        catch { continue; }
+
+                        var idToken = obj["id"];
+                        if (idToken == null) continue; // notification — ignore
+
+                        var id = idToken.Value<int>();
+                        TaskCompletionSource<JObject> tcs;
+                        lock (_pendingLock)
+                        {
+                            _pending.TryGetValue(id, out tcs);
+                            _pending.Remove(id);
+                        }
+
+                        if (tcs == null) continue; // already timed out — discard
+
+                        var error = obj["error"];
+                        if (error != null)
+                        {
+                            Log.Debug("[Playwright] Error response for id={Id}: {Error}", id, error);
+                            tcs.TrySetResult(null);
+                        }
+                        else
+                        {
+                            tcs.TrySetResult(obj["result"] as JObject ?? new JObject());
+                        }
+                    }
+                    catch (Exception ex) when (!_disposed)
+                    {
+                        Log.Warning(ex, "[Playwright] Reader loop error");
+                        break;
+                    }
+                }
+
+                // Reader loop exited — fail all pending requests
+                List<TaskCompletionSource<JObject>> remaining;
+                lock (_pendingLock)
+                {
+                    remaining = new List<TaskCompletionSource<JObject>>(_pending.Values);
+                    _pending.Clear();
+                }
+                foreach (var tcs in remaining)
+                    tcs.TrySetResult(null);
+
+                IsConnected = false;
+                Log.Information("[Playwright] Reader loop exited");
+            });
+        }
+
+        /// <summary>
+        /// Send a JSON-RPC request and wait for the matching response, with a real async timeout.
+        /// </summary>
+        private async Task<JObject> SendRequestAsync(string method, JObject paramsObj, int timeoutMs = 30000)
+        {
+            int id;
+            var tcs = new TaskCompletionSource<JObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            lock (_pendingLock)
+            {
+                id = _nextId++;
+                _pending[id] = tcs;
+            }
+
+            try
+            {
+                var request = new JObject
+                {
+                    ["jsonrpc"] = "2.0",
+                    ["id"] = id,
+                    ["method"] = method,
+                    ["params"] = paramsObj
+                };
+
+                lock (_writeLock)
+                {
+                    _writer.WriteLine(request.ToString(Formatting.None));
+                    _writer.Flush();
+                }
+            }
+            catch (Exception ex)
+            {
+                lock (_pendingLock) _pending.Remove(id);
+                Log.Warning(ex, "[Playwright] Write failed for method={Method}", method);
+                return null;
+            }
+
+            // Real async timeout — no blocking reads
+            if (await Task.WhenAny(tcs.Task, Task.Delay(timeoutMs)) == tcs.Task)
+                return await tcs.Task;
+
+            // Timed out — remove so reader loop discards the late response
+            lock (_pendingLock) _pending.Remove(id);
+            Log.Warning("[Playwright] Timeout waiting for response to method={Method} id={Id} after {Ms}ms", method, id, timeoutMs);
+            return null;
+        }
+
+        private async Task SendNotificationAsync(string method)
+        {
+            try
+            {
+                var notification = new JObject
+                {
+                    ["jsonrpc"] = "2.0",
+                    ["method"] = method,
+                    ["params"] = new JObject()
+                };
+                lock (_writeLock)
+                {
+                    _writer.WriteLine(notification.ToString(Formatting.None));
+                    _writer.Flush();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "[Playwright] SendNotification failed for method={Method}", method);
+            }
+            await Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Call a Playwright tool by name with the given arguments.
+        /// timeoutMs defaults to 60s — navigation with redirects can be slow.
+        /// </summary>
+        public async Task<string> CallToolAsync(string toolName, JObject arguments, int timeoutMs = 60000)
         {
             if (!IsConnected)
                 return JsonConvert.SerializeObject(new { success = false, error = "Playwright MCP not connected" });
@@ -125,12 +261,11 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     ["name"] = toolName,
                     ["arguments"] = arguments ?? new JObject()
-                });
+                }, timeoutMs);
 
                 if (result == null)
-                    return JsonConvert.SerializeObject(new { success = false, error = "No response from Playwright MCP" });
+                    return JsonConvert.SerializeObject(new { success = false, error = $"No response from Playwright MCP for {toolName} (timeout or process error)" });
 
-                // MCP tools/call returns { content: [ { type, text|data } ] }
                 var content = result["content"] as JArray;
                 if (content != null && content.Count > 0)
                 {
@@ -150,7 +285,7 @@ namespace RevitMCPBridge2026.AgentFramework
         /// Call a Playwright tool and return base64 image data from screenshot results.
         /// Returns null if no image content is present.
         /// </summary>
-        public async Task<string> CallToolForBase64Async(string toolName, JObject arguments)
+        public async Task<string> CallToolForBase64Async(string toolName, JObject arguments, int timeoutMs = 30000)
         {
             if (!IsConnected) return null;
             try
@@ -159,7 +294,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     ["name"] = toolName,
                     ["arguments"] = arguments ?? new JObject()
-                }, 30000);
+                }, timeoutMs);
 
                 if (result == null) return null;
 
@@ -174,85 +309,6 @@ namespace RevitMCPBridge2026.AgentFramework
                 return null;
             }
             catch { return null; }
-        }
-
-        private async Task<JObject> SendRequestAsync(string method, JObject paramsObj, int timeoutMs = 15000)
-        {
-            return await Task.Run(() =>
-            {
-                lock (_lock)
-                {
-                    try
-                    {
-                        var id = _nextId++;
-                        var request = new JObject
-                        {
-                            ["jsonrpc"] = "2.0",
-                            ["id"] = id,
-                            ["method"] = method,
-                            ["params"] = paramsObj
-                        };
-
-                        _writer.WriteLine(request.ToString(Formatting.None));
-                        _writer.Flush();
-
-                        // Read lines until we get our response ID
-                        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-                        while (DateTime.UtcNow < deadline)
-                        {
-                            var line = _reader.ReadLine();
-                            if (line == null) break;
-                            if (string.IsNullOrWhiteSpace(line)) continue;
-
-                            try
-                            {
-                                var obj = JObject.Parse(line);
-                                if (obj["id"]?.Value<int>() == id)
-                                {
-                                    var error = obj["error"];
-                                    if (error != null)
-                                    {
-                                        System.Diagnostics.Debug.WriteLine($"[Playwright] Error: {error}");
-                                        return null;
-                                    }
-                                    return obj["result"] as JObject ?? new JObject();
-                                }
-                                // Notification — skip and keep reading
-                            }
-                            catch { }
-                        }
-
-                        return null;
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[Playwright] SendRequest failed: {ex.Message}");
-                        return null;
-                    }
-                }
-            });
-        }
-
-        private async Task SendNotificationAsync(string method)
-        {
-            await Task.Run(() =>
-            {
-                lock (_lock)
-                {
-                    try
-                    {
-                        var notification = new JObject
-                        {
-                            ["jsonrpc"] = "2.0",
-                            ["method"] = method,
-                            ["params"] = new JObject()
-                        };
-                        _writer.WriteLine(notification.ToString(Formatting.None));
-                        _writer.Flush();
-                    }
-                    catch { }
-                }
-            });
         }
 
         public void Dispose()
