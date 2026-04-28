@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,6 +21,12 @@ namespace RevitMCPBridge2026.AgentFramework
     /// </summary>
     public class AgentCore
     {
+        private static readonly string _pluginVersion =
+            Assembly.GetExecutingAssembly()
+                    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                    ?.InformationalVersion ?? "unknown";
+        private const string _revitVersion = "2026";
+
         private readonly string _apiKey;
         private string _model; // Not readonly - can be changed by budget mode
         private readonly List<ToolDefinition> _tools;
@@ -64,18 +71,23 @@ namespace RevitMCPBridge2026.AgentFramework
         public event Action<string> OnResponse;
         public event Action<string> OnError;
         public event Action OnComplete;
-        public event Action<string> OnLocalModel; // New event for local model usage
-        public event Action<VerificationResult> OnVerification; // Result verification events
-        public event Action<int, int> OnUsage; // (totalInputTokens, totalOutputTokens) — fires after each API call
+        public event Action<string> OnLocalModel;
+        public event Action<VerificationResult> OnVerification;
+        public event Action<int, int> OnUsage; // cumulative (inputTokens, outputTokens) after each API call
+        public event Action<string> OnChunk;  // streaming text delta — fires per SSE chunk
 
         private string _bimMonkeyApiKey;
-        private bool _sessionStartSent = false;   // fire session_start once per AgentCore instance
-        private bool _sessionOutcomeSent = false;  // guard against double-firing session_outcome
+
+        // Session-level token and timing tracking (cumulative across all RunAsync calls until ClearHistory)
         private int _sessionInputTokens = 0;
         private int _sessionOutputTokens = 0;
         private DateTime _sessionStartTime;
-        private string _lastToolName = null;       // most recent tool call — included in interrupted outcome
-        private string _currentStage = null;      // "thinking" | "executing" | "responding"
+        private string _currentStage = "thinking";
+        private string _lastToolName = null;
+
+        // Telemetry guards — session_start and session_outcome fire ONCE per AgentCore lifetime
+        private bool _sessionStartSent = false;
+        private bool _sessionOutcomeSent = false;
 
         public AgentCore(string apiKey, string model = "claude-sonnet-4-6", string bimMonkeyApiKey = null)
         {
@@ -114,19 +126,43 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 _localProcessor.InjectKnowledge(projectContext);
             }
-
-            // Send session_outcome=interrupted if the process is killed mid-session
-            AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
         }
 
-        private void OnProcessExit(object sender, EventArgs e)
+        /// <summary>
+        /// Reset conversation history and token counters. Resets telemetry guards so the
+        /// next RunAsync starts a fresh session_start + session_outcome pair.
+        /// </summary>
+        public void ClearHistory()
         {
+            _conversationHistory.Clear();
+            _sessionInputTokens = 0;
+            _sessionOutputTokens = 0;
+            _sessionStartSent = false;
+            _sessionOutcomeSent = false;
+        }
+
+        /// <summary>
+        /// Called when the chat window closes or the user clicks Stop mid-session.
+        /// Sends session_outcome=interrupted synchronously if the session hasn't ended yet.
+        /// </summary>
+        public void NotifyInterrupted()
+        {
+            _cancellationTokenSource?.Cancel();
+
             if (_sessionStartSent && !_sessionOutcomeSent)
             {
-                var durationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
-                TelemetryService.SendSync(_bimMonkeyApiKey, "session_outcome",
-                    durationMs: durationMs,
-                    metadata: new { outcome = "interrupted", stage = _currentStage, last_tool = _lastToolName, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
+                _sessionOutcomeSent = true;
+                var durationMs = (long)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                TelemetryService.Track(_bimMonkeyApiKey, "session_outcome", metadata: new
+                {
+                    outcome = "interrupted",
+                    stage = _currentStage,
+                    last_tool = _lastToolName,
+                    input_tokens = _sessionInputTokens,
+                    output_tokens = _sessionOutputTokens,
+                    model = _model,
+                    durationMs
+                }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
             }
         }
 
@@ -308,13 +344,6 @@ namespace RevitMCPBridge2026.AgentFramework
             _tools.AddRange(tools);
         }
 
-        public void ClearHistory()
-        {
-            _conversationHistory.Clear();
-            _sessionInputTokens = 0;
-            _sessionOutputTokens = 0;
-        }
-
         /// <summary>
         /// Restore conversation history from a previous session
         /// This allows the AI to maintain context across sessions
@@ -363,26 +392,6 @@ namespace RevitMCPBridge2026.AgentFramework
         }
 
         /// <summary>
-        /// Called when the chat window closes. Sends session_outcome=interrupted
-        /// synchronously if a session was in progress and outcome hasn't fired yet.
-        /// </summary>
-        public void NotifyInterrupted()
-        {
-            // Cancel any in-flight RunAsync so it unwinds cleanly
-            _cancellationTokenSource?.Cancel();
-
-            if (_sessionStartSent && !_sessionOutcomeSent)
-            {
-                _sessionOutcomeSent = true;
-                var durationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
-                // Fire-and-forget — Revit process stays alive so the thread pool request completes
-                TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
-                    durationMs: durationMs,
-                    metadata: new { outcome = "interrupted", stage = _currentStage, last_tool = _lastToolName, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
-            }
-        }
-
-        /// <summary>
         /// Run the agent with a user message - THE AGENTIC LOOP
         /// Now with LOCAL MODEL routing for simple commands
         /// </summary>
@@ -391,19 +400,16 @@ namespace RevitMCPBridge2026.AgentFramework
             _cancellationTokenSource = new CancellationTokenSource();
             var token = _cancellationTokenSource.Token;
 
-            // Fire session_start once per AgentCore instance lifetime
+            _currentStage = "thinking";
+            _lastToolName = null;
+
+            // Fire session_start once per AgentCore lifetime (first message sent)
             if (!_sessionStartSent)
             {
                 _sessionStartSent = true;
                 _sessionStartTime = DateTime.UtcNow;
-                TelemetryService.Send(_bimMonkeyApiKey, "session_start");
-            }
-
-            // chat_message — length only, no content captured
-            {
-                var words = userMessage.Trim().Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries).Length;
-                TelemetryService.Send(_bimMonkeyApiKey, "chat_message", durationMs: userMessage.Length,
-                    metadata: new { chars = userMessage.Length, words });
+                TelemetryService.Track(_bimMonkeyApiKey, "session_start",
+                    revitVersion: _revitVersion, pluginVersion: _pluginVersion);
             }
 
             try
@@ -413,7 +419,6 @@ namespace RevitMCPBridge2026.AgentFramework
                 // ============================================================
                 if (_useLocalModel && await TryLocalModelAsync(userMessage, token))
                 {
-                    // Local model handled it successfully
                     OnComplete?.Invoke();
                     return;
                 }
@@ -454,6 +459,14 @@ namespace RevitMCPBridge2026.AgentFramework
                     var response = await CallClaudeAsync(systemPrompt, token);
                     if (response == null) break;
 
+                    // Accumulate token usage and notify UI
+                    if (response.Usage != null)
+                    {
+                        _sessionInputTokens += response.Usage.InputTokens;
+                        _sessionOutputTokens += response.Usage.OutputTokens;
+                        OnUsage?.Invoke(_sessionInputTokens, _sessionOutputTokens);
+                    }
+
                     var assistantContent = new List<ContentBlock>();
                     bool hasToolUse = false;
                     var toolResults = new List<ToolResultBlock>();
@@ -470,21 +483,16 @@ namespace RevitMCPBridge2026.AgentFramework
                         {
                             hasToolUse = true;
                             assistantContent.Add(block);
+                            _currentStage = "executing";
+                            _lastToolName = block.Name;
 
                             OnToolCall?.Invoke($"Calling: {block.Name}");
 
+                            var toolStart = DateTime.UtcNow;
+                            bool toolSuccess = true;
                             try
                             {
-                                // callMCPMethod wraps an inner Revit method — log the real method name, not the wrapper
-                                var _telToolName = block.Name == "callMCPMethod"
-                                    ? (block.Input?["method"]?.ToString() ?? "callMCPMethod")
-                                    : block.Name;
-                                _lastToolName = _telToolName;
-                                _currentStage = "executing";
-                                var _t0 = System.Diagnostics.Stopwatch.GetTimestamp();
                                 var result = await _executeToolAsync(block.Name, block.Input);
-                                var _durMs = (int)((System.Diagnostics.Stopwatch.GetTimestamp() - _t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
-                                TelemetryService.Send(_bimMonkeyApiKey, "tool_call", toolName: _telToolName, durationMs: _durMs, success: true);
                                 OnToolResult?.Invoke($"✓ {block.Name} completed");
 
                                 // ============================================================
@@ -495,27 +503,15 @@ namespace RevitMCPBridge2026.AgentFramework
                                     var parsed = JObject.Parse(result);
                                     if (parsed["success"]?.ToObject<bool>() == true)
                                     {
-                                        // Unwrap callMCPMethod so verifier sees the real method name + params
-                                        var _verifyName   = block.Name == "callMCPMethod"
-                                            ? (block.Input?["method"]?.ToString() ?? "callMCPMethod")
-                                            : block.Name;
-                                        var _verifyParams = block.Name == "callMCPMethod"
-                                            ? (block.Input?["parameters"] as JObject ?? new JObject())
-                                            : block.Input;
                                         var verification = await _resultVerifier.VerifyAsync(
-                                            _verifyName,
-                                            _verifyParams,
+                                            block.Name,
+                                            block.Input,
                                             parsed);
 
                                         OnVerification?.Invoke(verification);
 
-                                        // Add verification status to result for Claude to see
                                         if (!verification.Verified)
                                         {
-                                            TelemetryService.Send(_bimMonkeyApiKey, "quality_failure",
-                                                toolName: _telToolName,
-                                                metadata: new { reason = verification.Message });
-
                                             parsed["_verification"] = JObject.FromObject(new
                                             {
                                                 verified = false,
@@ -523,7 +519,6 @@ namespace RevitMCPBridge2026.AgentFramework
                                             });
                                             result = parsed.ToString();
 
-                                            // Auto-learn from verification failures
                                             _correctionLearner?.StoreFromVerification(
                                                 verification,
                                                 block.Name,
@@ -537,15 +532,12 @@ namespace RevitMCPBridge2026.AgentFramework
                                 {
                                     Type = "tool_result",
                                     ToolUseId = block.Id,
-                                    Content = TruncateToolResultForHistory(block.Name, result)
+                                    Content = result
                                 });
                             }
                             catch (Exception ex)
                             {
-                                var _telToolNameErr = block.Name == "callMCPMethod"
-                                    ? (block.Input?["method"]?.ToString() ?? "callMCPMethod")
-                                    : block.Name;
-                                TelemetryService.Send(_bimMonkeyApiKey, "tool_call", toolName: _telToolNameErr, durationMs: null, success: false, errorMessage: ex.Message);
+                                toolSuccess = false;
                                 OnToolResult?.Invoke($"✗ {block.Name} failed: {ex.Message}");
                                 toolResults.Add(new ToolResultBlock
                                 {
@@ -554,6 +546,13 @@ namespace RevitMCPBridge2026.AgentFramework
                                     Content = JsonConvert.SerializeObject(new { error = ex.Message }),
                                     IsError = true
                                 });
+                            }
+                            finally
+                            {
+                                var toolMs = (long)(DateTime.UtcNow - toolStart).TotalMilliseconds;
+                                TelemetryService.Track(_bimMonkeyApiKey, "tool_call",
+                                    toolName: block.Name, durationMs: toolMs, success: toolSuccess,
+                                    revitVersion: _revitVersion, pluginVersion: _pluginVersion);
                             }
                         }
                     }
@@ -576,13 +575,21 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (response.StopReason == "end_turn") break;
                 }
 
+                // session_outcome fires ONCE per AgentCore lifetime (guards prevent double-fire)
                 if (!_sessionOutcomeSent)
                 {
                     _sessionOutcomeSent = true;
-                    var _completedDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
-                    TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
-                        durationMs: _completedDurationMs,
-                        metadata: new { outcome = "completed", iterations = iteration, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
+                    var durationMs = (long)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                    TelemetryService.Track(_bimMonkeyApiKey, "session_outcome", metadata: new
+                    {
+                        outcome = "completed",
+                        stage = _currentStage,
+                        last_tool = _lastToolName,
+                        input_tokens = _sessionInputTokens,
+                        output_tokens = _sessionOutputTokens,
+                        model = _model,
+                        durationMs
+                    }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
                 }
                 OnComplete?.Invoke();
             }
@@ -591,10 +598,17 @@ namespace RevitMCPBridge2026.AgentFramework
                 if (!_sessionOutcomeSent)
                 {
                     _sessionOutcomeSent = true;
-                    var _cancelledDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
-                    TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
-                        durationMs: _cancelledDurationMs,
-                        metadata: new { outcome = "interrupted", input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
+                    var durationMs = (long)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                    TelemetryService.Track(_bimMonkeyApiKey, "session_outcome", metadata: new
+                    {
+                        outcome = "interrupted",
+                        stage = _currentStage,
+                        last_tool = _lastToolName,
+                        input_tokens = _sessionInputTokens,
+                        output_tokens = _sessionOutputTokens,
+                        model = _model,
+                        durationMs
+                    }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
                 }
                 OnError?.Invoke("Operation cancelled");
             }
@@ -603,11 +617,20 @@ namespace RevitMCPBridge2026.AgentFramework
                 if (!_sessionOutcomeSent)
                 {
                     _sessionOutcomeSent = true;
-                    var _errorDurationMs = (int)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
-                    TelemetryService.Send(_bimMonkeyApiKey, "session_outcome",
-                        durationMs: _errorDurationMs,
-                        metadata: new { outcome = "error", error = ex.Message, input_tokens = _sessionInputTokens, output_tokens = _sessionOutputTokens });
+                    var durationMs = (long)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                    TelemetryService.Track(_bimMonkeyApiKey, "session_outcome", metadata: new
+                    {
+                        outcome = "error",
+                        stage = _currentStage,
+                        last_tool = _lastToolName,
+                        input_tokens = _sessionInputTokens,
+                        output_tokens = _sessionOutputTokens,
+                        model = _model,
+                        durationMs
+                    }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
                 }
+                TelemetryService.Track(_bimMonkeyApiKey, "api_error", metadata: new { error = ex.Message },
+                    revitVersion: _revitVersion, pluginVersion: _pluginVersion);
                 OnError?.Invoke($"Agent error: {ex.Message}");
             }
         }
@@ -683,10 +706,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
                     try
                     {
-                        var _t0local = System.Diagnostics.Stopwatch.GetTimestamp();
                         var toolResult = await _executeToolAsync(result.Method, result.Parameters ?? new JObject());
-                        var _durMsLocal = (int)((System.Diagnostics.Stopwatch.GetTimestamp() - _t0local) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
-                        TelemetryService.Send(_bimMonkeyApiKey, "tool_call", toolName: result.Method, durationMs: _durMsLocal, success: true);
                         OnToolResult?.Invoke($"✓ {result.Method} completed");
 
                         // Parse and show result
@@ -734,7 +754,6 @@ namespace RevitMCPBridge2026.AgentFramework
                     }
                     catch (Exception ex)
                     {
-                        TelemetryService.Send(_bimMonkeyApiKey, "tool_call", toolName: result.Method, durationMs: null, success: false, errorMessage: ex.Message);
                         OnToolResult?.Invoke($"✗ {result.Method} failed: {ex.Message}");
                         OnResponse?.Invoke($"Command failed: {ex.Message}. Let me try with Anthropic...");
                         return false;
@@ -827,10 +846,6 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             return await Task.Run(() =>
             {
-                HttpWebRequest request = null;
-                // Wire the cancellation token to request.Abort() so Stop/close actually
-                // kills the in-flight HTTP call instead of letting it run for 5 minutes.
-                CancellationTokenRegistration reg = default;
                 try
                 {
                     var requestBody = new
@@ -839,7 +854,8 @@ namespace RevitMCPBridge2026.AgentFramework
                         max_tokens = 8192,
                         system = systemPrompt ?? GetDefaultSystemPrompt(),
                         messages = FormatMessagesForAPI(),
-                        tools = FormatToolsForAPI()
+                        tools = FormatToolsForAPI(),
+                        stream = true
                     };
 
                     var json = JsonConvert.SerializeObject(requestBody, new JsonSerializerSettings
@@ -847,42 +863,99 @@ namespace RevitMCPBridge2026.AgentFramework
                         NullValueHandling = NullValueHandling.Ignore
                     });
 
-                    request = (HttpWebRequest)WebRequest.Create("https://api.anthropic.com/v1/messages");
+                    var request = (HttpWebRequest)WebRequest.Create("https://api.anthropic.com/v1/messages");
                     request.Method = "POST";
                     request.ContentType = "application/json";
                     request.Headers.Add("x-api-key", _apiKey);
                     request.Headers.Add("anthropic-version", "2023-06-01");
-                    request.Timeout = 300000; // 5 minutes
-
-                    reg = token.Register(() => request.Abort());
+                    request.Timeout = 300000;
 
                     var data = Encoding.UTF8.GetBytes(json);
                     request.ContentLength = data.Length;
 
-                    using (var stream = request.GetRequestStream())
-                    {
-                        stream.Write(data, 0, data.Length);
-                    }
+                    using (var reqStream = request.GetRequestStream())
+                        reqStream.Write(data, 0, data.Length);
+
+                    // SSE streaming parse
+                    var textSb = new StringBuilder();
+                    var toolBlocks = new Dictionary<int, (string Id, string Name, StringBuilder Input)>();
+                    int inputTokens = 0, outputTokens = 0;
+                    string stopReason = null;
 
                     using (var response = (HttpWebResponse)request.GetResponse())
                     using (var reader = new StreamReader(response.GetResponseStream()))
                     {
-                        var responseBody = reader.ReadToEnd();
-                        var result = JsonConvert.DeserializeObject<ClaudeResponse>(responseBody);
-                        if (result?.Usage != null)
+                        string line;
+                        while ((line = reader.ReadLine()) != null)
                         {
-                            _sessionInputTokens += result.Usage.InputTokens;
-                            _sessionOutputTokens += result.Usage.OutputTokens;
-                            OnUsage?.Invoke(_sessionInputTokens, _sessionOutputTokens);
+                            if (token.IsCancellationRequested) break;
+                            if (!line.StartsWith("data: ")) continue;
+                            var payload = line.Substring(6).Trim();
+                            if (string.IsNullOrEmpty(payload)) continue;
+
+                            JObject evt;
+                            try { evt = JObject.Parse(payload); } catch { continue; }
+
+                            switch (evt["type"]?.ToString())
+                            {
+                                case "message_start":
+                                    inputTokens = evt["message"]?["usage"]?["input_tokens"]?.Value<int>() ?? 0;
+                                    break;
+
+                                case "content_block_start":
+                                {
+                                    var idx = evt["index"]?.Value<int>() ?? 0;
+                                    var block = evt["content_block"];
+                                    if (block?["type"]?.ToString() == "tool_use")
+                                        toolBlocks[idx] = (block["id"]?.ToString() ?? "", block["name"]?.ToString() ?? "", new StringBuilder());
+                                    break;
+                                }
+
+                                case "content_block_delta":
+                                {
+                                    var idx = evt["index"]?.Value<int>() ?? 0;
+                                    var delta = evt["delta"];
+                                    var deltaType = delta?["type"]?.ToString();
+                                    if (deltaType == "text_delta")
+                                    {
+                                        var chunk = delta["text"]?.ToString() ?? "";
+                                        textSb.Append(chunk);
+                                        OnChunk?.Invoke(chunk);
+                                    }
+                                    else if (deltaType == "input_json_delta" && toolBlocks.ContainsKey(idx))
+                                    {
+                                        toolBlocks[idx].Input.Append(delta["partial_json"]?.ToString() ?? "");
+                                    }
+                                    break;
+                                }
+
+                                case "message_delta":
+                                    outputTokens = evt["usage"]?["output_tokens"]?.Value<int>() ?? 0;
+                                    stopReason = evt["delta"]?["stop_reason"]?.ToString();
+                                    break;
+                            }
                         }
-                        return result;
                     }
-                }
-                catch (WebException ex) when (token.IsCancellationRequested)
-                {
-                    // Abort() due to cancellation — convert to OperationCanceledException
-                    // so RunAsync's catch block handles it as an expected stop, not an error.
-                    throw new OperationCanceledException("Claude API call cancelled by user", token);
+
+                    // Assemble ClaudeResponse from accumulated stream data
+                    var content = new List<ContentBlock>();
+                    var fullText = textSb.ToString();
+                    if (fullText.Length > 0)
+                        content.Add(new ContentBlock { Type = "text", Text = fullText });
+
+                    foreach (var kv in toolBlocks)
+                    {
+                        JObject inputObj;
+                        try { inputObj = JObject.Parse(kv.Value.Input.ToString()); } catch { inputObj = new JObject(); }
+                        content.Add(new ContentBlock { Type = "tool_use", Id = kv.Value.Id, Name = kv.Value.Name, Input = inputObj });
+                    }
+
+                    return new ClaudeResponse
+                    {
+                        Content = content,
+                        StopReason = stopReason ?? "end_turn",
+                        Usage = new UsageInfo { InputTokens = inputTokens, OutputTokens = outputTokens }
+                    };
                 }
                 catch (WebException ex)
                 {
@@ -890,77 +963,27 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (ex.Response != null)
                     {
                         using (var reader = new StreamReader(ex.Response.GetResponseStream()))
-                        {
                             errorBody = reader.ReadToEnd();
-                        }
                     }
-                    var errMsg = $"{ex.Message} - {errorBody}".Trim(' ', '-');
-                    TelemetryService.Send(_bimMonkeyApiKey, "api_error", errorMessage: errMsg);
-                    OnError?.Invoke($"API Error: {errMsg}");
+                    TelemetryService.Track(_bimMonkeyApiKey, "api_error",
+                        metadata: new { error = ex.Message, body = errorBody?.Length > 200 ? errorBody.Substring(0, 200) : errorBody });
+                    OnError?.Invoke($"API Error: {ex.Message} - {errorBody}");
                     return null;
                 }
-                catch (Exception ex) when (!token.IsCancellationRequested)
+                catch (Exception ex)
                 {
-                    TelemetryService.Send(_bimMonkeyApiKey, "api_error", errorMessage: ex.Message);
+                    TelemetryService.Track(_bimMonkeyApiKey, "api_error", metadata: new { error = ex.Message });
                     OnError?.Invoke($"HTTP Error: {ex.Message}");
                     return null;
                 }
-                finally
-                {
-                    reg.Dispose();
-                }
             }, token);
-        }
-
-        // Large enumeration methods whose responses bloat history — truncated after first use
-        private static readonly HashSet<string> _largeResultMethods = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "getViews", "getSheets", "getSchedules", "getElements", "getRooms", "getLevels",
-            "getWallTypes", "getFamilies", "getViewports", "getFilters", "getSharedParameters",
-            "bim_monkey_get_memory", "bim_monkey_get_project_notes", "getKnowledgeFile",
-            "getUnplacedDraftingViews", "getElementsInView", "getDraftingViewBounds",
-            "getAvailableViewTemplates", "getAnnotationCategories"
-        };
-
-        private string TruncateToolResultForHistory(string toolName, string result)
-        {
-            if (result == null) return result;
-            int limit = _largeResultMethods.Contains(toolName) ? 3000 : 6000;
-            if (result.Length <= limit) return result;
-            return result.Substring(0, limit) +
-                $"\n... [+{result.Length - limit} chars truncated — call {toolName} again if full data needed]";
         }
 
         private List<object> FormatMessagesForAPI()
         {
             var formatted = new List<object>();
 
-            // Rolling window: keep last 30 messages. Enough for multi-step sessions;
-            // standing context lives in the system prompt (firm memory, project notes).
-            var history = _conversationHistory.Count > 30
-                ? _conversationHistory.Skip(_conversationHistory.Count - 30).ToList()
-                : _conversationHistory;
-
-            // API requires first message to be a plain user text message.
-            // Slicing the window can leave orphaned tool_result blocks (user messages
-            // whose corresponding tool_use was cut off) — these cause a 400 error.
-            // Skip until we reach a user message that is NOT a tool_result block.
-            while (history.Count > 0 && (
-                history[0].Role != "user" ||
-                history[0].Content is List<object>))  // List<object> = tool_result blocks
-            {
-                history = history.Skip(1).ToList();
-            }
-
-            // If stripping orphans emptied the window entirely, seed with a minimal
-            // context-reset message so the API never receives an empty messages array.
-            if (history.Count == 0)
-            {
-                formatted.Add(new { role = "user", content = "[session context reset — continue]" });
-                return formatted;
-            }
-
-            foreach (var msg in history)
+            foreach (var msg in _conversationHistory)
             {
                 if (msg.Content is string textContent)
                 {
@@ -1013,15 +1036,6 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private string GetDefaultSystemPrompt()
         {
-            var browserSection = !string.IsNullOrEmpty(_bimMonkeyApiKey) ? @"
-
-BROWSER TOOLS — you have access to browser_* tools (Playwright headless Chromium).
-- You can browse app.bimmonkey.ai to pull content from the user's own BIM Monkey account — their drawing library, approved details, project notes, and firm standards. Authentication is handled automatically.
-- Use browser_navigate to go to any app.bimmonkey.ai page (e.g. /library, /projects), browser_take_screenshot to show it visually.
-- PREFER browser_evaluate over browser_snapshot for extracting lists or tables — snapshot truncates on large pages. Use browser_evaluate to run document.querySelectorAll and return structured data as JSON.
-- NEVER fill in missing data from memory when browser content is truncated. If a response is cut off, call browser_evaluate to extract the remaining data, or tell the user what was and wasn't retrieved.
-- Use this when the user asks about their library, wants to reference an approved detail, or needs content from their account." : "";
-
             return @"You are BIM Monkey — an on-call BIM manager and Revit expert embedded directly inside Autodesk Revit.
 
 You have two modes:
@@ -1035,7 +1049,7 @@ Key capabilities:
 - Trigger a full or scoped CD generation run via triggerGeneration
 - Query the firm's approved drawing library via queryLibrary
 - Run code compliance checks by calling detectBuildingConditions then reasoning about the results
-- Identify missing details by comparing model conditions against the approved library" + browserSection + @"
+- Identify missing details by comparing model conditions against the approved library
 
 Rules:
 - Always call the model first before answering questions about the current project (use getModelInfo, getRooms, getViews, detectBuildingConditions as needed)
@@ -1089,7 +1103,7 @@ Rules:
         public bool IsError { get; set; }
     }
 
-    public class UsageData
+    public class UsageInfo
     {
         [JsonProperty("input_tokens")]
         public int InputTokens { get; set; }
@@ -1110,7 +1124,7 @@ Rules:
         public string StopReason { get; set; }
 
         [JsonProperty("usage")]
-        public UsageData Usage { get; set; }
+        public UsageInfo Usage { get; set; }
     }
 
     public class ToolDefinition

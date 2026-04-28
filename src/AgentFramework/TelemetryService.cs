@@ -1,139 +1,51 @@
 using System;
-using System.IO;
-using System.Net;
-using System.Reflection;
+using System.Net.Http;
 using System.Text;
-using System.Threading;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 
 namespace RevitMCPBridge2026.AgentFramework
 {
-    /// <summary>
-    /// Fire-and-forget telemetry for Banana Chat tool calls.
-    /// Posts to /api/telemetry on the BIM Monkey backend.
-    /// Never throws — chat must never fail due to telemetry.
-    /// </summary>
     internal static class TelemetryService
     {
-        private const string ApiUrl = "https://bimmonkey-production.up.railway.app/api/telemetry";
-        private const string RevitVersion = "2026";
-        private static readonly string PluginVersion;
+        private const string ApiBase = "https://bimmonkey-production.up.railway.app";
+        private static readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
 
-        static TelemetryService()
+        public static void Track(string bimMonkeyApiKey, string eventType,
+            object metadata = null, string toolName = null, long? durationMs = null,
+            bool? success = null, string revitVersion = null, string pluginVersion = null)
+        {
+            if (string.IsNullOrEmpty(bimMonkeyApiKey)) return;
+            _ = TrackAsync(bimMonkeyApiKey, eventType, metadata, toolName, durationMs, success, revitVersion, pluginVersion);
+        }
+
+        private static async Task TrackAsync(string bimMonkeyApiKey, string eventType,
+            object metadata, string toolName, long? durationMs, bool? success,
+            string revitVersion, string pluginVersion)
         {
             try
             {
-                var attr = Assembly.GetExecutingAssembly()
-                    .GetCustomAttribute<AssemblyInformationalVersionAttribute>();
-                PluginVersion = attr?.InformationalVersion ?? "unknown";
-            }
-            catch
-            {
-                PluginVersion = "unknown";
-            }
-        }
-
-        /// <summary>
-        /// Send a telemetry event. Always fire-and-forget on a thread pool thread.
-        /// </summary>
-        /// <param name="apiKey">BIM Monkey API key (Bearer token)</param>
-        /// <param name="eventType">"session_start" or "tool_call"</param>
-        /// <param name="toolName">MCP method name — null for session_start</param>
-        /// <param name="durationMs">Round-trip ms — null for session_start</param>
-        /// <param name="success">Whether the call succeeded — null for session_start</param>
-        /// <param name="errorMessage">Error message on failure — stored in metadata</param>
-        /// <param name="metadata">Arbitrary metadata object — overrides errorMessage if provided</param>
-        public static void Send(
-            string apiKey,
-            string eventType,
-            string toolName = null,
-            int? durationMs = null,
-            bool? success = null,
-            string errorMessage = null,
-            object metadata = null)
-        {
-            if (string.IsNullOrEmpty(apiKey)) return;
-
-            ThreadPool.QueueUserWorkItem(_ =>
-            {
-                try
-                {
-                    object metadataObj = metadata ?? (errorMessage != null ? new { error = errorMessage } : (object)null);
-                    var payload = new
-                    {
-                        eventType,
-                        toolName,
-                        durationMs,
-                        success,
-                        revitVersion = RevitVersion,
-                        pluginVersion = PluginVersion,
-                        source = "banana_chat",
-                        metadata = metadataObj,
-                    };
-
-                    var json = JsonConvert.SerializeObject(payload, new JsonSerializerSettings
-                    {
-                        NullValueHandling = NullValueHandling.Ignore
-                    });
-                    var data = Encoding.UTF8.GetBytes(json);
-
-                    var req = (HttpWebRequest)WebRequest.Create(ApiUrl);
-                    req.Method = "POST";
-                    req.ContentType = "application/json";
-                    req.ContentLength = data.Length;
-                    req.Headers.Add("Authorization", $"Bearer {apiKey}");
-                    req.Timeout = 5000; // 5s — never block the UI
-
-                    using (var stream = req.GetRequestStream())
-                        stream.Write(data, 0, data.Length);
-
-                    using (req.GetResponse()) { } // discard response body
-                }
-                catch { /* swallow everything — telemetry must never crash the plugin */ }
-            });
-        }
-
-        /// <summary>
-        /// Synchronous send — used only in ProcessExit handlers where the thread pool
-        /// may never run before the process dies. 3s timeout, blocks caller.
-        /// </summary>
-        internal static void SendSync(
-            string apiKey,
-            string eventType,
-            string toolName = null,
-            int? durationMs = null,
-            bool? success = null,
-            string errorMessage = null,
-            object metadata = null)
-        {
-            if (string.IsNullOrEmpty(apiKey)) return;
-            try
-            {
-                object metadataObj = metadata ?? (errorMessage != null ? new { error = errorMessage } : (object)null);
-                var payload = new
+                var body = new
                 {
                     eventType,
                     toolName,
                     durationMs,
                     success,
-                    revitVersion = RevitVersion,
-                    pluginVersion = PluginVersion,
-                    source = "banana_chat",
-                    metadata = metadataObj,
+                    revitVersion,
+                    pluginVersion,
+                    metadata,
+                    source = "banana-chat"
                 };
-                var json = JsonConvert.SerializeObject(payload, new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
-                var data = Encoding.UTF8.GetBytes(json);
-                var req = (HttpWebRequest)WebRequest.Create(ApiUrl);
-                req.Method = "POST";
-                req.ContentType = "application/json";
-                req.ContentLength = data.Length;
-                req.Headers.Add("Authorization", $"Bearer {apiKey}");
-                req.Timeout = 3000;
-                using (var stream = req.GetRequestStream())
-                    stream.Write(data, 0, data.Length);
-                using (req.GetResponse()) { }
+                var json = JsonConvert.SerializeObject(body, new JsonSerializerSettings
+                {
+                    NullValueHandling = NullValueHandling.Ignore
+                });
+                var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiBase}/api/telemetry");
+                request.Headers.Add("Authorization", $"Bearer {bimMonkeyApiKey}");
+                request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+                await _http.SendAsync(request).ConfigureAwait(false);
             }
-            catch { }
+            catch { /* never crash the plugin — fire and forget */ }
         }
     }
 }

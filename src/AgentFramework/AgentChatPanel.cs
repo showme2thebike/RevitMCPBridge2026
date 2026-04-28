@@ -1,18 +1,18 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.IO;
 using System.IO.Pipes;
-using System.Net.Http;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Autodesk.Revit.UI;
-using Serilog;
 using RevitMCPBridge; // For VerificationResult
 using RevitMCPBridge.Helpers;
 
@@ -26,7 +26,10 @@ namespace RevitMCPBridge2026.AgentFramework
     {
         // UI Elements
         private TextBlock _statusText;
+        private TextBlock _elapsedText;
         private TextBlock _tokenText;
+        private TextBlock _costText;
+        private TextBlock _timerText;
         private StackPanel _chatHistory;
         private ScrollViewer _chatScrollViewer;
         private System.Windows.Controls.TextBox _inputTextBox;
@@ -35,6 +38,8 @@ namespace RevitMCPBridge2026.AgentFramework
         private Border _progressPanel;
         private TextBlock _progressTitle;
         private TextBlock _progressDetail;
+        private System.Windows.Threading.DispatcherTimer _thinkingTimer;
+        private DateTime _thinkingStartTime;
 
         // Agent
         private AgentCore _agent;
@@ -45,13 +50,28 @@ namespace RevitMCPBridge2026.AgentFramework
         private string _firmStandardsDoc;     // fetched from Railway on init, injected into every prompt
         private string _correctionsKnowledge; // fetched from plugin on init, injected into every prompt
         private string _librarySummary;        // compact approved-examples summary from Railway, injected into every prompt
-        private string _projectNotes;          // fetched from Railway on init, injected into every prompt
         private string _memoryContext;         // last session summary + top facts from local memories.json
         private string _cadVisualRulesQuickRef; // loaded from knowledge/cad-visual-rules.md on init
         private static readonly string PreferencesPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
             "BIM Monkey", "preferences.json");
         private bool _isProcessing;
+        private bool _isClosing;
+        private bool _subscriptionBlocked;
+        private string _firmMemory;
+        private string _projectNotes;
+
+        // Streaming bubble state
+        private System.Windows.Controls.TextBox _streamingTextBox;
+        private StackPanel _streamingContainer;
+
+        // Global hotkey (Ctrl+B) — open/focus Banana Chat from anywhere in Revit
+        [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+        [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+        private const int    HOTKEY_ID  = 9001;
+        private const uint   MOD_CTRL   = 0x0002;
+        private const uint   VK_B       = 0x42;
+        private HwndSource   _hwndSource;
 
         // Proactive prompting
         private System.Windows.Threading.DispatcherTimer _proactiveTimer;
@@ -71,15 +91,11 @@ namespace RevitMCPBridge2026.AgentFramework
         private StreamWriter _mcpWriter;
         private readonly object _pipeLock = new object();
 
-        // Playwright MCP client — browser tools
-        private PlaywrightMCPClient _playwright;
-
         // Feedback tracking - what was the last action for thumbs up/down
         private string _lastUserMessage;
         private string _lastAssistantResponse;
         private string _lastToolCall;
         private int _feedbackMessageIndex = 0;
-        private volatile bool _isClosing = false;
 
         public AgentChatPanel(UIApplication uiApp)
         {
@@ -113,28 +129,54 @@ namespace RevitMCPBridge2026.AgentFramework
                 InitializeAgent();
             }
 
-            // Focus input box every time window is activated (covers first open and reopen)
-            Activated += (s, e) => _inputTextBox?.Focus();
+            // Check for previous session
+            var previousSession = LoadSession();
+            bool sessionRestored = false;
 
-            // Always start fresh — session restore removed; all persistent knowledge
-            // lives in the system prompt (firm memory, corrections, CAD rules).
-            AddAssistantMessage("Hello! I'm your Revit AI assistant. I can help you with:\n\n" +
-                "• Placing and organizing annotations\n" +
-                "• Finding information about elements\n" +
-                "• Managing sheets and views\n" +
-                "• Intelligent placement with collision avoidance\n\n" +
-                "What would you like to do?");
+            if (previousSession != null && previousSession.Messages.Count > 0)
+            {
+                Loaded += (s, e) =>
+                {
+                    if (AskToContinueSession(previousSession))
+                    {
+                        RestoreSession(previousSession);
+                        AddAssistantMessage("Welcome back! I remember our previous conversation. What would you like to continue working on?");
+                    }
+                };
+                sessionRestored = true; // suppress default welcome; Loaded handler covers both paths
+            }
 
-            // Cleanup on close — window closes immediately; cleanup runs on background thread
+            if (!sessionRestored)
+            {
+                // Welcome message for new session
+                AddAssistantMessage("Hello! I'm your Revit AI assistant. I can help you with:\n\n" +
+                    "• Placing and organizing annotations\n" +
+                    "• Finding information about elements\n" +
+                    "• Managing sheets and views\n" +
+                    "• Intelligent placement with collision avoidance\n\n" +
+                    "What would you like to do?");
+            }
+
+            // Ctrl+Shift+K to clear chat from anywhere in the window
+            PreviewKeyDown += (s, e) =>
+            {
+                if (e.Key == System.Windows.Input.Key.K &&
+                    (System.Windows.Input.Keyboard.Modifiers & (System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Shift))
+                        == (System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Shift))
+                {
+                    e.Handled = true;
+                    ClearChat();
+                }
+            };
+
+            // Cleanup and save on close
             Closing += (s, e) =>
             {
                 _isClosing = true;
-                _agent?.NotifyInterrupted(); // fire-and-forget telemetry + cancel in-flight RunAsync
-                Task.Run(() =>
-                {
-                    try { DisconnectMCP(); }
-                    catch (Exception ex) { Log.Warning(ex, "MCP disconnect on panel close failed — pipe may still be open"); }
-                });
+                _agent?.NotifyInterrupted(); // sends session_outcome=interrupted if session was open
+                SaveSession();
+                DisconnectMCP();
+                _thinkingTimer?.Stop();
             };
         }
 
@@ -169,6 +211,36 @@ namespace RevitMCPBridge2026.AgentFramework
             Content = mainGrid;
         }
 
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+            var helper = new WindowInteropHelper(this);
+            _hwndSource = HwndSource.FromHwnd(helper.Handle);
+            _hwndSource?.AddHook(WndProc);
+            RegisterHotKey(helper.Handle, HOTKEY_ID, MOD_CTRL, VK_B);
+        }
+
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            const int WM_HOTKEY = 0x0312;
+            if (msg == WM_HOTKEY && wParam.ToInt32() == HOTKEY_ID)
+            {
+                Show();
+                WindowState = WindowState.Normal;
+                Activate();
+                handled = true;
+            }
+            return IntPtr.Zero;
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            var helper = new WindowInteropHelper(this);
+            UnregisterHotKey(helper.Handle, HOTKEY_ID);
+            _hwndSource?.RemoveHook(WndProc);
+            base.OnClosed(e);
+        }
+
         private Border CreateHeader()
         {
             var border = new Border
@@ -197,17 +269,30 @@ namespace RevitMCPBridge2026.AgentFramework
                 FontSize = 12,
                 Margin = new Thickness(0, 4, 0, 0)
             };
+            _elapsedText = new TextBlock
+            {
+                Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
+                FontSize = 11,
+            };
             _tokenText = new TextBlock
             {
-                Text = "",
-                Foreground = new SolidColorBrush(Color.FromRgb(100, 160, 100)),
+                Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
                 FontSize = 11,
-                Margin = new Thickness(0, 2, 0, 0),
-                Visibility = Visibility.Collapsed
+                Margin = new Thickness(10, 0, 0, 0)
             };
+            _costText = new TextBlock
+            {
+                Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
+                FontSize = 11,
+                Margin = new Thickness(10, 0, 0, 0)
+            };
+            var statsRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 0) };
+            statsRow.Children.Add(_elapsedText);
+            statsRow.Children.Add(_tokenText);
+            statsRow.Children.Add(_costText);
             titleStack.Children.Add(title);
             titleStack.Children.Add(_statusText);
-            titleStack.Children.Add(_tokenText);
+            titleStack.Children.Add(statsRow);
             Grid.SetColumn(titleStack, 0);
             grid.Children.Add(titleStack);
 
@@ -280,17 +365,33 @@ namespace RevitMCPBridge2026.AgentFramework
                 Foreground = new SolidColorBrush(Color.FromRgb(0, 120, 212))
             };
 
+            // Detail row: progress detail text + elapsed timer side by side
+            var detailRow = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+            detailRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            detailRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
             _progressDetail = new TextBlock
             {
                 Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160)),
                 FontSize = 12,
-                Margin = new Thickness(0, 8, 0, 0),
                 TextWrapping = TextWrapping.Wrap
             };
+            Grid.SetColumn(_progressDetail, 0);
+            detailRow.Children.Add(_progressDetail);
+
+            _timerText = new TextBlock
+            {
+                Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
+                FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(8, 0, 0, 0)
+            };
+            Grid.SetColumn(_timerText, 1);
+            detailRow.Children.Add(_timerText);
 
             stack.Children.Add(_progressTitle);
             stack.Children.Add(progressBar);
-            stack.Children.Add(_progressDetail);
+            stack.Children.Add(detailRow);
             border.Child = stack;
 
             return border;
@@ -370,9 +471,11 @@ namespace RevitMCPBridge2026.AgentFramework
         // Config file path - use user's home directory for portability
         private static readonly string ConfigDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops");
         private static readonly string ConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "config.json");
+        private static readonly string SessionPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "session.json");
         private static readonly string DefaultModel = "claude-sonnet-4-6";
 
-        private List<string> _sessionMessages = new List<string>(); // retained for ClearChat
+        // Session data for persistence
+        private List<ChatMessage> _sessionMessages = new List<ChatMessage>();
         private string _sessionProjectName;
 
         private void LoadConfig()
@@ -505,11 +608,309 @@ namespace RevitMCPBridge2026.AgentFramework
             }
         }
 
-        #region Session Persistence (removed — sessions always start fresh)
+        #region Session Persistence
 
-        // Session save/restore removed in v0.2.20260419i. All persistent knowledge
-        // lives in the system prompt (firm memory, corrections, CAD rules).
-        private void TrackMessage(string type, string content) { }
+        /// <summary>
+        /// Message types for session persistence
+        /// </summary>
+        public class ChatMessage
+        {
+            public string Type { get; set; }  // "user", "assistant", "tool", "error", "system"
+            public string Content { get; set; }
+            public DateTime Timestamp { get; set; }
+        }
+
+        /// <summary>
+        /// Session data structure
+        /// </summary>
+        public class SessionData
+        {
+            public string ProjectName { get; set; }
+            public string LastTask { get; set; }
+            public DateTime SavedAt { get; set; }
+            public List<ChatMessage> Messages { get; set; } = new List<ChatMessage>();
+        }
+
+        /// <summary>
+        /// Save the current session to disk (called on window close)
+        /// </summary>
+        private void SaveSession()
+        {
+            try
+            {
+                // Update project name from current document
+                _sessionProjectName = _uiApp?.ActiveUIDocument?.Document?.Title ?? _sessionProjectName ?? "Unknown";
+
+                // Force immediate save (bypass debounce)
+                _lastSaveTime = DateTime.MinValue;
+                SaveSessionInternal();
+
+                System.Diagnostics.Debug.WriteLine($"Session saved on close: {_sessionMessages.Count} messages");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error saving session: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Load a previous session if it exists
+        /// </summary>
+        private SessionData LoadSession()
+        {
+            try
+            {
+                if (File.Exists(SessionPath))
+                {
+                    var json = File.ReadAllText(SessionPath);
+                    return JsonConvert.DeserializeObject<SessionData>(json);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error loading session: {ex.Message}");
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Track a message for session persistence
+        /// </summary>
+        private void TrackMessage(string type, string content)
+        {
+            _sessionMessages.Add(new ChatMessage
+            {
+                Type = type,
+                Content = content,
+                Timestamp = DateTime.Now
+            });
+
+            // AUTO-SAVE: Save session immediately after each message
+            // This ensures persistence even if Revit crashes
+            SaveSessionAsync();
+        }
+
+        // Debounce timer to avoid too-frequent saves
+        private DateTime _lastSaveTime = DateTime.MinValue;
+        private readonly object _saveLock = new object();
+
+        /// <summary>
+        /// Save session asynchronously with debouncing
+        /// </summary>
+        private void SaveSessionAsync()
+        {
+            // Debounce: only save if at least 2 seconds since last save
+            lock (_saveLock)
+            {
+                if ((DateTime.Now - _lastSaveTime).TotalSeconds < 2)
+                {
+                    return; // Skip, will save on next message or on close
+                }
+                _lastSaveTime = DateTime.Now;
+            }
+
+            // Save on background thread to avoid UI lag
+            Task.Run(() =>
+            {
+                try
+                {
+                    SaveSessionInternal();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Auto-save error: {ex.Message}");
+                }
+            });
+        }
+
+        /// <summary>
+        /// Internal save method (thread-safe)
+        /// </summary>
+        private void SaveSessionInternal()
+        {
+            try
+            {
+                if (!Directory.Exists(ConfigDir))
+                {
+                    Directory.CreateDirectory(ConfigDir);
+                }
+
+                string projectName;
+                List<ChatMessage> messagesToSave;
+                string lastMessage;
+
+                // Get data on UI thread if needed
+                lock (_saveLock)
+                {
+                    projectName = _sessionProjectName ?? "Unknown";
+                    lastMessage = _lastUserMessage ?? "";
+
+                    // Keep last 50 messages
+                    messagesToSave = _sessionMessages.Count > 50
+                        ? _sessionMessages.Skip(_sessionMessages.Count - 50).ToList()
+                        : _sessionMessages.ToList();
+                }
+
+                var session = new SessionData
+                {
+                    ProjectName = projectName,
+                    LastTask = lastMessage,
+                    SavedAt = DateTime.Now,
+                    Messages = messagesToSave
+                };
+
+                var json = JsonConvert.SerializeObject(session, Formatting.Indented);
+
+                // Write to temp file first, then rename (atomic operation)
+                var tempPath = SessionPath + ".tmp";
+                File.WriteAllText(tempPath, json);
+
+                if (File.Exists(SessionPath))
+                {
+                    File.Delete(SessionPath);
+                }
+                File.Move(tempPath, SessionPath);
+
+                System.Diagnostics.Debug.WriteLine($"Session auto-saved: {messagesToSave.Count} messages");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error in SaveSessionInternal: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Restore messages from a previous session
+        /// </summary>
+        private void RestoreSession(SessionData session)
+        {
+            _sessionMessages = session.Messages.ToList();
+            _sessionProjectName = session.ProjectName;
+            _lastUserMessage = session.LastTask;
+
+            // CRITICAL: Restore the AgentCore's conversation history
+            // This ensures the AI remembers the previous context
+            if (_agent != null)
+            {
+                var historyItems = session.Messages
+                    .Where(m => m.Type == "user" || m.Type == "assistant")
+                    .Select(m => new ChatHistoryItem
+                    {
+                        Role = m.Type,
+                        Content = m.Content
+                    })
+                    .ToList();
+
+                _agent.RestoreHistory(historyItems);
+                System.Diagnostics.Debug.WriteLine($"Restored {historyItems.Count} messages to AgentCore");
+            }
+
+            // Show last 20 messages in UI
+            var messagesToShow = session.Messages.Count > 20
+                ? session.Messages.Skip(session.Messages.Count - 20)
+                : session.Messages;
+
+            foreach (var msg in messagesToShow)
+            {
+                switch (msg.Type)
+                {
+                    case "user":
+                        RestoreUserMessage(msg.Content);
+                        break;
+                    case "assistant":
+                        RestoreAssistantMessage(msg.Content);
+                        break;
+                    case "tool":
+                        RestoreToolMessage(msg.Content);
+                        break;
+                }
+            }
+
+            // Add continuation message
+            AddSystemMessage($"--- Session restored from {session.SavedAt:g} ---");
+            if (!string.IsNullOrEmpty(session.LastTask))
+            {
+                AddSystemMessage($"Last task: {session.LastTask}");
+            }
+        }
+
+        // Restore methods without tracking (to avoid duplicating in session)
+        private void RestoreUserMessage(string text)
+        {
+            var border = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(0, 120, 212)),
+                CornerRadius = new CornerRadius(12, 12, 0, 12),
+                Padding = new Thickness(12),
+                Margin = new Thickness(50, 8, 8, 8),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Opacity = 0.7  // Slightly faded to show it's from previous session
+            };
+            border.Child = new TextBlock { Text = text, Foreground = Brushes.White, TextWrapping = TextWrapping.Wrap, FontSize = 14 };
+            _chatHistory.Children.Add(border);
+        }
+
+        private void RestoreAssistantMessage(string text)
+        {
+            var border = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
+                CornerRadius = new CornerRadius(12, 12, 12, 0),
+                Padding = new Thickness(12),
+                Margin = new Thickness(8, 8, 50, 8),
+                Opacity = 0.7
+            };
+            border.Child = new TextBlock { Text = text, Foreground = Brushes.White, TextWrapping = TextWrapping.Wrap, FontSize = 14 };
+            _chatHistory.Children.Add(border);
+        }
+
+        private void RestoreToolMessage(string text)
+        {
+            var border = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(35, 35, 35)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(100, 100, 100)),
+                BorderThickness = new Thickness(0, 0, 0, 2),
+                Padding = new Thickness(10),
+                Margin = new Thickness(20, 4, 20, 4),
+                Opacity = 0.7
+            };
+            border.Child = new TextBlock
+            {
+                Text = text,
+                Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160)),
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 12,
+                FontFamily = new FontFamily("Consolas")
+            };
+            _chatHistory.Children.Add(border);
+        }
+
+        /// <summary>
+        /// Show dialog to ask user if they want to continue previous session
+        /// </summary>
+        private bool AskToContinueSession(SessionData session)
+        {
+            var timeSince = DateTime.Now - session.SavedAt;
+            string timeDesc;
+            if (timeSince.TotalMinutes < 60)
+                timeDesc = $"{(int)timeSince.TotalMinutes} minutes ago";
+            else if (timeSince.TotalHours < 24)
+                timeDesc = $"{(int)timeSince.TotalHours} hours ago";
+            else
+                timeDesc = $"{(int)timeSince.TotalDays} days ago";
+
+            var result = System.Windows.MessageBox.Show(
+                $"Found a previous session from {timeDesc}.\n\n" +
+                $"Project: {session.ProjectName}\n" +
+                $"Last task: {(session.LastTask?.Length > 50 ? session.LastTask.Substring(0, 50) + "..." : session.LastTask ?? "None")}\n\n" +
+                "Would you like to continue where you left off?",
+                "Continue Previous Session?",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            return result == MessageBoxResult.Yes;
+        }
 
         #endregion
 
@@ -833,75 +1234,113 @@ namespace RevitMCPBridge2026.AgentFramework
         private void InitializeAgent()
         {
             _agent = new AgentCore(_apiKey, _selectedModel, _bimMonkeyApiKey);
-
-            // Start Playwright MCP and merge its browser_* tools with Revit tools
-            var allTools = new System.Collections.Generic.List<ToolDefinition>(ToolDefinitions.GetAllTools());
-            Task.Run(async () =>
-            {
-                try
-                {
-                    _playwright?.Dispose();
-                    _playwright = new PlaywrightMCPClient();
-                    var playwrightTools = await _playwright.StartAsync();
-                    if (playwrightTools.Count > 0)
-                    {
-                        allTools.AddRange(playwrightTools);
-                        _agent.RegisterTools(allTools);
-                        System.Diagnostics.Debug.WriteLine($"[Playwright] {playwrightTools.Count} browser tools registered");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[Playwright] Init failed: {ex.Message}");
-                }
-            });
-
-            _agent.RegisterTools(allTools);
+            _agent.RegisterTools(ToolDefinitions.GetAllTools());
             _agent.SetToolExecutor(ExecuteMCPMethodAsync);
 
-            _agent.OnThinking += (msg) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => { if (!_isClosing) ShowProgress(msg); })); };
-            _agent.OnToolCall += (msg) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => { if (!_isClosing) { _lastToolCall = msg; UpdateProgress(msg); AddToolMessage(msg, false); } })); };
-            _agent.OnToolResult += (msg) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => { if (!_isClosing) { UpdateProgress(msg); AddToolMessage(msg, true); TryDisplayImageFromResult(msg); } })); };
-            _agent.OnResponse += (msg) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => { if (!_isClosing) AddAssistantMessage(msg); })); };
-            _agent.OnError += (msg) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => { if (!_isClosing) { AddErrorMessage(msg); HideProgress(); SetProcessing(false); } })); };
-            _agent.OnComplete += () => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => { if (!_isClosing) { HideProgress(); SetProcessing(false); } })); };
+            _agent.OnThinking += (msg) => Dispatcher.Invoke(() => ShowProgress(msg));
+            _agent.OnToolCall += (msg) => Dispatcher.Invoke(() => { _lastToolCall = msg; UpdateProgress(msg); AddToolMessage(msg, false); });
+            _agent.OnToolResult += (msg) => Dispatcher.Invoke(() => {
+                UpdateProgress(msg);
+                AddToolMessage(msg, true);
+                // Try to display image if the result contains an image path
+                TryDisplayImageFromResult(msg);
+            });
+            _agent.OnChunk += (chunk) => Dispatcher.Invoke(() =>
+            {
+                if (_streamingTextBox == null)
+                {
+                    // First chunk — create the bubble
+                    _streamingContainer = new StackPanel { Margin = new Thickness(8, 8, 50, 8), HorizontalAlignment = HorizontalAlignment.Left };
+                    var border = new Border
+                    {
+                        Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
+                        CornerRadius = new CornerRadius(12, 12, 12, 0),
+                        Padding = new Thickness(12),
+                    };
+                    _streamingTextBox = new System.Windows.Controls.TextBox
+                    {
+                        Text = "",
+                        Foreground = Brushes.White,
+                        FontSize = 14,
+                        FontFamily = new FontFamily("Segoe UI"),
+                        Background = Brushes.Transparent,
+                        BorderThickness = new Thickness(0),
+                        IsReadOnly = true,
+                        TextWrapping = TextWrapping.Wrap,
+                        Padding = new Thickness(0),
+                        Cursor = System.Windows.Input.Cursors.IBeam,
+                        IsTabStop = false,
+                        FocusVisualStyle = null
+                    };
+                    border.Child = _streamingTextBox;
+                    _streamingContainer.Children.Add(border);
+                    _chatHistory.Children.Add(_streamingContainer);
+                }
+                _streamingTextBox.Text += chunk;
+                ScrollToBottom();
+            });
 
-            // TOKEN USAGE — running cost display
-            _agent.OnUsage += (inputTokens, outputTokens) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => {
-                if (_isClosing) return;
-                double inM = inputTokens / 1_000_000.0;
-                double outM = outputTokens / 1_000_000.0;
-                double inRate, outRate;
-                if (_selectedModel.Contains("haiku"))      { inRate = 0.80;  outRate = 4.0; }
-                else if (_selectedModel.Contains("opus"))  { inRate = 15.0;  outRate = 75.0; }
-                else                                       { inRate = 3.0;   outRate = 15.0; }
-                double cost = inM * inRate + outM * outRate;
+            _agent.OnResponse += (msg) => Dispatcher.Invoke(() =>
+            {
+                if (_streamingTextBox != null)
+                {
+                    // Streaming bubble already exists — set final text and add feedback buttons
+                    _streamingTextBox.Text = msg;
+                    TrackMessage("assistant", msg);
+                    _lastAssistantResponse = msg;
+                    _feedbackMessageIndex++;
+                    AddFeedbackButtons(_streamingContainer, msg, _feedbackMessageIndex);
+                    _streamingTextBox = null;
+                    _streamingContainer = null;
+                }
+                else
+                {
+                    AddAssistantMessage(msg);
+                }
+            });
+            _agent.OnError += (msg) => Dispatcher.Invoke(() => { AddErrorMessage(msg); HideProgress(); SetProcessing(false); });
+            _agent.OnComplete += () => Dispatcher.Invoke(() => { HideProgress(); SetProcessing(false); });
+
+            // TOKEN USAGE — split input/output display matching 0421h format
+            _agent.OnUsage += (inputTokens, outputTokens) => Dispatcher.Invoke(() =>
+            {
                 string inStr  = inputTokens  >= 1000 ? $"{inputTokens  / 1000}K" : inputTokens.ToString();
                 string outStr = outputTokens >= 1000 ? $"{outputTokens / 1000}K" : outputTokens.ToString();
-                _tokenText.Text = $"↑ {inStr}  ↓ {outStr}  ~${cost:F2}";
-                _tokenText.Visibility = Visibility.Visible;
-            })); };
+                _tokenText.Text = $"↑ {inStr}  ↓ {outStr}";
+                var cost = EstimateSessionCost(inputTokens, outputTokens, _selectedModel);
+                if (cost.HasValue && _costText != null)
+                    _costText.Text = $"${cost.Value:F2}";
+            });
 
             // LOCAL MODEL event - show when qwen2.5:7b is processing
-            _agent.OnLocalModel += (msg) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => {
-                if (_isClosing) return;
+            _agent.OnLocalModel += (msg) => Dispatcher.Invoke(() => {
                 UpdateProgress(msg);
                 if (msg.Contains("Processing with local"))
                     _statusText.Text = "Using Local (qwen2.5:7b)";
                 else if (msg.Contains("using Anthropic"))
                     _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
-            })); };
+            });
 
             // VERIFICATION event - show if commands actually worked
-            _agent.OnVerification += (result) => { if (!_isClosing) Dispatcher.BeginInvoke(new Action(() => {
-                if (_isClosing || result == null) return;
-                if (result.Verified)
-                    AddToolMessage($"✅ Verified: {result.Message}", true);
-                else
-                    AddToolMessage($"⚠️ Verification failed: {result.Message}", false);
-            })); };
+            _agent.OnVerification += (result) => Dispatcher.Invoke(() => {
+                if (result != null)
+                {
+                    if (result.Verified)
+                    {
+                        AddToolMessage($"✅ Verified: {result.Message}", true);
+                    }
+                    else
+                    {
+                        AddToolMessage($"⚠️ Verification failed: {result.Message}", false);
+                    }
+                }
+            });
 
             _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
+
+            // Subscription gate (session_start is now fired by AgentCore on first message)
+            if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
+                _ = CheckSubscriptionAsync();
 
             // Fetch firm standards in the background — injected into every prompt once loaded
             if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
@@ -962,6 +1401,112 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { /* never crash the UI */ }
         }
 
+        /// <summary>
+        /// Check subscription status via /api/verify. Blocks the send button if expired or cancelled.
+        /// Fails open on network error — no BimMonkey key should not block plugin use.
+        /// </summary>
+        private async Task CheckSubscriptionAsync()
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    client.Timeout = TimeSpan.FromSeconds(10);
+                    var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/auth/verify");
+                    if (!resp.IsSuccessStatusCode) return; // fail open
+
+                    var body = await resp.Content.ReadAsStringAsync();
+                    var obj = JObject.Parse(body);
+                    var status = obj["subscriptionStatus"]?.ToString();
+
+                    // Block if explicitly expired or cancelled — not on trial or active
+                    bool blocked = (status == "expired" || status == "cancelled");
+
+                    if (blocked)
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            _subscriptionBlocked = true;
+                            _sendButton.IsEnabled = false;
+                            _statusText.Text = "Subscription expired";
+                            _statusText.Foreground = new SolidColorBrush(Color.FromRgb(220, 80, 80));
+                            ShowSubscriptionBanner();
+                        });
+                    }
+                }
+            }
+            catch { /* fail open — network issues should never block plugin */ }
+        }
+
+        private void ShowSubscriptionBanner()
+        {
+            var banner = new Border
+            {
+                Margin = new Thickness(8, 8, 8, 4),
+                Padding = new Thickness(14, 12, 14, 12),
+                Background = new SolidColorBrush(Color.FromRgb(60, 30, 30)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(180, 60, 60)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+            };
+
+            var stack = new StackPanel { Orientation = Orientation.Horizontal };
+
+            var msg = new TextBlock
+            {
+                Text = "Your subscription has expired. ",
+                Foreground = new SolidColorBrush(Color.FromRgb(220, 160, 160)),
+                FontSize = 13,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            var renewBtn = new Button
+            {
+                Content = "Renew subscription →",
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Brushes.White,
+                Background = new SolidColorBrush(Color.FromRgb(180, 60, 60)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(220, 80, 80)),
+                Padding = new Thickness(10, 4, 10, 4),
+                Cursor = System.Windows.Input.Cursors.Hand,
+            };
+            renewBtn.Click += async (s, e) =>
+            {
+                try
+                {
+                    renewBtn.IsEnabled = false;
+                    renewBtn.Content = "Opening...";
+                    using (var client = new System.Net.Http.HttpClient())
+                    {
+                        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                        var payload = new System.Net.Http.StringContent(
+                            "{\"plan\":\"beta_monthly\"}",
+                            System.Text.Encoding.UTF8, "application/json");
+                        var resp = await client.PostAsync(
+                            "https://bimmonkey-production.up.railway.app/api/stripe/checkout", payload);
+                        var body = await resp.Content.ReadAsStringAsync();
+                        var url = JObject.Parse(body)["url"]?.ToString();
+                        if (!string.IsNullOrEmpty(url))
+                            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                    }
+                }
+                catch { }
+                finally
+                {
+                    renewBtn.IsEnabled = true;
+                    renewBtn.Content = "Renew subscription →";
+                }
+            };
+
+            stack.Children.Add(msg);
+            stack.Children.Add(renewBtn);
+            banner.Child = stack;
+            _chatHistory.Children.Insert(0, banner);
+        }
+
         private async Task FetchFirmStandardsAsync()
         {
             if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
@@ -1016,25 +1561,33 @@ namespace RevitMCPBridge2026.AgentFramework
                         }
                     }
 
-                    // 4. Project notes saved from previous Banana Chat sessions
-                    var notesResp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/firms/project-notes");
+                    // 4. Firm memory — persistent facts and preferences stored across sessions
+                    var memResp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/firms/memory");
+                    if (memResp.IsSuccessStatusCode)
+                    {
+                        var memBody = await memResp.Content.ReadAsStringAsync();
+                        var memObj  = JObject.Parse(memBody);
+                        var memory  = memObj["memory"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(memory))
+                        {
+                            _firmMemory = memory;
+                            System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Firm memory loaded ({memory.Length} chars)");
+                        }
+                    }
+
+                    // 5. Project notes — scoped to the current Revit file name
+                    var projectName = _sessionProjectName ?? "Unknown";
+                    var notesResp = await client.GetAsync(
+                        $"https://bimmonkey-production.up.railway.app/api/firms/project-notes?project={Uri.EscapeDataString(projectName)}");
                     if (notesResp.IsSuccessStatusCode)
                     {
                         var notesBody = await notesResp.Content.ReadAsStringAsync();
                         var notesObj  = JObject.Parse(notesBody);
-                        var notesArr  = notesObj["notes"] as Newtonsoft.Json.Linq.JArray;
-                        if (notesArr != null && notesArr.Count > 0)
+                        var notes     = notesObj["notes"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(notes))
                         {
-                            var sb = new System.Text.StringBuilder();
-                            foreach (var note in notesArr)
-                            {
-                                var proj = note["project_name"]?.ToString();
-                                var text = note["note"]?.ToString();
-                                if (!string.IsNullOrWhiteSpace(text))
-                                    sb.AppendLine(string.IsNullOrWhiteSpace(proj) ? $"- {text}" : $"- [{proj}]: {text}");
-                            }
-                            _projectNotes = sb.ToString().Trim();
-                            System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Project notes loaded ({notesArr.Count} notes)");
+                            _projectNotes = notes;
+                            System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Project notes loaded ({notes.Length} chars)");
                         }
                     }
                 }
@@ -1204,155 +1757,71 @@ namespace RevitMCPBridge2026.AgentFramework
             return modelId;
         }
 
-        private void EnsureMCPConnection()
+        // Pricing per million tokens (dollars)
+        private static readonly Dictionary<string, (double input, double output)> _modelPricing = new Dictionary<string, (double, double)>
         {
-            // Must be called under _pipeLock
-            if (_mcpPipe == null || !_mcpPipe.IsConnected)
-            {
-                try { _mcpWriter?.Dispose(); } catch { }
-                try { _mcpReader?.Dispose(); } catch { }
-                try { _mcpPipe?.Dispose();   } catch { }
+            { "claude-sonnet-4-6",          (3.00,  15.00) },
+            { "claude-opus-4-6",            (15.00, 75.00) },
+            { "claude-haiku-4-5-20251001",  (0.80,  4.00)  },
+        };
 
-                _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2026", PipeDirection.InOut);
-                _mcpPipe.Connect(5000);
-                _mcpWriter = new StreamWriter(_mcpPipe) { AutoFlush = true };
-                _mcpReader = new StreamReader(_mcpPipe);
+        private double? EstimateSessionCost(int inputTokens, int outputTokens, string modelId)
+        {
+            if (string.IsNullOrEmpty(modelId)) return null;
+            // Match on substring for robustness
+            (double input, double output) pricing = (3.00, 15.00); // default: Sonnet
+            foreach (var kv in _modelPricing)
+            {
+                if (modelId.StartsWith(kv.Key, StringComparison.OrdinalIgnoreCase) || modelId == kv.Key)
+                {
+                    pricing = kv.Value;
+                    break;
+                }
             }
+            return (inputTokens / 1_000_000.0 * pricing.input) + (outputTokens / 1_000_000.0 * pricing.output);
         }
 
-        /// <summary>
-        /// Force-close the pipe streams WITHOUT acquiring _pipeLock.
-        /// Calling this while another thread is blocked in ReadLine() inside _pipeLock
-        /// causes ReadLine() to throw IOException, which releases _pipeLock so callers
-        /// waiting on it can proceed. Safe to call from any thread.
-        /// </summary>
-        private void ForceClosePipe()
+        private void EnsureMCPConnection()
         {
-            var pipe   = _mcpPipe;
-            var writer = _mcpWriter;
-            var reader = _mcpReader;
-            // Null first so EnsureMCPConnection won't reuse these objects
-            _mcpPipe   = null;
-            _mcpWriter = null;
-            _mcpReader = null;
-            try { writer?.Dispose(); } catch { }
-            try { reader?.Dispose(); } catch { }
-            try { pipe?.Dispose();   } catch { }
+            lock (_pipeLock)
+            {
+                if (_mcpPipe == null || !_mcpPipe.IsConnected)
+                {
+                    // Dispose old connection if exists
+                    _mcpWriter?.Dispose();
+                    _mcpReader?.Dispose();
+                    _mcpPipe?.Dispose();
+
+                    // Create new connection
+                    _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2026", PipeDirection.InOut);
+                    _mcpPipe.Connect(5000);
+                    _mcpWriter = new StreamWriter(_mcpPipe) { AutoFlush = true };
+                    _mcpReader = new StreamReader(_mcpPipe);
+                }
+            }
         }
 
         private void DisconnectMCP()
         {
             _proactiveTimer?.Stop();
+
+            // Save learned preferences before pipe closes — synchronous, direct, no MCP needed
             SavePreferences();
 
-            // Step 1: Force-close the pipe WITHOUT the lock.
-            // If a thread is blocked in ReadLine() inside lock(_pipeLock), disposing the
-            // pipe causes ReadLine() to throw IOException, which releases _pipeLock.
-            // Without this step, acquiring _pipeLock below would deadlock.
-            ForceClosePipe();
-
-            // Step 2: Acquire lock to ensure the reader thread has fully exited its lock block
             lock (_pipeLock)
             {
-                // Fields already nulled in ForceClosePipe — nothing to do
+                _mcpWriter?.Dispose();
+                _mcpReader?.Dispose();
+                _mcpPipe?.Dispose();
+                _mcpWriter = null;
+                _mcpReader = null;
+                _mcpPipe = null;
             }
-
-            try { _playwright?.Dispose(); _playwright = null; } catch { }
         }
 
         /// <summary>
         /// Query the BIM Monkey approved library on Railway using the firm's API key.
         /// </summary>
-        private async Task<string> HandleCompareViewToLibraryAsync(JObject parameters)
-        {
-            if (_playwright == null || !_playwright.IsConnected)
-                return JsonConvert.SerializeObject(new { success = false, error = "Playwright not connected — browser tools unavailable." });
-            if (string.IsNullOrEmpty(_apiKey))
-                return JsonConvert.SerializeObject(new { success = false, error = "Anthropic API key not configured." });
-
-            try
-            {
-                // 1. Capture the current Revit view
-                var captureParams = new JObject { ["width"] = 1200, ["height"] = 900 };
-                if (parameters?["viewId"] != null) captureParams["viewId"] = parameters["viewId"];
-                var captureJson = await ExecuteMCPWithRetryAsync("captureViewportToBase64", captureParams);
-                var capture = JObject.Parse(captureJson);
-                if (capture["success"]?.ToObject<bool>() != true)
-                    return JsonConvert.SerializeObject(new { success = false, error = "Failed to capture Revit view: " + capture["error"] });
-                var revitBase64 = capture["result"]?["base64"]?.ToString();
-                var viewName = capture["result"]?["viewName"]?.ToString() ?? "current view";
-                if (string.IsNullOrEmpty(revitBase64))
-                    return JsonConvert.SerializeObject(new { success = false, error = "Revit view capture returned no image data." });
-
-                // 2. Navigate to the library reference URL and screenshot it
-                var libraryUrl = parameters?["libraryUrl"]?.ToString();
-                if (string.IsNullOrEmpty(libraryUrl))
-                    libraryUrl = "https://app.bimmonkey.ai/library";
-
-                // Auth: Railway validates the key and 302-redirects to app.bimmonkey.ai/library?_bmk=key.
-                // React's PlaywrightAuthHandler reads _bmk and saves it to localStorage on the correct origin.
-                // We are already on the library page after the redirect — no second navigate needed.
-                await _playwright.CallToolAsync("browser_navigate", new JObject
-                {
-                    ["url"] = $"https://bimmonkey-production.up.railway.app/api/auth/headless?key={_bimMonkeyApiKey}"
-                });
-                await Task.Delay(2500); // wait for redirect + React mount + useEffect to set localStorage
-
-                var libraryBase64 = await _playwright.CallToolForBase64Async("browser_take_screenshot", new JObject());
-                if (string.IsNullOrEmpty(libraryBase64))
-                    return JsonConvert.SerializeObject(new { success = false, error = "Failed to screenshot library page." });
-
-                // 3. Send both images to Claude for comparison
-                var question = parameters?["question"]?.ToString()
-                    ?? "Compare the Revit drawing (image 1) against the library reference (image 2). Identify: what matches, what differs, and any quality or standards issues.";
-
-                using (var client = new System.Net.Http.HttpClient())
-                {
-                    client.Timeout = TimeSpan.FromSeconds(90);
-                    client.DefaultRequestHeaders.Add("x-api-key", _apiKey);
-                    client.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
-
-                    var requestBody = new
-                    {
-                        model = "claude-sonnet-4-6",
-                        max_tokens = 2048,
-                        messages = new[]
-                        {
-                            new
-                            {
-                                role = "user",
-                                content = new object[]
-                                {
-                                    new { type = "text", text = $"Image 1 — Current Revit view: {viewName}" },
-                                    new { type = "image", source = new { type = "base64", media_type = "image/png", data = revitBase64 } },
-                                    new { type = "text", text = $"Image 2 — Library reference: {libraryUrl}" },
-                                    new { type = "image", source = new { type = "base64", media_type = "image/png", data = libraryBase64 } },
-                                    new { type = "text", text = question }
-                                }
-                            }
-                        }
-                    };
-
-                    var json = Newtonsoft.Json.JsonConvert.SerializeObject(requestBody);
-                    var content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
-                    var response = await client.PostAsync("https://api.anthropic.com/v1/messages", content);
-                    var body = await response.Content.ReadAsStringAsync();
-                    var parsed = JObject.Parse(body);
-                    var analysis = parsed["content"]?[0]?["text"]?.ToString() ?? body;
-
-                    return JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        result = new { viewName, libraryUrl, analysis, comparedAt = DateTime.Now.ToString("o") }
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                return JsonConvert.SerializeObject(new { success = false, error = ex.Message });
-            }
-        }
-
         private async Task<string> HandleQueryLibraryAsync(JObject parameters)
         {
             if (string.IsNullOrEmpty(_bimMonkeyApiKey))
@@ -1402,24 +1871,6 @@ namespace RevitMCPBridge2026.AgentFramework
                 return await Task.FromResult(JsonConvert.SerializeObject(new { success = true, fileName = fileName, content = content }));
             }
 
-            // Playwright browser tools — route to Playwright MCP process
-            if (methodName.StartsWith("browser_") && _playwright != null && _playwright.IsConnected)
-            {
-                // Silently inject headless auth before any navigation to app.bimmonkey.ai
-                if (methodName == "browser_navigate" && !string.IsNullOrEmpty(_bimMonkeyApiKey))
-                {
-                    var url = parameters?["url"]?.ToString() ?? "";
-                    if (url.Contains("app.bimmonkey.ai") && !url.Contains("/api/auth/headless"))
-                    {
-                        await _playwright.CallToolAsync("browser_navigate", new JObject
-                        {
-                            ["url"] = $"https://app.bimmonkey.ai/api/auth/headless?key={_bimMonkeyApiKey}"
-                        });
-                    }
-                }
-                return await _playwright.CallToolAsync(methodName, parameters);
-            }
-
             // Handle vision analysis - needs API key which we have locally
             if (methodName == "analyzeView")
             {
@@ -1436,12 +1887,6 @@ namespace RevitMCPBridge2026.AgentFramework
                 return await ExecuteMCPWithRetryAsync("analyzeView", parameters);
             }
 
-            // Compare current Revit view against a library reference screenshot
-            if (methodName == "compareViewToLibrary")
-            {
-                return await HandleCompareViewToLibraryAsync(parameters);
-            }
-
             // BIM Monkey: query the approved library on Railway
             if (methodName == "queryLibrary")
             {
@@ -1453,6 +1898,12 @@ namespace RevitMCPBridge2026.AgentFramework
             if (fileResult != null)
             {
                 return fileResult;
+            }
+
+            // Handle project note storage (backend-synced)
+            if (methodName == "projectNoteStore")
+            {
+                return await HandleProjectNoteStoreAsync(parameters);
             }
 
             // Handle memory tools locally
@@ -1486,9 +1937,7 @@ namespace RevitMCPBridge2026.AgentFramework
         // Retry configuration
         private const int MaxRetryAttempts = 3;
         private const int InitialRetryDelayMs = 500;
-        // 2 minutes — heavy methods like getModelInventorySummary need time on large models.
-        // 30s was too short: client would bail, server kept running, retries stacked up.
-        private const int MCPTimeoutMs = 120000;
+        private const int MCPTimeoutMs = 30000;
 
         /// <summary>
         /// Execute MCP method with automatic retry and enhanced error handling
@@ -1507,10 +1956,7 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 try
                 {
-                    // WRITE on a thread pool thread — Connect(5000) and WriteLine are
-                    // blocking calls; running them on the STA/UI thread causes "Not Responding".
-                    // Returns the reader capture so the read phase can use the same stream.
-                    var readerCapture = await Task.Run(() =>
+                    var response = await Task.Run(() =>
                     {
                         lock (_pipeLock)
                         {
@@ -1518,40 +1964,28 @@ namespace RevitMCPBridge2026.AgentFramework
                             {
                                 EnsureMCPConnection();
                                 _mcpWriter.WriteLine(requestJson);
-                                return _mcpReader;
+
+                                // Read with timeout simulation via check
+                                var result = _mcpReader.ReadLine();
+                                return result;
                             }
                             catch (IOException ioEx)
                             {
-                                ForceClosePipe();
-                                throw new MCPConnectionException("Write failed", ioEx);
+                                // Pipe broken - need to reconnect
+                                DisconnectMCP();
+                                throw new MCPConnectionException("Connection lost", ioEx);
+                            }
+                            catch (TimeoutException)
+                            {
+                                throw new MCPTimeoutException($"Method '{methodName}' timed out");
                             }
                         }
                     });
 
-                    // READ outside the lock with a real timeout via Task.WhenAny.
-                    // ReadLine() is blocking — Task.Run puts it on a thread pool thread.
-                    // On timeout, ForceClosePipe() disposes the stream, causing the
-                    // stuck ReadLine() to throw so its Task completes (exception ignored).
-                    var readTask    = Task.Run(() => readerCapture?.ReadLine());
-                    var timeoutTask = Task.Delay(MCPTimeoutMs);
-                    var winner      = await Task.WhenAny(readTask, timeoutTask);
-
-                    if (winner == timeoutTask)
-                    {
-                        ForceClosePipe(); // breaks the stuck ReadLine in readTask
-                        throw new MCPTimeoutException($"Method '{methodName}' timed out after {MCPTimeoutMs / 1000}s");
-                    }
-
-                    string response;
-                    try   { response = await readTask; }
-                    catch (Exception ioEx) { throw new MCPConnectionException("Read failed", ioEx); }
-
                     if (string.IsNullOrEmpty(response))
                     {
-                        // Empty response — pipe disconnected mid-request.
-                        // ForceClosePipe resets the connection; EnsureMCPConnection will
-                        // reconnect on the next attempt. Full DisconnectMCP is overkill here.
-                        ForceClosePipe();
+                        // Empty response - likely connection issue
+                        DisconnectMCP();
                         lastError = "Empty response from MCP server";
 
                         if (attempt < MaxRetryAttempts)
@@ -1601,11 +2035,12 @@ namespace RevitMCPBridge2026.AgentFramework
                 catch (MCPTimeoutException timeoutEx)
                 {
                     lastError = timeoutEx.Message;
-                    // DO NOT retry on timeout. The original Revit action is still running
-                    // in MCPRequestHandler's queue. Retrying would stack more of the same
-                    // heavy work, causing a queue storm and further freezing Revit.
-                    // Return the timeout error immediately so Claude can try a lighter approach.
-                    break;
+                    // Timeouts often indicate Revit is busy - give it time
+                    if (attempt < MaxRetryAttempts)
+                    {
+                        await Task.Delay(InitialRetryDelayMs * attempt * 2);
+                        continue;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -2138,6 +2573,79 @@ namespace RevitMCPBridge2026.AgentFramework
 
         #endregion
 
+        #region Backend Memory Sync
+
+        /// <summary>
+        /// POST a project note to /api/firms/project-notes and update the in-memory cache.
+        /// </summary>
+        private async Task<string> HandleProjectNoteStoreAsync(JObject parameters)
+        {
+            var note = parameters?["note"]?.ToString();
+            if (string.IsNullOrEmpty(note))
+                return JsonConvert.SerializeObject(new { success = false, error = "note is required" });
+
+            var project = parameters?["project"]?.ToString() ?? _sessionProjectName ?? "Unknown";
+
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+                return JsonConvert.SerializeObject(new { success = false, error = "No BIM Monkey API key — cannot sync to backend" });
+
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    client.Timeout = TimeSpan.FromSeconds(10);
+
+                    var body = JsonConvert.SerializeObject(new { project, note });
+                    var content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
+                    var resp = await client.PostAsync(
+                        "https://bimmonkey-production.up.railway.app/api/firms/project-notes", content);
+
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        // Append to in-session cache so next prompt sees it
+                        _projectNotes = string.IsNullOrWhiteSpace(_projectNotes)
+                            ? note
+                            : _projectNotes + "\n- " + note;
+                        return JsonConvert.SerializeObject(new { success = true, message = "Project note stored" });
+                    }
+                    var errorBody = await resp.Content.ReadAsStringAsync();
+                    return JsonConvert.SerializeObject(new { success = false, error = $"Backend error: {errorBody}" });
+                }
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { success = false, error = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// POST a firm-level memory note to /api/firms/memory.
+        /// Called automatically when memoryStore is used with memoryType "firm" or importance >= 8.
+        /// </summary>
+        private async Task SyncMemoryToBackendAsync(string content, string memoryType, int importance)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+            // Only sync high-importance or explicitly firm-scoped memories
+            if (memoryType != "firm" && importance < 8) return;
+
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    client.Timeout = TimeSpan.FromSeconds(10);
+                    var body = JsonConvert.SerializeObject(new { note = content });
+                    var httpContent = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
+                    await client.PostAsync(
+                        "https://bimmonkey-production.up.railway.app/api/firms/memory", httpContent);
+                }
+            }
+            catch { /* fire and forget */ }
+        }
+
+        #endregion
+
         #region Memory Operation Handlers
 
         // Memory storage file path - use user's home directory for portability
@@ -2156,9 +2664,6 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     switch (methodName)
                     {
-                        case "projectNoteStore":
-                            return HandleProjectNoteStore(parameters);
-
                         case "memoryStore":
                             return HandleMemoryStore(parameters);
 
@@ -2198,30 +2703,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 if (File.Exists(MemoryFile))
                 {
                     var json = File.ReadAllText(MemoryFile);
-                    var memories = JsonConvert.DeserializeObject<List<MemoryItem>>(json) ?? new List<MemoryItem>();
-
-                    // One-time dedup: for corrections, keep only the most recent per (project, category).
-                    // Fixes accumulated contradictions from sessions before the replaceExisting fix.
-                    var correctionGroups = memories
-                        .Where(m => m.MemoryType == "correction")
-                        .GroupBy(m => (
-                            project: m.Project ?? "",
-                            category: m.Tags?.FirstOrDefault(t => t != "correction") ?? "general"))
-                        .ToList();
-
-                    bool changed = false;
-                    foreach (var group in correctionGroups)
-                    {
-                        var ordered = group.OrderByDescending(m => m.CreatedAt).ToList();
-                        for (int i = 1; i < ordered.Count; i++)
-                        {
-                            memories.Remove(ordered[i]);
-                            changed = true;
-                        }
-                    }
-                    if (changed) SaveMemories(memories);
-
-                    return memories;
+                    return JsonConvert.DeserializeObject<List<MemoryItem>>(json) ?? new List<MemoryItem>();
                 }
             }
             catch { }
@@ -2241,38 +2723,6 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { }
         }
 
-        private string HandleProjectNoteStore(JObject parameters)
-        {
-            var note = parameters?["note"]?.ToString();
-            var projectName = parameters?["projectName"]?.ToString();
-
-            if (string.IsNullOrEmpty(note))
-                return JsonConvert.SerializeObject(new { success = false, error = "note is required" });
-            if (string.IsNullOrEmpty(projectName))
-                return JsonConvert.SerializeObject(new { success = false, error = "projectName is required" });
-
-            // POST to Railway — this is the authoritative store for project notes
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
-                    using (var client = new System.Net.Http.HttpClient())
-                    {
-                        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
-                        client.Timeout = TimeSpan.FromSeconds(10);
-                        var body = new StringContent(
-                            JsonConvert.SerializeObject(new { project_name = projectName, note }),
-                            System.Text.Encoding.UTF8, "application/json");
-                        await client.PostAsync("https://bimmonkey-production.up.railway.app/api/firms/project-notes", body);
-                    }
-                }
-                catch { }
-            });
-
-            return JsonConvert.SerializeObject(new { success = true, message = $"Note saved for project '{projectName}'" });
-        }
-
         private string HandleMemoryStore(JObject parameters)
         {
             var content = parameters?["content"]?.ToString();
@@ -2281,64 +2731,27 @@ namespace RevitMCPBridge2026.AgentFramework
                 return JsonConvert.SerializeObject(new { success = false, error = "content is required" });
             }
 
+            var memoryType = parameters?["memoryType"]?.ToString() ?? "context";
+            var importance  = parameters?["importance"]?.ToObject<int>() ?? 5;
+
             var memory = new MemoryItem
             {
                 Id = Guid.NewGuid().ToString("N").Substring(0, 8),
                 Content = content,
-                MemoryType = parameters?["memoryType"]?.ToString() ?? "context",
+                MemoryType = memoryType,
                 Project = parameters?["project"]?.ToString(),
-                Importance = parameters?["importance"]?.ToObject<int>() ?? 5,
+                Importance = importance,
                 Tags = parameters?["tags"]?.ToObject<List<string>>() ?? new List<string>(),
                 CreatedAt = DateTime.Now,
                 Source = "revit-ai"
             };
 
             var memories = LoadMemories();
-
-            // replaceExisting=true: remove prior memories with the same project + memoryType
-            // so corrections don't stack up contradicting each other.
-            var replaceExisting = parameters?["replaceExisting"]?.ToObject<bool>() ?? false;
-            if (replaceExisting)
-            {
-                memories.RemoveAll(m =>
-                    m.Project == memory.Project &&
-                    m.MemoryType == memory.MemoryType);
-            }
-
             memories.Add(memory);
             SaveMemories(memories);
 
-            // Sync to Railway so the /brain page stays in sync.
-            // Firm-wide (no project): POST to /api/firms/memory
-            // Project-scoped: POST to /api/firms/project-notes
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
-                    using (var client = new System.Net.Http.HttpClient())
-                    {
-                        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
-                        client.Timeout = TimeSpan.FromSeconds(10);
-
-                        if (!string.IsNullOrEmpty(memory.Project))
-                        {
-                            var body = new StringContent(
-                                JsonConvert.SerializeObject(new { project_name = memory.Project, note = memory.Content }),
-                                System.Text.Encoding.UTF8, "application/json");
-                            await client.PostAsync("https://bimmonkey-production.up.railway.app/api/firms/project-notes", body);
-                        }
-                        else if (memory.MemoryType == "preference" || memory.MemoryType == "fact" || memory.MemoryType == "decision")
-                        {
-                            var body = new StringContent(
-                                JsonConvert.SerializeObject(new { note = memory.Content }),
-                                System.Text.Encoding.UTF8, "application/json");
-                            await client.PostAsync("https://bimmonkey-production.up.railway.app/api/firms/memory", body);
-                        }
-                    }
-                }
-                catch { /* sync failures are non-fatal — local memory is authoritative */ }
-            });
+            // Sync high-importance or firm-scoped memories to the backend
+            _ = SyncMemoryToBackendAsync(content, memoryType, importance);
 
             return JsonConvert.SerializeObject(new
             {
@@ -2460,15 +2873,6 @@ namespace RevitMCPBridge2026.AgentFramework
             };
 
             var memories = LoadMemories();
-
-            // Always replace prior corrections for the same project+category to prevent
-            // contradictory corrections stacking (e.g. door swing flip-flopping).
-            var category = parameters?["category"]?.ToString() ?? "general";
-            memories.RemoveAll(m =>
-                m.MemoryType == "correction" &&
-                m.Project == memory.Project &&
-                m.Tags != null && m.Tags.Contains(category));
-
             memories.Add(memory);
             SaveMemories(memories);
 
@@ -2476,7 +2880,7 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 success = true,
                 id = memory.Id,
-                message = "Correction stored with high priority (prior corrections for this category replaced)"
+                message = "Correction stored with high priority"
             });
         }
 
@@ -2635,7 +3039,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private async void InputTextBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)  // hooked as PreviewKeyDown
         {
             // Ctrl+Enter or just Enter (when not holding Shift) to submit
-            if (e.Key == System.Windows.Input.Key.Enter && !_isProcessing)
+            if (e.Key == System.Windows.Input.Key.Enter && !_isProcessing && !_subscriptionBlocked)
             {
                 bool ctrlPressed = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0;
                 bool shiftPressed = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0;
@@ -2653,7 +3057,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private async Task SendMessage()
         {
             var message = _inputTextBox.Text.Trim();
-            if (string.IsNullOrEmpty(message) || _isProcessing) return;
+            if (string.IsNullOrEmpty(message) || _isProcessing || _subscriptionBlocked) return;
 
             // Track for feedback context
             _lastUserMessage = message;
@@ -2663,6 +3067,9 @@ namespace RevitMCPBridge2026.AgentFramework
             AddUserMessage(message);
             SetProcessing(true);
             ShowProgress("Thinking...");
+
+            // Telemetry: track that the user sent a message
+            TelemetryService.Track(_bimMonkeyApiKey, "chat_message");
 
             try
             {
@@ -2688,33 +3095,56 @@ namespace RevitMCPBridge2026.AgentFramework
                     ? ""
                     : $"\n\nAPPROVED EXAMPLES LIBRARY (details/sheets this firm has approved — use as quality benchmark):\n{_librarySummary}\n";
 
-                var projectNotesBlock = string.IsNullOrWhiteSpace(_projectNotes)
-                    ? ""
-                    : $"\n\nPROJECT NOTES (architect's saved instructions from past sessions — apply automatically):\n{_projectNotes}\n";
-
                 var memoryBlock = string.IsNullOrWhiteSpace(_memoryContext)
                     ? ""
                     : $"\n\nMEMORY FROM PREVIOUS SESSIONS (what you learned and did last time):\n{_memoryContext}\n";
 
-                var persistentIntelBlock = "\n\nMEMORY: Call memoryStoreCorrection immediately when Barrett corrects you. Call memoryStore after key decisions (sheet numbering, template names, family names). Use replaceExisting=true when updating a known fact. The goal: Barrett never repeats himself.";
+                var firmMemoryBlock = string.IsNullOrWhiteSpace(_firmMemory)
+                    ? ""
+                    : $"\n\nFIRM MEMORY (persistent facts and preferences stored for this firm):\n{_firmMemory}\n";
 
-                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{projectNotesBlock}{memoryBlock}{persistentIntelBlock}
+                var projectNotesBlock = string.IsNullOrWhiteSpace(_projectNotes)
+                    ? ""
+                    : $"\n\nPROJECT NOTES FOR '{projectName}' (stored from previous sessions on this project):\n{_projectNotes}\n";
+
+                var persistentIntelBlock = "\n\nPERSISTENT INTELLIGENCE — CRITICAL:\n" +
+                    "You have a memory system that survives across sessions. Use it constantly.\n\n" +
+                    "STORE A CORRECTION immediately when:\n" +
+                    "- Barrett says no, wrong, don't do that, that's not right, actually, stop\n" +
+                    "- A tool call fails and you learn why\n" +
+                    "- You place something incorrectly and Barrett fixes it\n" +
+                    "- Barrett states a preference (I always want..., never put..., use X not Y)\n" +
+                    "Call: memoryStoreCorrection with whatISaid, whatWasWrong, correctApproach, category\n\n" +
+                    "STORE A MEMORY after important decisions:\n" +
+                    "- Sheet numbering pattern for this project\n" +
+                    "- View template names that are set up\n" +
+                    "- Family names and type names available in this model\n" +
+                    "- Key project facts (building type, occupancy, jurisdiction)\n" +
+                    "Call: memoryStore with content, memoryType (decision/fact/preference), importance 7-9\n\n" +
+                    "RECALL MEMORIES when starting a task:\n" +
+                    "- Before placing sheets: memoryRecall with query 'sheet layout preferences'\n" +
+                    "- Before placing views: memoryRecall with query 'view template names'\n" +
+                    "- When Barrett mentions a project: memoryRecall with the project name\n\n" +
+                    "The goal: Barrett should never have to tell you the same thing twice.\n";
+
+                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{memoryBlock}{firmMemoryBlock}{projectNotesBlock}{persistentIntelBlock}
 
 CURRENT PROJECT: {projectName}
 
-USE callMCPMethod FOR ALL REVIT OPERATIONS. Key methods (use listAllMethods to discover more):
-- Inventory: getModelInventorySummary, getViewsSummary, getSheets, getUnplacedViews
-- Read: getProjectInfo, getLevels, getRooms, getWalls, getDoors, getWindows, getViewportBoundingBoxes
-- Sheets: createSheet (always append ' *' to name), placeViewOnSheet, placeMultipleViewsOnSheet, placeScheduleOnSheet
-- Views: getViews, setActiveView, duplicateView, setViewTemplate, setViewCropBox
-- Layout: classifyAndPackViews, getSheetLayoutRecommendation, getRecommendedScale, alignViewportEdge, moveViewport, setViewportLabelOffset
-- Annotate: createTextNote, tagDoor, tagRoom, tagAllByCategory, getViewportsOnSheet, getDraftingViewBounds
-- Elements: placeFamilyInstance, setParameter, deleteElements, getElementById
-- Spatial: getSheetLayout, getViewportBoundingBoxes, findEmptySpaceOnSheet, checkForOverlaps
-- Schedules: getSchedules, placeScheduleOnSheet
-- Visual: captureViewport, analyzeView, compareViewToLibrary
+YOUR CAPABILITIES:
+- Query model data: getProjectInfo, getViews, getSheets, getElements, getRooms, getLevels, getWalls, getDoors, getWindows
+- VISUAL VERIFICATION: analyzeView - SEE what you're doing! Capture and analyze views to verify your work
+- Capture visuals: captureViewport (take screenshots of current view)
+- Spatial analysis: checkForOverlaps, suggestPlacementLocation, findEmptySpaceOnSheet
+- Create elements: createWall, placeDoor, placeWindow, placeFamilyInstance
+- Annotations: placeTextNote, placeKeynote, tagElements
+- Sheets/Views: createSheet, placeViewOnSheet, duplicateView
 
-createSheet: ALWAYS append ' *' to the sheet name. Call getSheets first to confirm the sheet doesn't already exist.
+ACCESS ALL 705 METHODS:
+The curated tools above are a small subset. Use callMCPMethod to call ANY of the 705 registered Revit methods.
+Example: callMCPMethod with method=""classifyAndPackViews"", parameters={{}}
+Example: callMCPMethod with method=""moveViewToSheet"", parameters={{""viewId"":875149,""targetSheetId"":123}}
+Use listAllMethods to discover available methods by category. Always prefer callMCPMethod over guessing.
 
 SHEET PLACEMENT WORKFLOW — always follow this order:
 0. START HERE: callMCPMethod with method=""classifyAndPackViews"" — runs the full NCS/UDS classification pipeline and returns a pre-assigned sheet layout. The promptBlock is authoritative — do not deviate from definite assignments, only the ambiguous views are yours to place.
@@ -2732,47 +3162,6 @@ After placing elements on sheets, USE analyzeView to SEE the result and verify i
 This helps you catch: views that didn't get placed, overlapping viewports, elements in wrong locations.
 
 {knowledgeBase}
-
-LIVE DATA OVER MEMORY:
-Always call the relevant getter method to verify current model state before making assertions. Memory tells you what was true in a past session — the model may have changed. Trust live API results over recalled context. If memory and live data conflict, live data wins.
-
-SCOPE BEFORE FLAGGING:
-When you encounter empty sheets or missing content in structural (S-series), MEP (M/P-series), civil, or other non-architectural disciplines — ask the user if that discipline is in scope before flagging as an issue. Do not assume missing structural sheets are a problem; the structural engineer may be handling them separately.
-
-TAGGING RULES — BEFORE ANY TAG OPERATION:
-Before tagging doors or windows in a view, call getViewRange on that view to understand which levels and elevation range are visible. Only tag elements whose level matches the view's primary level.
-Door and window marks are NOT sequential across levels — do not assume mark ""101"" through ""122"" all belong to Level 1. Always filter by level before tagging or deleting tags.
-After batch tagging, call getTagsInView to audit for cross-level tags (elements whose host level does not match the view level). Delete any cross-level tags immediately.
-When cleaning up tags after the fact, always verify the element's level before deciding which tags to remove — do not rely on mark number patterns.
-
-CROP BOX + VIEW TEMPLATE:
-If setViewCropBox returns cropBoxActive:false and templateName is set, the view template is controlling the crop region. The crop coordinates were written but are NOT displayed. To actually change the displayed crop: call setViewTemplate with templateId=null to detach the template, set the crop, then reapply the template. Never report crop success when cropBoxActive is false.
-
-VIEWPORT ALIGNMENT RULES:
-Use alignViewportEdge instead of computing coordinates manually. It eliminates hand-math and is exact.
-For interior elevation rows: ALWAYS align by edge='bottom' (the floor line / maxY). Never align by top edge — top edges differ per viewport height and will misalign the floor datum.
-For label offsets: NEVER use auto:true on setViewportLabelOffset — it is broken for large viewports and will misplace labels. Instead, call getViewportBoundingBoxes to read the existing offsets, then match manually. Never use a fixed value like -0.188 — read the actual bounding box first.
-alignViewportEdge defaults to dryRun:true — show the user the proposed delta before executing.
-
-CLASSIFICATION PIPELINE — NON-NEGOTIABLE:
-classifyAndPackViews is the ONLY source of truth for which view goes on which sheet.
-~80% of views are pre-assigned deterministically by the pipeline. Claude handles only the ambiguous remainder.
-NEVER route a view to a sheet slot based on your own judgment if classifyAndPackViews has already assigned it.
-NEVER move a view marked as definite or probable in the promptBlock output — those assignments are final.
-BLOCKED views (names containing: Copy, Working, DNP, do not plot, bim monkey, coordination, _temp, _archive) must never be placed on sheets under any circumstances.
-
-SCALE + DETAIL LEVEL — BEFORE EVERY PLACEMENT:
-Call getRecommendedScale for the view before placing it on a sheet.
-Read the view's viewTemplate name — it encodes the correct scale and detail level.
-Scale must match detail level: Coarse = 1/16""-1/8"" only, Medium = 3/16""-1/4"", Fine = 1/2"" and larger.
-A floor plan placed at Coarse detail level will show only walls — no door swings, no casework — and will look empty.
-If the view's current scale does not match the target sheet type, fix the scale before placing, not after.
-
-POST-PLACEMENT VALIDATION:
-After placeFamilyInstance: check returned X and Y coordinates. If both are < 0.1, placement failed silently at model origin. Rollback and retry with a valid hostId — use getWallsInView to find nearby wall IDs first.
-After placeViewOnSheet: call getViewportsOnSheet to confirm the view appears on the correct sheet.
-After deleteElements: if deletedCount is 0 but you expected deletions, call getElementsInView to verify before retrying — the deletion may have succeeded despite the reported count.
-After moveViewport: always call with dryRun:true first and show the user the proposed position and delta. Only proceed with dryRun:false after explicit confirmation.
 
 STYLE:
 - Be direct and technical
@@ -2794,7 +3183,7 @@ STYLE:
 
         private void StopAgent()
         {
-            _agent?.Stop();
+            _agent?.NotifyInterrupted(); // cancels in-flight call + sends interrupted outcome
             HideProgress();
             SetProcessing(false);
             AddSystemMessage("Operation cancelled.");
@@ -2804,9 +3193,12 @@ STYLE:
         {
             _chatHistory.Children.Clear();
             _agent?.ClearHistory();
-            _sessionMessages.Clear();  // Clear session memory too
-            _tokenText.Text = "";
-            _tokenText.Visibility = Visibility.Collapsed;
+            _sessionMessages.Clear();
+            if (_elapsedText != null) _elapsedText.Text = "";
+            if (_tokenText != null) _tokenText.Text = "";
+            if (_costText != null) _costText.Text = "";
+            _streamingTextBox = null;
+            _streamingContainer = null;
             AddAssistantMessage("Chat cleared. How can I help you?");
         }
 
@@ -2843,60 +3235,16 @@ STYLE:
             // Track for session persistence
             TrackMessage("user", text);
 
-            var container = new StackPanel { HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(50, 8, 8, 8) };
-
             var border = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(0, 120, 212)),
                 CornerRadius = new CornerRadius(12, 12, 0, 12),
                 Padding = new Thickness(12),
+                Margin = new Thickness(50, 8, 8, 8),
+                HorizontalAlignment = HorizontalAlignment.Right,
             };
             border.Child = SelectableText(text, Brushes.White);
-            container.Children.Add(border);
-
-            // Action row: Copy + Retry
-            var actionPanel = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(0, 4, 0, 0)
-            };
-
-            var copyBtn = new Button
-            {
-                Content = "⎘",
-                FontSize = 12,
-                Padding = new Thickness(6, 2, 6, 2),
-                Margin = new Thickness(0, 0, 4, 0),
-                Background = Brushes.Transparent,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
-                Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
-                Cursor = System.Windows.Input.Cursors.Hand,
-                ToolTip = "Copy message"
-            };
-            copyBtn.Click += (s, e) => { try { System.Windows.Clipboard.SetText(text); copyBtn.Content = "✓"; } catch { } };
-            actionPanel.Children.Add(copyBtn);
-
-            var retryBtn = new Button
-            {
-                Content = "↺",
-                FontSize = 13,
-                Padding = new Thickness(6, 2, 6, 2),
-                Background = Brushes.Transparent,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
-                Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
-                Cursor = System.Windows.Input.Cursors.Hand,
-                ToolTip = "Retry"
-            };
-            retryBtn.Click += async (s, e) =>
-            {
-                _inputTextBox.Text = text;
-                await SendMessage();
-            };
-            actionPanel.Children.Add(retryBtn);
-
-            container.Children.Add(actionPanel);
-            _chatHistory.Children.Add(container);
+            _chatHistory.Children.Add(border);
             ScrollToBottom();
         }
 
@@ -2917,12 +3265,18 @@ STYLE:
             {
                 Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
                 CornerRadius = new CornerRadius(12, 12, 12, 0),
-                Padding = new Thickness(12)
+                Padding = new Thickness(12),
             };
             border.Child = SelectableText(text, Brushes.White);
             container.Children.Add(border);
 
-            // Feedback buttons (thumbs up/down)
+            AddFeedbackButtons(container, text, messageIndex);
+            _chatHistory.Children.Add(container);
+            ScrollToBottom();
+        }
+
+        private void AddFeedbackButtons(StackPanel container, string assistMsg, int messageIndex)
+        {
             var feedbackPanel = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
@@ -2930,12 +3284,9 @@ STYLE:
                 HorizontalAlignment = HorizontalAlignment.Left
             };
 
-            // Store context for this message
             var userMsg = _lastUserMessage;
-            var assistMsg = text;
             var toolCall = _lastToolCall;
 
-            // Thumbs up button
             var thumbsUp = new Button
             {
                 Content = "\U0001F44D",
@@ -2951,7 +3302,6 @@ STYLE:
             thumbsUp.Click += (s, e) => OnThumbsUp(userMsg, assistMsg, (Button)s, feedbackPanel);
             feedbackPanel.Children.Add(thumbsUp);
 
-            // Thumbs down button
             var thumbsDown = new Button
             {
                 Content = "\U0001F44E",
@@ -2966,61 +3316,28 @@ STYLE:
             thumbsDown.Click += (s, e) => OnThumbsDown(userMsg, assistMsg, toolCall, (Button)s, feedbackPanel);
             feedbackPanel.Children.Add(thumbsDown);
 
-            // Copy button
             var copyBtn = new Button
             {
-                Content = "⎘",
-                FontSize = 13,
+                Content = "\U0001F4CB",
+                FontSize = 14,
                 Padding = new Thickness(6, 2, 6, 2),
                 Margin = new Thickness(4, 0, 0, 0),
                 Background = Brushes.Transparent,
                 BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
                 Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
                 Cursor = System.Windows.Input.Cursors.Hand,
-                ToolTip = "Copy response"
+                ToolTip = "Copy"
             };
             copyBtn.Click += (s, e) =>
             {
-                try { System.Windows.Clipboard.SetText(assistMsg); copyBtn.Content = "✓"; }
-                catch { }
+                System.Windows.Clipboard.SetText(assistMsg);
+                copyBtn.Content = "✅";
+                var t = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+                t.Tick += (ts, te) => { copyBtn.Content = "\U0001F4CB"; t.Stop(); };
+                t.Start();
             };
             feedbackPanel.Children.Add(copyBtn);
-
-            // Remember button — saves assistant response to Firm Brain
-            var rememberBtn = new Button
-            {
-                Content = "⊕",
-                FontSize = 13,
-                Padding = new Thickness(6, 2, 6, 2),
-                Margin = new Thickness(4, 0, 0, 0),
-                Background = Brushes.Transparent,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
-                Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
-                Cursor = System.Windows.Input.Cursors.Hand,
-                ToolTip = "Save to Firm Brain"
-            };
-            rememberBtn.Click += (s, e) =>
-            {
-                try
-                {
-                    var parameters = new Newtonsoft.Json.Linq.JObject
-                    {
-                        ["content"] = assistMsg,
-                        ["memoryType"] = "fact",
-                        ["project"] = _sessionProjectName,
-                        ["replaceExisting"] = false
-                    };
-                    HandleMemoryStore(parameters);
-                    rememberBtn.Content = "✓";
-                    rememberBtn.Foreground = new SolidColorBrush(Color.FromRgb(80, 180, 80));
-                }
-                catch { }
-            };
-            feedbackPanel.Children.Add(rememberBtn);
-
             container.Children.Add(feedbackPanel);
-            _chatHistory.Children.Add(container);
-            ScrollToBottom();
         }
 
         private void OnThumbsUp(string userMsg, string assistMsg, Button button, StackPanel panel)
@@ -3339,6 +3656,29 @@ STYLE:
             _progressPanel.Visibility = Visibility.Visible;
             _progressTitle.Text = title;
             _progressDetail.Text = "";
+            // Only (re)start the timer if it isn't already running — OnThinking fires on every
+            // tool loop and must not reset the start time mid-session.
+            bool alreadyRunning = _thinkingTimer != null && _thinkingTimer.IsEnabled;
+            if (!alreadyRunning)
+            {
+                _thinkingStartTime = DateTime.Now;
+                if (_thinkingTimer == null)
+                {
+                    _thinkingTimer = new System.Windows.Threading.DispatcherTimer
+                    {
+                        Interval = TimeSpan.FromSeconds(1)
+                    };
+                    _thinkingTimer.Tick += (s, e) =>
+                    {
+                        var elapsed = (int)(DateTime.Now - _thinkingStartTime).TotalSeconds;
+                        _timerText.Text = $"{elapsed}s";
+                        if (_elapsedText != null) _elapsedText.Text = $"{elapsed} s";
+                    };
+                }
+                _timerText.Text = "0s";
+                if (_elapsedText != null) _elapsedText.Text = "0 s";
+                _thinkingTimer.Start();
+            }
         }
 
         private void UpdateProgress(string detail)
@@ -3349,14 +3689,19 @@ STYLE:
         private void HideProgress()
         {
             _progressPanel.Visibility = Visibility.Collapsed;
+            _thinkingTimer?.Stop();
+            if (_timerText != null) _timerText.Text = "";
+            var elapsed = (int)(DateTime.Now - _thinkingStartTime).TotalSeconds;
+            if (_elapsedText != null) _elapsedText.Text = $"{elapsed} s";
         }
 
         private void SetProcessing(bool isProcessing)
         {
             _isProcessing = isProcessing;
-            _sendButton.IsEnabled = !isProcessing;
+            _sendButton.IsEnabled = !isProcessing && !_subscriptionBlocked;
             _stopButton.Visibility = isProcessing ? Visibility.Visible : Visibility.Collapsed;
-            _statusText.Text = isProcessing ? "Processing..." : "Ready";
+            if (!_subscriptionBlocked)
+                _statusText.Text = isProcessing ? "Processing..." : $"Connected ({GetModelDisplayName(_selectedModel)})";
         }
 
         private void ScrollToBottom()

@@ -351,6 +351,7 @@ namespace RevitMCPBridge
                 { "RedlineCancel",     "N" },
                 { "RedlineClear",      "D" },
                 { "FAQ",               "F" },
+                { "AIAssistant",       "B" },
                 { "MCPSettings",       "E" },
                 { "MCPHelp",           "H" },
             };
