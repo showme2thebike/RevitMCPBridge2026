@@ -3401,6 +3401,33 @@ STYLE:
             ScrollToBottom();
         }
 
+        private Button MakeFeedbackButton(string content, string tooltip = null, int leftMargin = 4)
+        {
+            var btn = new Button
+            {
+                Content = content,
+                FontSize = 14,
+                Padding = new Thickness(6, 2, 6, 2),
+                Margin = new Thickness(leftMargin, 0, 0, 0),
+                Background = Brushes.Transparent,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
+                Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                ToolTip = tooltip
+            };
+            btn.MouseEnter += (s, e) =>
+            {
+                btn.Foreground = new SolidColorBrush(Color.FromRgb(220, 220, 220));
+                btn.BorderBrush = new SolidColorBrush(Color.FromRgb(150, 150, 150));
+            };
+            btn.MouseLeave += (s, e) =>
+            {
+                btn.Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120));
+                btn.BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70));
+            };
+            return btn;
+        }
+
         private void AddFeedbackButtons(StackPanel container, string assistMsg, int messageIndex)
         {
             var feedbackPanel = new StackPanel
@@ -3413,47 +3440,17 @@ STYLE:
             var userMsg = _lastUserMessage;
             var toolCall = _lastToolCall;
 
-            var thumbsUp = new Button
-            {
-                Content = "\U0001F44D",
-                FontSize = 14,
-                Padding = new Thickness(6, 2, 6, 2),
-                Margin = new Thickness(0, 0, 4, 0),
-                Background = Brushes.Transparent,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
-                Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
-                Cursor = System.Windows.Input.Cursors.Hand,
-                Tag = messageIndex
-            };
+            var thumbsUp = MakeFeedbackButton("\U0001F44D", leftMargin: 0);
+            thumbsUp.Tag = messageIndex;
             thumbsUp.Click += (s, e) => OnThumbsUp(userMsg, assistMsg, (Button)s, feedbackPanel);
             feedbackPanel.Children.Add(thumbsUp);
 
-            var thumbsDown = new Button
-            {
-                Content = "\U0001F44E",
-                FontSize = 14,
-                Padding = new Thickness(6, 2, 6, 2),
-                Background = Brushes.Transparent,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
-                Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
-                Cursor = System.Windows.Input.Cursors.Hand,
-                Tag = messageIndex
-            };
+            var thumbsDown = MakeFeedbackButton("\U0001F44E");
+            thumbsDown.Tag = messageIndex;
             thumbsDown.Click += (s, e) => OnThumbsDown(userMsg, assistMsg, toolCall, (Button)s, feedbackPanel);
             feedbackPanel.Children.Add(thumbsDown);
 
-            var copyBtn = new Button
-            {
-                Content = "\U0001F4CB",
-                FontSize = 14,
-                Padding = new Thickness(6, 2, 6, 2),
-                Margin = new Thickness(4, 0, 0, 0),
-                Background = Brushes.Transparent,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
-                Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
-                Cursor = System.Windows.Input.Cursors.Hand,
-                ToolTip = "Copy"
-            };
+            var copyBtn = MakeFeedbackButton("\U0001F4CB", tooltip: "Copy");
             copyBtn.Click += (s, e) =>
             {
                 System.Windows.Clipboard.SetText(assistMsg);
@@ -3464,20 +3461,9 @@ STYLE:
             };
             feedbackPanel.Children.Add(copyBtn);
 
-            // ⟳ Repeat — resend the last user message (useful when server didn't push through)
+            // ⟳ Repeat — resend the last user message when server didn't push through
             var capturedUserMsg = userMsg;
-            var repeatBtn = new Button
-            {
-                Content = "⟳",
-                FontSize = 14,
-                Padding = new Thickness(6, 2, 6, 2),
-                Margin = new Thickness(4, 0, 0, 0),
-                Background = Brushes.Transparent,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
-                Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
-                Cursor = System.Windows.Input.Cursors.Hand,
-                ToolTip = "Repeat — resend the last message"
-            };
+            var repeatBtn = MakeFeedbackButton("⟳", tooltip: "Repeat — resend the last message");
             repeatBtn.Click += async (s, e) =>
             {
                 if (_isProcessing || string.IsNullOrEmpty(capturedUserMsg)) return;
@@ -3490,18 +3476,7 @@ STYLE:
             var capturedOp = _correctionTriggerOperation;
             if (capturedOp != null)
             {
-                var correctBtn = new Button
-                {
-                    Content = "\U0001F527",
-                    FontSize = 14,
-                    Padding = new Thickness(6, 2, 6, 2),
-                    Margin = new Thickness(4, 0, 0, 0),
-                    Background = Brushes.Transparent,
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
-                    Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
-                    Cursor = System.Windows.Input.Cursors.Hand,
-                    ToolTip = "I'll correct this in Revit — type 'done' when finished"
-                };
+                var correctBtn = MakeFeedbackButton("\U0001F527", tooltip: "I'll correct this in Revit — type 'done' when finished");
                 correctBtn.Click += (s, e) =>
                 {
                     _correctionWatchActive = true;
