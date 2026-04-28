@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,6 +21,12 @@ namespace RevitMCPBridge2026.AgentFramework
     /// </summary>
     public class AgentCore
     {
+        private static readonly string _pluginVersion =
+            Assembly.GetExecutingAssembly()
+                    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                    ?.InformationalVersion ?? "unknown";
+        private const string _revitVersion = "2026";
+
         private readonly string _apiKey;
         private string _model; // Not readonly - can be changed by budget mode
         private readonly List<ToolDefinition> _tools;
@@ -67,6 +74,7 @@ namespace RevitMCPBridge2026.AgentFramework
         public event Action<string> OnLocalModel;
         public event Action<VerificationResult> OnVerification;
         public event Action<int, int> OnUsage; // cumulative (inputTokens, outputTokens) after each API call
+        public event Action<string> OnChunk;  // streaming text delta — fires per SSE chunk
 
         private string _bimMonkeyApiKey;
 
@@ -154,7 +162,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     output_tokens = _sessionOutputTokens,
                     model = _model,
                     durationMs
-                });
+                }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
             }
         }
 
@@ -401,7 +409,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 _sessionStartSent = true;
                 _sessionStartTime = DateTime.UtcNow;
                 TelemetryService.Track(_bimMonkeyApiKey, "session_start",
-                    revitVersion: "2026", pluginVersion: "v0.3.20260427b");
+                    revitVersion: _revitVersion, pluginVersion: _pluginVersion);
             }
 
             try
@@ -543,7 +551,8 @@ namespace RevitMCPBridge2026.AgentFramework
                             {
                                 var toolMs = (long)(DateTime.UtcNow - toolStart).TotalMilliseconds;
                                 TelemetryService.Track(_bimMonkeyApiKey, "tool_call",
-                                    toolName: block.Name, durationMs: toolMs, success: toolSuccess);
+                                    toolName: block.Name, durationMs: toolMs, success: toolSuccess,
+                                    revitVersion: _revitVersion, pluginVersion: _pluginVersion);
                             }
                         }
                     }
@@ -580,7 +589,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         output_tokens = _sessionOutputTokens,
                         model = _model,
                         durationMs
-                    });
+                    }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
                 }
                 OnComplete?.Invoke();
             }
@@ -599,7 +608,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         output_tokens = _sessionOutputTokens,
                         model = _model,
                         durationMs
-                    });
+                    }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
                 }
                 OnError?.Invoke("Operation cancelled");
             }
@@ -618,9 +627,10 @@ namespace RevitMCPBridge2026.AgentFramework
                         output_tokens = _sessionOutputTokens,
                         model = _model,
                         durationMs
-                    });
+                    }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
                 }
-                TelemetryService.Track(_bimMonkeyApiKey, "api_error", metadata: new { error = ex.Message });
+                TelemetryService.Track(_bimMonkeyApiKey, "api_error", metadata: new { error = ex.Message },
+                    revitVersion: _revitVersion, pluginVersion: _pluginVersion);
                 OnError?.Invoke($"Agent error: {ex.Message}");
             }
         }
@@ -844,7 +854,8 @@ namespace RevitMCPBridge2026.AgentFramework
                         max_tokens = 8192,
                         system = systemPrompt ?? GetDefaultSystemPrompt(),
                         messages = FormatMessagesForAPI(),
-                        tools = FormatToolsForAPI()
+                        tools = FormatToolsForAPI(),
+                        stream = true
                     };
 
                     var json = JsonConvert.SerializeObject(requestBody, new JsonSerializerSettings
@@ -857,22 +868,94 @@ namespace RevitMCPBridge2026.AgentFramework
                     request.ContentType = "application/json";
                     request.Headers.Add("x-api-key", _apiKey);
                     request.Headers.Add("anthropic-version", "2023-06-01");
-                    request.Timeout = 300000; // 5 minutes
+                    request.Timeout = 300000;
 
                     var data = Encoding.UTF8.GetBytes(json);
                     request.ContentLength = data.Length;
 
-                    using (var stream = request.GetRequestStream())
-                    {
-                        stream.Write(data, 0, data.Length);
-                    }
+                    using (var reqStream = request.GetRequestStream())
+                        reqStream.Write(data, 0, data.Length);
+
+                    // SSE streaming parse
+                    var textSb = new StringBuilder();
+                    var toolBlocks = new Dictionary<int, (string Id, string Name, StringBuilder Input)>();
+                    int inputTokens = 0, outputTokens = 0;
+                    string stopReason = null;
 
                     using (var response = (HttpWebResponse)request.GetResponse())
                     using (var reader = new StreamReader(response.GetResponseStream()))
                     {
-                        var responseBody = reader.ReadToEnd();
-                        return JsonConvert.DeserializeObject<ClaudeResponse>(responseBody);
+                        string line;
+                        while ((line = reader.ReadLine()) != null)
+                        {
+                            if (token.IsCancellationRequested) break;
+                            if (!line.StartsWith("data: ")) continue;
+                            var payload = line.Substring(6).Trim();
+                            if (string.IsNullOrEmpty(payload)) continue;
+
+                            JObject evt;
+                            try { evt = JObject.Parse(payload); } catch { continue; }
+
+                            switch (evt["type"]?.ToString())
+                            {
+                                case "message_start":
+                                    inputTokens = evt["message"]?["usage"]?["input_tokens"]?.Value<int>() ?? 0;
+                                    break;
+
+                                case "content_block_start":
+                                {
+                                    var idx = evt["index"]?.Value<int>() ?? 0;
+                                    var block = evt["content_block"];
+                                    if (block?["type"]?.ToString() == "tool_use")
+                                        toolBlocks[idx] = (block["id"]?.ToString() ?? "", block["name"]?.ToString() ?? "", new StringBuilder());
+                                    break;
+                                }
+
+                                case "content_block_delta":
+                                {
+                                    var idx = evt["index"]?.Value<int>() ?? 0;
+                                    var delta = evt["delta"];
+                                    var deltaType = delta?["type"]?.ToString();
+                                    if (deltaType == "text_delta")
+                                    {
+                                        var chunk = delta["text"]?.ToString() ?? "";
+                                        textSb.Append(chunk);
+                                        OnChunk?.Invoke(chunk);
+                                    }
+                                    else if (deltaType == "input_json_delta" && toolBlocks.ContainsKey(idx))
+                                    {
+                                        toolBlocks[idx].Input.Append(delta["partial_json"]?.ToString() ?? "");
+                                    }
+                                    break;
+                                }
+
+                                case "message_delta":
+                                    outputTokens = evt["usage"]?["output_tokens"]?.Value<int>() ?? 0;
+                                    stopReason = evt["delta"]?["stop_reason"]?.ToString();
+                                    break;
+                            }
+                        }
                     }
+
+                    // Assemble ClaudeResponse from accumulated stream data
+                    var content = new List<ContentBlock>();
+                    var fullText = textSb.ToString();
+                    if (fullText.Length > 0)
+                        content.Add(new ContentBlock { Type = "text", Text = fullText });
+
+                    foreach (var kv in toolBlocks)
+                    {
+                        JObject inputObj;
+                        try { inputObj = JObject.Parse(kv.Value.Input.ToString()); } catch { inputObj = new JObject(); }
+                        content.Add(new ContentBlock { Type = "tool_use", Id = kv.Value.Id, Name = kv.Value.Name, Input = inputObj });
+                    }
+
+                    return new ClaudeResponse
+                    {
+                        Content = content,
+                        StopReason = stopReason ?? "end_turn",
+                        Usage = new UsageInfo { InputTokens = inputTokens, OutputTokens = outputTokens }
+                    };
                 }
                 catch (WebException ex)
                 {
@@ -880,9 +963,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (ex.Response != null)
                     {
                         using (var reader = new StreamReader(ex.Response.GetResponseStream()))
-                        {
                             errorBody = reader.ReadToEnd();
-                        }
                     }
                     TelemetryService.Track(_bimMonkeyApiKey, "api_error",
                         metadata: new { error = ex.Message, body = errorBody?.Length > 200 ? errorBody.Substring(0, 200) : errorBody });

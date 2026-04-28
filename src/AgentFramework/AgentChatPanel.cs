@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.IO;
@@ -24,7 +26,9 @@ namespace RevitMCPBridge2026.AgentFramework
     {
         // UI Elements
         private TextBlock _statusText;
+        private TextBlock _elapsedText;
         private TextBlock _tokenText;
+        private TextBlock _costText;
         private TextBlock _timerText;
         private StackPanel _chatHistory;
         private ScrollViewer _chatScrollViewer;
@@ -56,6 +60,18 @@ namespace RevitMCPBridge2026.AgentFramework
         private bool _subscriptionBlocked;
         private string _firmMemory;
         private string _projectNotes;
+
+        // Streaming bubble state
+        private System.Windows.Controls.TextBox _streamingTextBox;
+        private StackPanel _streamingContainer;
+
+        // Global hotkey (Ctrl+B) — open/focus Banana Chat from anywhere in Revit
+        [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+        [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+        private const int    HOTKEY_ID  = 9001;
+        private const uint   MOD_CTRL   = 0x0002;
+        private const uint   VK_B       = 0x42;
+        private HwndSource   _hwndSource;
 
         // Proactive prompting
         private System.Windows.Threading.DispatcherTimer _proactiveTimer;
@@ -141,6 +157,18 @@ namespace RevitMCPBridge2026.AgentFramework
                     "What would you like to do?");
             }
 
+            // Ctrl+Shift+K to clear chat from anywhere in the window
+            PreviewKeyDown += (s, e) =>
+            {
+                if (e.Key == System.Windows.Input.Key.K &&
+                    (System.Windows.Input.Keyboard.Modifiers & (System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Shift))
+                        == (System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Shift))
+                {
+                    e.Handled = true;
+                    ClearChat();
+                }
+            };
+
             // Cleanup and save on close
             Closing += (s, e) =>
             {
@@ -183,6 +211,36 @@ namespace RevitMCPBridge2026.AgentFramework
             Content = mainGrid;
         }
 
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+            var helper = new WindowInteropHelper(this);
+            _hwndSource = HwndSource.FromHwnd(helper.Handle);
+            _hwndSource?.AddHook(WndProc);
+            RegisterHotKey(helper.Handle, HOTKEY_ID, MOD_CTRL, VK_B);
+        }
+
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            const int WM_HOTKEY = 0x0312;
+            if (msg == WM_HOTKEY && wParam.ToInt32() == HOTKEY_ID)
+            {
+                Show();
+                WindowState = WindowState.Normal;
+                Activate();
+                handled = true;
+            }
+            return IntPtr.Zero;
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            var helper = new WindowInteropHelper(this);
+            UnregisterHotKey(helper.Handle, HOTKEY_ID);
+            _hwndSource?.RemoveHook(WndProc);
+            base.OnClosed(e);
+        }
+
         private Border CreateHeader()
         {
             var border = new Border
@@ -211,16 +269,30 @@ namespace RevitMCPBridge2026.AgentFramework
                 FontSize = 12,
                 Margin = new Thickness(0, 4, 0, 0)
             };
-            _tokenText = new TextBlock
+            _elapsedText = new TextBlock
             {
-                Text = "",
                 Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
                 FontSize = 11,
-                Margin = new Thickness(0, 2, 0, 0)
             };
+            _tokenText = new TextBlock
+            {
+                Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
+                FontSize = 11,
+                Margin = new Thickness(10, 0, 0, 0)
+            };
+            _costText = new TextBlock
+            {
+                Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
+                FontSize = 11,
+                Margin = new Thickness(10, 0, 0, 0)
+            };
+            var statsRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 0) };
+            statsRow.Children.Add(_elapsedText);
+            statsRow.Children.Add(_tokenText);
+            statsRow.Children.Add(_costText);
             titleStack.Children.Add(title);
             titleStack.Children.Add(_statusText);
-            titleStack.Children.Add(_tokenText);
+            titleStack.Children.Add(statsRow);
             Grid.SetColumn(titleStack, 0);
             grid.Children.Add(titleStack);
 
@@ -1173,7 +1245,59 @@ namespace RevitMCPBridge2026.AgentFramework
                 // Try to display image if the result contains an image path
                 TryDisplayImageFromResult(msg);
             });
-            _agent.OnResponse += (msg) => Dispatcher.Invoke(() => AddAssistantMessage(msg));
+            _agent.OnChunk += (chunk) => Dispatcher.Invoke(() =>
+            {
+                if (_streamingTextBox == null)
+                {
+                    // First chunk — create the bubble
+                    _streamingContainer = new StackPanel { Margin = new Thickness(8, 8, 50, 8), HorizontalAlignment = HorizontalAlignment.Left };
+                    var border = new Border
+                    {
+                        Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
+                        CornerRadius = new CornerRadius(12, 12, 12, 0),
+                        Padding = new Thickness(12),
+                    };
+                    _streamingTextBox = new System.Windows.Controls.TextBox
+                    {
+                        Text = "",
+                        Foreground = Brushes.White,
+                        FontSize = 14,
+                        FontFamily = new FontFamily("Segoe UI"),
+                        Background = Brushes.Transparent,
+                        BorderThickness = new Thickness(0),
+                        IsReadOnly = true,
+                        TextWrapping = TextWrapping.Wrap,
+                        Padding = new Thickness(0),
+                        Cursor = System.Windows.Input.Cursors.IBeam,
+                        IsTabStop = false,
+                        FocusVisualStyle = null
+                    };
+                    border.Child = _streamingTextBox;
+                    _streamingContainer.Children.Add(border);
+                    _chatHistory.Children.Add(_streamingContainer);
+                }
+                _streamingTextBox.Text += chunk;
+                ScrollToBottom();
+            });
+
+            _agent.OnResponse += (msg) => Dispatcher.Invoke(() =>
+            {
+                if (_streamingTextBox != null)
+                {
+                    // Streaming bubble already exists — set final text and add feedback buttons
+                    _streamingTextBox.Text = msg;
+                    TrackMessage("assistant", msg);
+                    _lastAssistantResponse = msg;
+                    _feedbackMessageIndex++;
+                    AddFeedbackButtons(_streamingContainer, msg, _feedbackMessageIndex);
+                    _streamingTextBox = null;
+                    _streamingContainer = null;
+                }
+                else
+                {
+                    AddAssistantMessage(msg);
+                }
+            });
             _agent.OnError += (msg) => Dispatcher.Invoke(() => { AddErrorMessage(msg); HideProgress(); SetProcessing(false); });
             _agent.OnComplete += () => Dispatcher.Invoke(() => { HideProgress(); SetProcessing(false); });
 
@@ -1183,6 +1307,9 @@ namespace RevitMCPBridge2026.AgentFramework
                 string inStr  = inputTokens  >= 1000 ? $"{inputTokens  / 1000}K" : inputTokens.ToString();
                 string outStr = outputTokens >= 1000 ? $"{outputTokens / 1000}K" : outputTokens.ToString();
                 _tokenText.Text = $"↑ {inStr}  ↓ {outStr}";
+                var cost = EstimateSessionCost(inputTokens, outputTokens, _selectedModel);
+                if (cost.HasValue && _costText != null)
+                    _costText.Text = $"${cost.Value:F2}";
             });
 
             // LOCAL MODEL event - show when qwen2.5:7b is processing
@@ -1287,7 +1414,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
                     client.Timeout = TimeSpan.FromSeconds(10);
-                    var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/verify");
+                    var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/auth/verify");
                     if (!resp.IsSuccessStatusCode) return; // fail open
 
                     var body = await resp.Content.ReadAsStringAsync();
@@ -1303,14 +1430,81 @@ namespace RevitMCPBridge2026.AgentFramework
                         {
                             _subscriptionBlocked = true;
                             _sendButton.IsEnabled = false;
-                            _sendButton.Content = "Subscription expired";
-                            _statusText.Text = "Subscription expired — visit bimmonkey.ai to renew";
+                            _statusText.Text = "Subscription expired";
                             _statusText.Foreground = new SolidColorBrush(Color.FromRgb(220, 80, 80));
+                            ShowSubscriptionBanner();
                         });
                     }
                 }
             }
             catch { /* fail open — network issues should never block plugin */ }
+        }
+
+        private void ShowSubscriptionBanner()
+        {
+            var banner = new Border
+            {
+                Margin = new Thickness(8, 8, 8, 4),
+                Padding = new Thickness(14, 12, 14, 12),
+                Background = new SolidColorBrush(Color.FromRgb(60, 30, 30)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(180, 60, 60)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+            };
+
+            var stack = new StackPanel { Orientation = Orientation.Horizontal };
+
+            var msg = new TextBlock
+            {
+                Text = "Your subscription has expired. ",
+                Foreground = new SolidColorBrush(Color.FromRgb(220, 160, 160)),
+                FontSize = 13,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            var renewBtn = new Button
+            {
+                Content = "Renew subscription →",
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Brushes.White,
+                Background = new SolidColorBrush(Color.FromRgb(180, 60, 60)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(220, 80, 80)),
+                Padding = new Thickness(10, 4, 10, 4),
+                Cursor = System.Windows.Input.Cursors.Hand,
+            };
+            renewBtn.Click += async (s, e) =>
+            {
+                try
+                {
+                    renewBtn.IsEnabled = false;
+                    renewBtn.Content = "Opening...";
+                    using (var client = new System.Net.Http.HttpClient())
+                    {
+                        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                        var payload = new System.Net.Http.StringContent(
+                            "{\"plan\":\"beta_monthly\"}",
+                            System.Text.Encoding.UTF8, "application/json");
+                        var resp = await client.PostAsync(
+                            "https://bimmonkey-production.up.railway.app/api/stripe/checkout", payload);
+                        var body = await resp.Content.ReadAsStringAsync();
+                        var url = JObject.Parse(body)["url"]?.ToString();
+                        if (!string.IsNullOrEmpty(url))
+                            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                    }
+                }
+                catch { }
+                finally
+                {
+                    renewBtn.IsEnabled = true;
+                    renewBtn.Content = "Renew subscription →";
+                }
+            };
+
+            stack.Children.Add(msg);
+            stack.Children.Add(renewBtn);
+            banner.Child = stack;
+            _chatHistory.Children.Insert(0, banner);
         }
 
         private async Task FetchFirmStandardsAsync()
@@ -2845,7 +3039,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private async void InputTextBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)  // hooked as PreviewKeyDown
         {
             // Ctrl+Enter or just Enter (when not holding Shift) to submit
-            if (e.Key == System.Windows.Input.Key.Enter && !_isProcessing)
+            if (e.Key == System.Windows.Input.Key.Enter && !_isProcessing && !_subscriptionBlocked)
             {
                 bool ctrlPressed = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0;
                 bool shiftPressed = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0;
@@ -2863,7 +3057,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private async Task SendMessage()
         {
             var message = _inputTextBox.Text.Trim();
-            if (string.IsNullOrEmpty(message) || _isProcessing) return;
+            if (string.IsNullOrEmpty(message) || _isProcessing || _subscriptionBlocked) return;
 
             // Track for feedback context
             _lastUserMessage = message;
@@ -3000,7 +3194,11 @@ STYLE:
             _chatHistory.Children.Clear();
             _agent?.ClearHistory();
             _sessionMessages.Clear();
+            if (_elapsedText != null) _elapsedText.Text = "";
             if (_tokenText != null) _tokenText.Text = "";
+            if (_costText != null) _costText.Text = "";
+            _streamingTextBox = null;
+            _streamingContainer = null;
             AddAssistantMessage("Chat cleared. How can I help you?");
         }
 
@@ -3043,7 +3241,7 @@ STYLE:
                 CornerRadius = new CornerRadius(12, 12, 0, 12),
                 Padding = new Thickness(12),
                 Margin = new Thickness(50, 8, 8, 8),
-                HorizontalAlignment = HorizontalAlignment.Right
+                HorizontalAlignment = HorizontalAlignment.Right,
             };
             border.Child = SelectableText(text, Brushes.White);
             _chatHistory.Children.Add(border);
@@ -3067,12 +3265,18 @@ STYLE:
             {
                 Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
                 CornerRadius = new CornerRadius(12, 12, 12, 0),
-                Padding = new Thickness(12)
+                Padding = new Thickness(12),
             };
             border.Child = SelectableText(text, Brushes.White);
             container.Children.Add(border);
 
-            // Feedback buttons (thumbs up/down)
+            AddFeedbackButtons(container, text, messageIndex);
+            _chatHistory.Children.Add(container);
+            ScrollToBottom();
+        }
+
+        private void AddFeedbackButtons(StackPanel container, string assistMsg, int messageIndex)
+        {
             var feedbackPanel = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
@@ -3080,12 +3284,9 @@ STYLE:
                 HorizontalAlignment = HorizontalAlignment.Left
             };
 
-            // Store context for this message
             var userMsg = _lastUserMessage;
-            var assistMsg = text;
             var toolCall = _lastToolCall;
 
-            // Thumbs up button
             var thumbsUp = new Button
             {
                 Content = "\U0001F44D",
@@ -3101,7 +3302,6 @@ STYLE:
             thumbsUp.Click += (s, e) => OnThumbsUp(userMsg, assistMsg, (Button)s, feedbackPanel);
             feedbackPanel.Children.Add(thumbsUp);
 
-            // Thumbs down button
             var thumbsDown = new Button
             {
                 Content = "\U0001F44E",
@@ -3116,9 +3316,28 @@ STYLE:
             thumbsDown.Click += (s, e) => OnThumbsDown(userMsg, assistMsg, toolCall, (Button)s, feedbackPanel);
             feedbackPanel.Children.Add(thumbsDown);
 
+            var copyBtn = new Button
+            {
+                Content = "\U0001F4CB",
+                FontSize = 14,
+                Padding = new Thickness(6, 2, 6, 2),
+                Margin = new Thickness(4, 0, 0, 0),
+                Background = Brushes.Transparent,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
+                Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                ToolTip = "Copy"
+            };
+            copyBtn.Click += (s, e) =>
+            {
+                System.Windows.Clipboard.SetText(assistMsg);
+                copyBtn.Content = "✅";
+                var t = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+                t.Tick += (ts, te) => { copyBtn.Content = "\U0001F4CB"; t.Stop(); };
+                t.Start();
+            };
+            feedbackPanel.Children.Add(copyBtn);
             container.Children.Add(feedbackPanel);
-            _chatHistory.Children.Add(container);
-            ScrollToBottom();
         }
 
         private void OnThumbsUp(string userMsg, string assistMsg, Button button, StackPanel panel)
@@ -3437,21 +3656,29 @@ STYLE:
             _progressPanel.Visibility = Visibility.Visible;
             _progressTitle.Text = title;
             _progressDetail.Text = "";
-            _thinkingStartTime = DateTime.Now;
-            if (_thinkingTimer == null)
+            // Only (re)start the timer if it isn't already running — OnThinking fires on every
+            // tool loop and must not reset the start time mid-session.
+            bool alreadyRunning = _thinkingTimer != null && _thinkingTimer.IsEnabled;
+            if (!alreadyRunning)
             {
-                _thinkingTimer = new System.Windows.Threading.DispatcherTimer
+                _thinkingStartTime = DateTime.Now;
+                if (_thinkingTimer == null)
                 {
-                    Interval = TimeSpan.FromSeconds(1)
-                };
-                _thinkingTimer.Tick += (s, e) =>
-                {
-                    var elapsed = (int)(DateTime.Now - _thinkingStartTime).TotalSeconds;
-                    _timerText.Text = $"{elapsed}s";
-                };
+                    _thinkingTimer = new System.Windows.Threading.DispatcherTimer
+                    {
+                        Interval = TimeSpan.FromSeconds(1)
+                    };
+                    _thinkingTimer.Tick += (s, e) =>
+                    {
+                        var elapsed = (int)(DateTime.Now - _thinkingStartTime).TotalSeconds;
+                        _timerText.Text = $"{elapsed}s";
+                        if (_elapsedText != null) _elapsedText.Text = $"{elapsed} s";
+                    };
+                }
+                _timerText.Text = "0s";
+                if (_elapsedText != null) _elapsedText.Text = "0 s";
+                _thinkingTimer.Start();
             }
-            _timerText.Text = "0s";
-            _thinkingTimer.Start();
         }
 
         private void UpdateProgress(string detail)
@@ -3464,6 +3691,8 @@ STYLE:
             _progressPanel.Visibility = Visibility.Collapsed;
             _thinkingTimer?.Stop();
             if (_timerText != null) _timerText.Text = "";
+            var elapsed = (int)(DateTime.Now - _thinkingStartTime).TotalSeconds;
+            if (_elapsedText != null) _elapsedText.Text = $"{elapsed} s";
         }
 
         private void SetProcessing(bool isProcessing)
