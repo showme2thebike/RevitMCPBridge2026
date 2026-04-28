@@ -401,7 +401,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 _sessionStartSent = true;
                 _sessionStartTime = DateTime.UtcNow;
                 TelemetryService.Track(_bimMonkeyApiKey, "session_start",
-                    revitVersion: "2026", pluginVersion: "v0.3.20260427a");
+                    revitVersion: "2026", pluginVersion: "v0.3.20260427b");
             }
 
             try
