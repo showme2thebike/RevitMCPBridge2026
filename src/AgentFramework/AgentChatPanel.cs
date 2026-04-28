@@ -3630,13 +3630,18 @@ STYLE:
                 var issue = issueBox.Text;
                 if (!string.IsNullOrWhiteSpace(issue))
                 {
-                    // Store the correction
                     _agent?.ReportCorrection(
                         whatWasAttempted: $"User asked: {userMsg}",
                         whatWentWrong: issue,
                         correctApproach: "User feedback - needs improvement"
                     );
-
+                    _ = SyncCorrectionToBackendAsync(
+                        whatISaid:       $"User asked: {userMsg}",
+                        whatWasWrong:    issue,
+                        correctApproach: "User feedback — needs improvement",
+                        category:        "user_reported",
+                        project:         _sessionProjectName
+                    );
                     AddToolMessage("Thanks for the feedback! I'll learn from this.", true);
                 }
                 dialog.Close();
