@@ -3497,8 +3497,8 @@ STYLE:
                     Padding = new Thickness(6, 2, 6, 2),
                     Margin = new Thickness(4, 0, 0, 0),
                     Background = Brushes.Transparent,
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(90, 70, 40)),
-                    Foreground = new SolidColorBrush(Color.FromRgb(180, 140, 80)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
                     Cursor = System.Windows.Input.Cursors.Hand,
                     ToolTip = "I'll correct this in Revit — type 'done' when finished"
                 };
