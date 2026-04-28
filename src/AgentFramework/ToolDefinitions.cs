@@ -446,6 +446,21 @@ Captures key outcomes, decisions, problems solved, and next steps.",
                         properties = new { },
                         required = new string[] { }
                     }
+                },
+                new ToolDefinition
+                {
+                    Name = "projectNoteStore",
+                    Description = @"Store a project-specific note to the BIM Monkey backend. Use this for important project decisions, Barrett's stated preferences for this project, or things to remember across sessions for this specific project. Notes are loaded at session start for the active project.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            note = new { type = "string", description = "The note content to store" },
+                            project = new { type = "string", description = "Project name (defaults to current Revit file name)" }
+                        },
+                        required = new[] { "note" }
+                    }
                 }
             };
         }

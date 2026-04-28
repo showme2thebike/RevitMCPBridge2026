@@ -64,10 +64,18 @@ namespace RevitMCPBridge2026.AgentFramework
         public event Action<string> OnResponse;
         public event Action<string> OnError;
         public event Action OnComplete;
-        public event Action<string> OnLocalModel; // New event for local model usage
-        public event Action<VerificationResult> OnVerification; // Result verification events
+        public event Action<string> OnLocalModel;
+        public event Action<VerificationResult> OnVerification;
+        public event Action<int, int> OnUsage; // cumulative (inputTokens, outputTokens) after each API call
 
         private string _bimMonkeyApiKey;
+
+        // Session-level token and timing tracking
+        private int _sessionInputTokens = 0;
+        private int _sessionOutputTokens = 0;
+        private DateTime _runStartTime;
+        private string _currentStage = "thinking";
+        private string _lastToolName = null;
 
         public AgentCore(string apiKey, string model = "claude-sonnet-4-6", string bimMonkeyApiKey = null)
         {
@@ -347,6 +355,11 @@ namespace RevitMCPBridge2026.AgentFramework
             _cancellationTokenSource = new CancellationTokenSource();
             var token = _cancellationTokenSource.Token;
 
+            // Per-run state reset
+            _runStartTime = DateTime.UtcNow;
+            _currentStage = "thinking";
+            _lastToolName = null;
+
             try
             {
                 // ============================================================
@@ -354,7 +367,6 @@ namespace RevitMCPBridge2026.AgentFramework
                 // ============================================================
                 if (_useLocalModel && await TryLocalModelAsync(userMessage, token))
                 {
-                    // Local model handled it successfully
                     OnComplete?.Invoke();
                     return;
                 }
@@ -389,10 +401,19 @@ namespace RevitMCPBridge2026.AgentFramework
                 while (iteration < maxIterations && !token.IsCancellationRequested)
                 {
                     iteration++;
+                    _currentStage = "thinking";
                     OnThinking?.Invoke($"Thinking... (step {iteration})");
 
                     var response = await CallClaudeAsync(systemPrompt, token);
                     if (response == null) break;
+
+                    // Accumulate token usage and notify UI
+                    if (response.Usage != null)
+                    {
+                        _sessionInputTokens += response.Usage.InputTokens;
+                        _sessionOutputTokens += response.Usage.OutputTokens;
+                        OnUsage?.Invoke(_sessionInputTokens, _sessionOutputTokens);
+                    }
 
                     var assistantContent = new List<ContentBlock>();
                     bool hasToolUse = false;
@@ -402,6 +423,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     {
                         if (block.Type == "text")
                         {
+                            _currentStage = "responding";
                             OnResponse?.Invoke(block.Text);
                             assistantContent.Add(block);
                         }
@@ -409,9 +431,13 @@ namespace RevitMCPBridge2026.AgentFramework
                         {
                             hasToolUse = true;
                             assistantContent.Add(block);
+                            _currentStage = "executing";
+                            _lastToolName = block.Name;
 
                             OnToolCall?.Invoke($"Calling: {block.Name}");
 
+                            var toolStart = DateTime.UtcNow;
+                            bool toolSuccess = true;
                             try
                             {
                                 var result = await _executeToolAsync(block.Name, block.Input);
@@ -432,7 +458,6 @@ namespace RevitMCPBridge2026.AgentFramework
 
                                         OnVerification?.Invoke(verification);
 
-                                        // Add verification status to result for Claude to see
                                         if (!verification.Verified)
                                         {
                                             parsed["_verification"] = JObject.FromObject(new
@@ -442,7 +467,6 @@ namespace RevitMCPBridge2026.AgentFramework
                                             });
                                             result = parsed.ToString();
 
-                                            // Auto-learn from verification failures
                                             _correctionLearner?.StoreFromVerification(
                                                 verification,
                                                 block.Name,
@@ -461,6 +485,7 @@ namespace RevitMCPBridge2026.AgentFramework
                             }
                             catch (Exception ex)
                             {
+                                toolSuccess = false;
                                 OnToolResult?.Invoke($"✗ {block.Name} failed: {ex.Message}");
                                 toolResults.Add(new ToolResultBlock
                                 {
@@ -469,6 +494,12 @@ namespace RevitMCPBridge2026.AgentFramework
                                     Content = JsonConvert.SerializeObject(new { error = ex.Message }),
                                     IsError = true
                                 });
+                            }
+                            finally
+                            {
+                                var toolMs = (long)(DateTime.UtcNow - toolStart).TotalMilliseconds;
+                                TelemetryService.Track(_bimMonkeyApiKey, "tool_call",
+                                    toolName: block.Name, durationMs: toolMs, success: toolSuccess);
                             }
                         }
                     }
@@ -491,14 +522,45 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (response.StopReason == "end_turn") break;
                 }
 
+                var runMs = (long)(DateTime.UtcNow - _runStartTime).TotalMilliseconds;
+                TelemetryService.Track(_bimMonkeyApiKey, "session_outcome", metadata: new
+                {
+                    outcome = "completed",
+                    stage = _currentStage,
+                    last_tool = _lastToolName,
+                    input_tokens = _sessionInputTokens,
+                    output_tokens = _sessionOutputTokens,
+                    durationMs = runMs
+                });
                 OnComplete?.Invoke();
             }
             catch (OperationCanceledException)
             {
+                var runMs = (long)(DateTime.UtcNow - _runStartTime).TotalMilliseconds;
+                TelemetryService.Track(_bimMonkeyApiKey, "session_outcome", metadata: new
+                {
+                    outcome = "interrupted",
+                    stage = _currentStage,
+                    last_tool = _lastToolName,
+                    input_tokens = _sessionInputTokens,
+                    output_tokens = _sessionOutputTokens,
+                    durationMs = runMs
+                });
                 OnError?.Invoke("Operation cancelled");
             }
             catch (Exception ex)
             {
+                var runMs = (long)(DateTime.UtcNow - _runStartTime).TotalMilliseconds;
+                TelemetryService.Track(_bimMonkeyApiKey, "session_outcome", metadata: new
+                {
+                    outcome = "error",
+                    stage = _currentStage,
+                    last_tool = _lastToolName,
+                    input_tokens = _sessionInputTokens,
+                    output_tokens = _sessionOutputTokens,
+                    durationMs = runMs
+                });
+                TelemetryService.Track(_bimMonkeyApiKey, "api_error", metadata: new { error = ex.Message });
                 OnError?.Invoke($"Agent error: {ex.Message}");
             }
         }
@@ -762,11 +824,14 @@ namespace RevitMCPBridge2026.AgentFramework
                             errorBody = reader.ReadToEnd();
                         }
                     }
+                    TelemetryService.Track(_bimMonkeyApiKey, "api_error",
+                        metadata: new { error = ex.Message, body = errorBody?.Length > 200 ? errorBody.Substring(0, 200) : errorBody });
                     OnError?.Invoke($"API Error: {ex.Message} - {errorBody}");
                     return null;
                 }
                 catch (Exception ex)
                 {
+                    TelemetryService.Track(_bimMonkeyApiKey, "api_error", metadata: new { error = ex.Message });
                     OnError?.Invoke($"HTTP Error: {ex.Message}");
                     return null;
                 }
@@ -897,6 +962,15 @@ Rules:
         public bool IsError { get; set; }
     }
 
+    public class UsageInfo
+    {
+        [JsonProperty("input_tokens")]
+        public int InputTokens { get; set; }
+
+        [JsonProperty("output_tokens")]
+        public int OutputTokens { get; set; }
+    }
+
     public class ClaudeResponse
     {
         [JsonProperty("id")]
@@ -907,6 +981,9 @@ Rules:
 
         [JsonProperty("stop_reason")]
         public string StopReason { get; set; }
+
+        [JsonProperty("usage")]
+        public UsageInfo Usage { get; set; }
     }
 
     public class ToolDefinition

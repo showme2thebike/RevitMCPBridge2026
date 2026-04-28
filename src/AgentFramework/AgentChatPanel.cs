@@ -24,6 +24,8 @@ namespace RevitMCPBridge2026.AgentFramework
     {
         // UI Elements
         private TextBlock _statusText;
+        private TextBlock _tokenText;
+        private TextBlock _timerText;
         private StackPanel _chatHistory;
         private ScrollViewer _chatScrollViewer;
         private System.Windows.Controls.TextBox _inputTextBox;
@@ -32,6 +34,8 @@ namespace RevitMCPBridge2026.AgentFramework
         private Border _progressPanel;
         private TextBlock _progressTitle;
         private TextBlock _progressDetail;
+        private System.Windows.Threading.DispatcherTimer _thinkingTimer;
+        private DateTime _thinkingStartTime;
 
         // Agent
         private AgentCore _agent;
@@ -48,6 +52,10 @@ namespace RevitMCPBridge2026.AgentFramework
             Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
             "BIM Monkey", "preferences.json");
         private bool _isProcessing;
+        private bool _isClosing;
+        private bool _subscriptionBlocked;
+        private string _firmMemory;
+        private string _projectNotes;
 
         // Proactive prompting
         private System.Windows.Threading.DispatcherTimer _proactiveTimer;
@@ -136,8 +144,10 @@ namespace RevitMCPBridge2026.AgentFramework
             // Cleanup and save on close
             Closing += (s, e) =>
             {
+                _isClosing = true;
                 SaveSession();
                 DisconnectMCP();
+                _thinkingTimer?.Stop();
             };
         }
 
@@ -200,8 +210,16 @@ namespace RevitMCPBridge2026.AgentFramework
                 FontSize = 12,
                 Margin = new Thickness(0, 4, 0, 0)
             };
+            _tokenText = new TextBlock
+            {
+                Text = "",
+                Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
+                FontSize = 11,
+                Margin = new Thickness(0, 2, 0, 0)
+            };
             titleStack.Children.Add(title);
             titleStack.Children.Add(_statusText);
+            titleStack.Children.Add(_tokenText);
             Grid.SetColumn(titleStack, 0);
             grid.Children.Add(titleStack);
 
@@ -274,17 +292,33 @@ namespace RevitMCPBridge2026.AgentFramework
                 Foreground = new SolidColorBrush(Color.FromRgb(0, 120, 212))
             };
 
+            // Detail row: progress detail text + elapsed timer side by side
+            var detailRow = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+            detailRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            detailRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
             _progressDetail = new TextBlock
             {
                 Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160)),
                 FontSize = 12,
-                Margin = new Thickness(0, 8, 0, 0),
                 TextWrapping = TextWrapping.Wrap
             };
+            Grid.SetColumn(_progressDetail, 0);
+            detailRow.Children.Add(_progressDetail);
+
+            _timerText = new TextBlock
+            {
+                Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
+                FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(8, 0, 0, 0)
+            };
+            Grid.SetColumn(_timerText, 1);
+            detailRow.Children.Add(_timerText);
 
             stack.Children.Add(_progressTitle);
             stack.Children.Add(progressBar);
-            stack.Children.Add(_progressDetail);
+            stack.Children.Add(detailRow);
             border.Child = stack;
 
             return border;
@@ -1142,6 +1176,13 @@ namespace RevitMCPBridge2026.AgentFramework
             _agent.OnError += (msg) => Dispatcher.Invoke(() => { AddErrorMessage(msg); HideProgress(); SetProcessing(false); });
             _agent.OnComplete += () => Dispatcher.Invoke(() => { HideProgress(); SetProcessing(false); });
 
+            // TOKEN USAGE — update display after every Claude API call
+            _agent.OnUsage += (inputTokens, outputTokens) => Dispatcher.Invoke(() =>
+            {
+                var totalK = (inputTokens + outputTokens) / 1000.0;
+                _tokenText.Text = $"~{totalK:F1}K tokens this session";
+            });
+
             // LOCAL MODEL event - show when qwen2.5:7b is processing
             _agent.OnLocalModel += (msg) => Dispatcher.Invoke(() => {
                 UpdateProgress(msg);
@@ -1167,6 +1208,14 @@ namespace RevitMCPBridge2026.AgentFramework
             });
 
             _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
+
+            // Fire-and-forget: session start telemetry + subscription gate
+            if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
+            {
+                TelemetryService.Track(_bimMonkeyApiKey, "session_start",
+                    revitVersion: "2026", pluginVersion: "v0.3.20260427a");
+                _ = CheckSubscriptionAsync();
+            }
 
             // Fetch firm standards in the background — injected into every prompt once loaded
             if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
@@ -1227,6 +1276,45 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { /* never crash the UI */ }
         }
 
+        /// <summary>
+        /// Check subscription status via /api/verify. Blocks the send button if expired or cancelled.
+        /// Fails open on network error — no BimMonkey key should not block plugin use.
+        /// </summary>
+        private async Task CheckSubscriptionAsync()
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    client.Timeout = TimeSpan.FromSeconds(10);
+                    var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/verify");
+                    if (!resp.IsSuccessStatusCode) return; // fail open
+
+                    var body = await resp.Content.ReadAsStringAsync();
+                    var obj = JObject.Parse(body);
+                    var status = obj["subscriptionStatus"]?.ToString();
+
+                    // Block if explicitly expired or cancelled — not on trial or active
+                    bool blocked = (status == "expired" || status == "cancelled");
+
+                    if (blocked)
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            _subscriptionBlocked = true;
+                            _sendButton.IsEnabled = false;
+                            _sendButton.Content = "Subscription expired";
+                            _statusText.Text = "Subscription expired — visit bimmonkey.ai to renew";
+                            _statusText.Foreground = new SolidColorBrush(Color.FromRgb(220, 80, 80));
+                        });
+                    }
+                }
+            }
+            catch { /* fail open — network issues should never block plugin */ }
+        }
+
         private async Task FetchFirmStandardsAsync()
         {
             if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
@@ -1278,6 +1366,36 @@ namespace RevitMCPBridge2026.AgentFramework
                         {
                             _librarySummary = summary;
                             System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Library summary loaded ({summary.Length} chars)");
+                        }
+                    }
+
+                    // 4. Firm memory — persistent facts and preferences stored across sessions
+                    var memResp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/firms/memory");
+                    if (memResp.IsSuccessStatusCode)
+                    {
+                        var memBody = await memResp.Content.ReadAsStringAsync();
+                        var memObj  = JObject.Parse(memBody);
+                        var memory  = memObj["memory"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(memory))
+                        {
+                            _firmMemory = memory;
+                            System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Firm memory loaded ({memory.Length} chars)");
+                        }
+                    }
+
+                    // 5. Project notes — scoped to the current Revit file name
+                    var projectName = _sessionProjectName ?? "Unknown";
+                    var notesResp = await client.GetAsync(
+                        $"https://bimmonkey-production.up.railway.app/api/firms/project-notes?project={Uri.EscapeDataString(projectName)}");
+                    if (notesResp.IsSuccessStatusCode)
+                    {
+                        var notesBody = await notesResp.Content.ReadAsStringAsync();
+                        var notesObj  = JObject.Parse(notesBody);
+                        var notes     = notesObj["notes"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(notes))
+                        {
+                            _projectNotes = notes;
+                            System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Project notes loaded ({notes.Length} chars)");
                         }
                     }
                 }
@@ -1564,6 +1682,12 @@ namespace RevitMCPBridge2026.AgentFramework
             if (fileResult != null)
             {
                 return fileResult;
+            }
+
+            // Handle project note storage (backend-synced)
+            if (methodName == "projectNoteStore")
+            {
+                return await HandleProjectNoteStoreAsync(parameters);
             }
 
             // Handle memory tools locally
@@ -2233,6 +2357,79 @@ namespace RevitMCPBridge2026.AgentFramework
 
         #endregion
 
+        #region Backend Memory Sync
+
+        /// <summary>
+        /// POST a project note to /api/firms/project-notes and update the in-memory cache.
+        /// </summary>
+        private async Task<string> HandleProjectNoteStoreAsync(JObject parameters)
+        {
+            var note = parameters?["note"]?.ToString();
+            if (string.IsNullOrEmpty(note))
+                return JsonConvert.SerializeObject(new { success = false, error = "note is required" });
+
+            var project = parameters?["project"]?.ToString() ?? _sessionProjectName ?? "Unknown";
+
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+                return JsonConvert.SerializeObject(new { success = false, error = "No BIM Monkey API key — cannot sync to backend" });
+
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    client.Timeout = TimeSpan.FromSeconds(10);
+
+                    var body = JsonConvert.SerializeObject(new { project, note });
+                    var content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
+                    var resp = await client.PostAsync(
+                        "https://bimmonkey-production.up.railway.app/api/firms/project-notes", content);
+
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        // Append to in-session cache so next prompt sees it
+                        _projectNotes = string.IsNullOrWhiteSpace(_projectNotes)
+                            ? note
+                            : _projectNotes + "\n- " + note;
+                        return JsonConvert.SerializeObject(new { success = true, message = "Project note stored" });
+                    }
+                    var errorBody = await resp.Content.ReadAsStringAsync();
+                    return JsonConvert.SerializeObject(new { success = false, error = $"Backend error: {errorBody}" });
+                }
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { success = false, error = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// POST a firm-level memory note to /api/firms/memory.
+        /// Called automatically when memoryStore is used with memoryType "firm" or importance >= 8.
+        /// </summary>
+        private async Task SyncMemoryToBackendAsync(string content, string memoryType, int importance)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+            // Only sync high-importance or explicitly firm-scoped memories
+            if (memoryType != "firm" && importance < 8) return;
+
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    client.Timeout = TimeSpan.FromSeconds(10);
+                    var body = JsonConvert.SerializeObject(new { note = content });
+                    var httpContent = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
+                    await client.PostAsync(
+                        "https://bimmonkey-production.up.railway.app/api/firms/memory", httpContent);
+                }
+            }
+            catch { /* fire and forget */ }
+        }
+
+        #endregion
+
         #region Memory Operation Handlers
 
         // Memory storage file path - use user's home directory for portability
@@ -2318,13 +2515,16 @@ namespace RevitMCPBridge2026.AgentFramework
                 return JsonConvert.SerializeObject(new { success = false, error = "content is required" });
             }
 
+            var memoryType = parameters?["memoryType"]?.ToString() ?? "context";
+            var importance  = parameters?["importance"]?.ToObject<int>() ?? 5;
+
             var memory = new MemoryItem
             {
                 Id = Guid.NewGuid().ToString("N").Substring(0, 8),
                 Content = content,
-                MemoryType = parameters?["memoryType"]?.ToString() ?? "context",
+                MemoryType = memoryType,
                 Project = parameters?["project"]?.ToString(),
-                Importance = parameters?["importance"]?.ToObject<int>() ?? 5,
+                Importance = importance,
                 Tags = parameters?["tags"]?.ToObject<List<string>>() ?? new List<string>(),
                 CreatedAt = DateTime.Now,
                 Source = "revit-ai"
@@ -2333,6 +2533,9 @@ namespace RevitMCPBridge2026.AgentFramework
             var memories = LoadMemories();
             memories.Add(memory);
             SaveMemories(memories);
+
+            // Sync high-importance or firm-scoped memories to the backend
+            _ = SyncMemoryToBackendAsync(content, memoryType, importance);
 
             return JsonConvert.SerializeObject(new
             {
@@ -2649,6 +2852,9 @@ namespace RevitMCPBridge2026.AgentFramework
             SetProcessing(true);
             ShowProgress("Thinking...");
 
+            // Telemetry: track that the user sent a message
+            TelemetryService.Track(_bimMonkeyApiKey, "chat_message");
+
             try
             {
                 var projectName = _uiApp?.ActiveUIDocument?.Document?.Title ?? "Unknown";
@@ -2677,6 +2883,14 @@ namespace RevitMCPBridge2026.AgentFramework
                     ? ""
                     : $"\n\nMEMORY FROM PREVIOUS SESSIONS (what you learned and did last time):\n{_memoryContext}\n";
 
+                var firmMemoryBlock = string.IsNullOrWhiteSpace(_firmMemory)
+                    ? ""
+                    : $"\n\nFIRM MEMORY (persistent facts and preferences stored for this firm):\n{_firmMemory}\n";
+
+                var projectNotesBlock = string.IsNullOrWhiteSpace(_projectNotes)
+                    ? ""
+                    : $"\n\nPROJECT NOTES FOR '{projectName}' (stored from previous sessions on this project):\n{_projectNotes}\n";
+
                 var persistentIntelBlock = "\n\nPERSISTENT INTELLIGENCE — CRITICAL:\n" +
                     "You have a memory system that survives across sessions. Use it constantly.\n\n" +
                     "STORE A CORRECTION immediately when:\n" +
@@ -2697,7 +2911,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     "- When Barrett mentions a project: memoryRecall with the project name\n\n" +
                     "The goal: Barrett should never have to tell you the same thing twice.\n";
 
-                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{memoryBlock}{persistentIntelBlock}
+                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{memoryBlock}{firmMemoryBlock}{projectNotesBlock}{persistentIntelBlock}
 
 CURRENT PROJECT: {projectName}
 
@@ -3200,6 +3414,21 @@ STYLE:
             _progressPanel.Visibility = Visibility.Visible;
             _progressTitle.Text = title;
             _progressDetail.Text = "";
+            _thinkingStartTime = DateTime.Now;
+            if (_thinkingTimer == null)
+            {
+                _thinkingTimer = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = TimeSpan.FromSeconds(1)
+                };
+                _thinkingTimer.Tick += (s, e) =>
+                {
+                    var elapsed = (int)(DateTime.Now - _thinkingStartTime).TotalSeconds;
+                    _timerText.Text = $"{elapsed}s";
+                };
+            }
+            _timerText.Text = "0s";
+            _thinkingTimer.Start();
         }
 
         private void UpdateProgress(string detail)
@@ -3210,14 +3439,17 @@ STYLE:
         private void HideProgress()
         {
             _progressPanel.Visibility = Visibility.Collapsed;
+            _thinkingTimer?.Stop();
+            if (_timerText != null) _timerText.Text = "";
         }
 
         private void SetProcessing(bool isProcessing)
         {
             _isProcessing = isProcessing;
-            _sendButton.IsEnabled = !isProcessing;
+            _sendButton.IsEnabled = !isProcessing && !_subscriptionBlocked;
             _stopButton.Visibility = isProcessing ? Visibility.Visible : Visibility.Collapsed;
-            _statusText.Text = isProcessing ? "Processing..." : "Ready";
+            if (!_subscriptionBlocked)
+                _statusText.Text = isProcessing ? "Processing..." : $"Connected ({GetModelDisplayName(_selectedModel)})";
         }
 
         private void ScrollToBottom()
