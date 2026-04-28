@@ -3464,16 +3464,38 @@ STYLE:
             };
             feedbackPanel.Children.Add(copyBtn);
 
-            // "I'll correct this" — only shown after write ops; arms the correction watcher
+            // ⟳ Repeat — resend the last user message (useful when server didn't push through)
+            var capturedUserMsg = userMsg;
+            var repeatBtn = new Button
+            {
+                Content = "⟳",
+                FontSize = 14,
+                Padding = new Thickness(6, 2, 6, 2),
+                Margin = new Thickness(4, 0, 0, 0),
+                Background = Brushes.Transparent,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
+                Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                ToolTip = "Repeat — resend the last message"
+            };
+            repeatBtn.Click += async (s, e) =>
+            {
+                if (_isProcessing || string.IsNullOrEmpty(capturedUserMsg)) return;
+                _inputTextBox.Text = capturedUserMsg;
+                await SendMessage();
+            };
+            feedbackPanel.Children.Add(repeatBtn);
+
+            // 🔧 Correct — only shown after write ops; arms the correction watcher
             var capturedOp = _correctionTriggerOperation;
             if (capturedOp != null)
             {
                 var correctBtn = new Button
                 {
-                    Content = "✎ correct",
-                    FontSize = 12,
+                    Content = "\U0001F527",
+                    FontSize = 14,
                     Padding = new Thickness(6, 2, 6, 2),
-                    Margin = new Thickness(8, 0, 0, 0),
+                    Margin = new Thickness(4, 0, 0, 0),
                     Background = Brushes.Transparent,
                     BorderBrush = new SolidColorBrush(Color.FromRgb(90, 70, 40)),
                     Foreground = new SolidColorBrush(Color.FromRgb(180, 140, 80)),
@@ -3485,7 +3507,7 @@ STYLE:
                     _correctionWatchActive = true;
                     _correctionWatchStart = DateTime.Now;
                     _correctionTriggerOperation = capturedOp;
-                    correctBtn.Content = "👁 watching";
+                    correctBtn.Content = "\U0001F440";
                     correctBtn.IsEnabled = false;
                     AddSystemMessage("Watching — make your corrections in Revit, then type 'done' when you're finished.");
                 };
