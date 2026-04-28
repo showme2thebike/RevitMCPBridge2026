@@ -485,21 +485,6 @@ Captures key outcomes, decisions, problems solved, and next steps.",
                         properties = new { },
                         required = new string[] { }
                     }
-                },
-                new ToolDefinition
-                {
-                    Name = "projectNoteStore",
-                    Description = @"Store a project-specific note to the BIM Monkey backend. Use this for important project decisions, Barrett's stated preferences for this project, or things to remember across sessions for this specific project. Notes are loaded at session start for the active project.",
-                    InputSchema = new
-                    {
-                        type = "object",
-                        properties = new
-                        {
-                            note = new { type = "string", description = "The note content to store" },
-                            project = new { type = "string", description = "Project name (defaults to current Revit file name)" }
-                        },
-                        required = new[] { "note" }
-                    }
                 }
             };
         }
@@ -1161,37 +1146,6 @@ Use getViews with compact=false only when you need crop dimensions, phase, templ
                             viewId = new { type = "integer", description = "View ID (optional, uses active view)" },
                             width = new { type = "integer", description = "Image width in pixels" },
                             height = new { type = "integer", description = "Image height in pixels" }
-                        },
-                        required = new string[] { }
-                    }
-                },
-                new ToolDefinition
-                {
-                    Name = "analyzeView",
-                    Description = "VISUAL VERIFICATION: Capture the current view/sheet and analyze it with AI vision. Use this to SEE what you've done and verify it worked correctly. Call this after placing elements to confirm they appear correctly.",
-                    InputSchema = new
-                    {
-                        type = "object",
-                        properties = new
-                        {
-                            viewId = new { type = "integer", description = "View or sheet ID to analyze (optional, uses active view)" },
-                            question = new { type = "string", description = "What to look for or verify (e.g., 'Are the viewports placed correctly?', 'Is the drafting view visible on the sheet?')" }
-                        },
-                        required = new[] { "question" }
-                    }
-                },
-                new ToolDefinition
-                {
-                    Name = "compareViewToLibrary",
-                    Description = "VISUAL QC: Capture the current Revit view and compare it side-by-side against a library reference using AI vision. Use this to verify generated drawings match approved firm standards. Returns a detailed analysis of what matches, what differs, and any quality issues.",
-                    InputSchema = new
-                    {
-                        type = "object",
-                        properties = new
-                        {
-                            viewId = new { type = "integer", description = "View or sheet ID to compare (optional, uses active view)" },
-                            libraryUrl = new { type = "string", description = "URL of the library reference page to screenshot (e.g. https://app.bimmonkey.ai/library/project/123/sheet/456). Defaults to /library." },
-                            question = new { type = "string", description = "What to compare or verify (e.g. 'Does this floor plan match the approved layout?')" }
                         },
                         required = new string[] { }
                     }
