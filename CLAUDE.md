@@ -26,11 +26,25 @@ powershell.exe -Command "Compress-Archive -Path 'dist/BimMonkeySetup.exe' -Desti
 cp "C:/Users/echra/.bimmonkey/bimmonkey-ai-git/dist/BimMonkeySetup.zip" \
    "C:/Users/echra/.bimmonkey/bimmonkey-ai-git/frontend/public/BimMonkeySetup.zip"
 
-# 5. Commit and push — Netlify auto-deploys and serves the new zip
+# 5. *** COMMIT SOURCE to RevitMCPBridge2026 FIRST ***
+cd "C:/Users/echra/.bimmonkey/RevitMCPBridge2026"
+git add src/ installer/files/2026/RevitMCPBridge2026.dll Properties/AssemblyInfo.cs
+git commit -m "..." && git push
+
+# 6. *** THEN commit installer to bimmonkey-ai-git ***
+# Also update AppVersion in scripts/BimMonkeySetup.iss to match AssemblyInformationalVersion
 cd "C:/Users/echra/.bimmonkey/bimmonkey-ai-git"
-git add dist/BimMonkeySetup.exe dist/BimMonkeySetup.zip frontend/public/BimMonkeySetup.zip
+cp "C:/Users/echra/.bimmonkey/bimmonkey-ai-git/dist/BimMonkeySetup.zip" \
+   "C:/Users/echra/.bimmonkey/bimmonkey-ai-git/landing/BimMonkeySetup.zip"
+git add scripts/BimMonkeySetup.iss dist/BimMonkeySetup.exe dist/BimMonkeySetup.zip frontend/public/BimMonkeySetup.zip landing/BimMonkeySetup.zip
 git commit -m "..." && git push
 ```
+
+> **WARNING:** Both repos must be committed on every release.
+> RevitMCPBridge2026 = plugin source code (C# files, DLL)
+> bimmonkey-ai-git = installer binaries + AppVersion string
+> Skipping RevitMCPBridge2026 → source history diverges from what's running.
+> Skipping bimmonkey-ai-git → bimmonkey.ai/install serves the old installer.
 
 > **WARNING:** Steps 2 and 4 are both required on every build.
 > Skipping step 2 → installer packages the old DLL (plugin changes don't appear).
