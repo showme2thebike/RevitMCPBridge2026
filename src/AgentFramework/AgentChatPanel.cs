@@ -1177,11 +1177,12 @@ namespace RevitMCPBridge2026.AgentFramework
             _agent.OnError += (msg) => Dispatcher.Invoke(() => { AddErrorMessage(msg); HideProgress(); SetProcessing(false); });
             _agent.OnComplete += () => Dispatcher.Invoke(() => { HideProgress(); SetProcessing(false); });
 
-            // TOKEN USAGE — update display after every Claude API call (tokens only, no $ in the UI)
+            // TOKEN USAGE — split input/output display matching 0421h format
             _agent.OnUsage += (inputTokens, outputTokens) => Dispatcher.Invoke(() =>
             {
-                var totalK = (inputTokens + outputTokens) / 1000.0;
-                _tokenText.Text = $"~{totalK:F1}K tokens this session";
+                string inStr  = inputTokens  >= 1000 ? $"{inputTokens  / 1000}K" : inputTokens.ToString();
+                string outStr = outputTokens >= 1000 ? $"{outputTokens / 1000}K" : outputTokens.ToString();
+                _tokenText.Text = $"↑ {inStr}  ↓ {outStr}";
             });
 
             // LOCAL MODEL event - show when qwen2.5:7b is processing
