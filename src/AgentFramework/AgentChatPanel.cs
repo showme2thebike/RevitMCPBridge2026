@@ -145,6 +145,7 @@ namespace RevitMCPBridge2026.AgentFramework
             Closing += (s, e) =>
             {
                 _isClosing = true;
+                _agent?.NotifyInterrupted(); // sends session_outcome=interrupted if session was open
                 SaveSession();
                 DisconnectMCP();
                 _thinkingTimer?.Stop();
@@ -1176,7 +1177,7 @@ namespace RevitMCPBridge2026.AgentFramework
             _agent.OnError += (msg) => Dispatcher.Invoke(() => { AddErrorMessage(msg); HideProgress(); SetProcessing(false); });
             _agent.OnComplete += () => Dispatcher.Invoke(() => { HideProgress(); SetProcessing(false); });
 
-            // TOKEN USAGE — update display after every Claude API call
+            // TOKEN USAGE — update display after every Claude API call (tokens only, no $ in the UI)
             _agent.OnUsage += (inputTokens, outputTokens) => Dispatcher.Invoke(() =>
             {
                 var totalK = (inputTokens + outputTokens) / 1000.0;
@@ -1209,13 +1210,9 @@ namespace RevitMCPBridge2026.AgentFramework
 
             _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
 
-            // Fire-and-forget: session start telemetry + subscription gate
+            // Subscription gate (session_start is now fired by AgentCore on first message)
             if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
-            {
-                TelemetryService.Track(_bimMonkeyApiKey, "session_start",
-                    revitVersion: "2026", pluginVersion: "v0.3.20260427a");
                 _ = CheckSubscriptionAsync();
-            }
 
             // Fetch firm standards in the background — injected into every prompt once loaded
             if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
@@ -1563,6 +1560,30 @@ namespace RevitMCPBridge2026.AgentFramework
             if (modelId.Contains("sonnet")) return "Sonnet 4.6";
             if (modelId.Contains("haiku"))  return "Haiku 4.5";
             return modelId;
+        }
+
+        // Pricing per million tokens (dollars)
+        private static readonly Dictionary<string, (double input, double output)> _modelPricing = new Dictionary<string, (double, double)>
+        {
+            { "claude-sonnet-4-6",          (3.00,  15.00) },
+            { "claude-opus-4-6",            (15.00, 75.00) },
+            { "claude-haiku-4-5-20251001",  (0.80,  4.00)  },
+        };
+
+        private double? EstimateSessionCost(int inputTokens, int outputTokens, string modelId)
+        {
+            if (string.IsNullOrEmpty(modelId)) return null;
+            // Match on substring for robustness
+            (double input, double output) pricing = (3.00, 15.00); // default: Sonnet
+            foreach (var kv in _modelPricing)
+            {
+                if (modelId.StartsWith(kv.Key, StringComparison.OrdinalIgnoreCase) || modelId == kv.Key)
+                {
+                    pricing = kv.Value;
+                    break;
+                }
+            }
+            return (inputTokens / 1_000_000.0 * pricing.input) + (outputTokens / 1_000_000.0 * pricing.output);
         }
 
         private void EnsureMCPConnection()
@@ -2967,7 +2988,7 @@ STYLE:
 
         private void StopAgent()
         {
-            _agent?.Stop();
+            _agent?.NotifyInterrupted(); // cancels in-flight call + sends interrupted outcome
             HideProgress();
             SetProcessing(false);
             AddSystemMessage("Operation cancelled.");
@@ -2977,7 +2998,8 @@ STYLE:
         {
             _chatHistory.Children.Clear();
             _agent?.ClearHistory();
-            _sessionMessages.Clear();  // Clear session memory too
+            _sessionMessages.Clear();
+            if (_tokenText != null) _tokenText.Text = "";
             AddAssistantMessage("Chat cleared. How can I help you?");
         }
 

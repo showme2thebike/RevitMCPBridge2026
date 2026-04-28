@@ -70,12 +70,16 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private string _bimMonkeyApiKey;
 
-        // Session-level token and timing tracking
+        // Session-level token and timing tracking (cumulative across all RunAsync calls until ClearHistory)
         private int _sessionInputTokens = 0;
         private int _sessionOutputTokens = 0;
-        private DateTime _runStartTime;
+        private DateTime _sessionStartTime;
         private string _currentStage = "thinking";
         private string _lastToolName = null;
+
+        // Telemetry guards — session_start and session_outcome fire ONCE per AgentCore lifetime
+        private bool _sessionStartSent = false;
+        private bool _sessionOutcomeSent = false;
 
         public AgentCore(string apiKey, string model = "claude-sonnet-4-6", string bimMonkeyApiKey = null)
         {
@@ -113,6 +117,44 @@ namespace RevitMCPBridge2026.AgentFramework
             if (!string.IsNullOrEmpty(projectContext))
             {
                 _localProcessor.InjectKnowledge(projectContext);
+            }
+        }
+
+        /// <summary>
+        /// Reset conversation history and token counters. Resets telemetry guards so the
+        /// next RunAsync starts a fresh session_start + session_outcome pair.
+        /// </summary>
+        public void ClearHistory()
+        {
+            _conversationHistory.Clear();
+            _sessionInputTokens = 0;
+            _sessionOutputTokens = 0;
+            _sessionStartSent = false;
+            _sessionOutcomeSent = false;
+        }
+
+        /// <summary>
+        /// Called when the chat window closes or the user clicks Stop mid-session.
+        /// Sends session_outcome=interrupted synchronously if the session hasn't ended yet.
+        /// </summary>
+        public void NotifyInterrupted()
+        {
+            _cancellationTokenSource?.Cancel();
+
+            if (_sessionStartSent && !_sessionOutcomeSent)
+            {
+                _sessionOutcomeSent = true;
+                var durationMs = (long)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                TelemetryService.Track(_bimMonkeyApiKey, "session_outcome", metadata: new
+                {
+                    outcome = "interrupted",
+                    stage = _currentStage,
+                    last_tool = _lastToolName,
+                    input_tokens = _sessionInputTokens,
+                    output_tokens = _sessionOutputTokens,
+                    model = _model,
+                    durationMs
+                });
             }
         }
 
@@ -294,11 +336,6 @@ namespace RevitMCPBridge2026.AgentFramework
             _tools.AddRange(tools);
         }
 
-        public void ClearHistory()
-        {
-            _conversationHistory.Clear();
-        }
-
         /// <summary>
         /// Restore conversation history from a previous session
         /// This allows the AI to maintain context across sessions
@@ -355,10 +392,17 @@ namespace RevitMCPBridge2026.AgentFramework
             _cancellationTokenSource = new CancellationTokenSource();
             var token = _cancellationTokenSource.Token;
 
-            // Per-run state reset
-            _runStartTime = DateTime.UtcNow;
             _currentStage = "thinking";
             _lastToolName = null;
+
+            // Fire session_start once per AgentCore lifetime (first message sent)
+            if (!_sessionStartSent)
+            {
+                _sessionStartSent = true;
+                _sessionStartTime = DateTime.UtcNow;
+                TelemetryService.Track(_bimMonkeyApiKey, "session_start",
+                    revitVersion: "2026", pluginVersion: "v0.3.20260427a");
+            }
 
             try
             {
@@ -522,44 +566,60 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (response.StopReason == "end_turn") break;
                 }
 
-                var runMs = (long)(DateTime.UtcNow - _runStartTime).TotalMilliseconds;
-                TelemetryService.Track(_bimMonkeyApiKey, "session_outcome", metadata: new
+                // session_outcome fires ONCE per AgentCore lifetime (guards prevent double-fire)
+                if (!_sessionOutcomeSent)
                 {
-                    outcome = "completed",
-                    stage = _currentStage,
-                    last_tool = _lastToolName,
-                    input_tokens = _sessionInputTokens,
-                    output_tokens = _sessionOutputTokens,
-                    durationMs = runMs
-                });
+                    _sessionOutcomeSent = true;
+                    var durationMs = (long)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                    TelemetryService.Track(_bimMonkeyApiKey, "session_outcome", metadata: new
+                    {
+                        outcome = "completed",
+                        stage = _currentStage,
+                        last_tool = _lastToolName,
+                        input_tokens = _sessionInputTokens,
+                        output_tokens = _sessionOutputTokens,
+                        model = _model,
+                        durationMs
+                    });
+                }
                 OnComplete?.Invoke();
             }
             catch (OperationCanceledException)
             {
-                var runMs = (long)(DateTime.UtcNow - _runStartTime).TotalMilliseconds;
-                TelemetryService.Track(_bimMonkeyApiKey, "session_outcome", metadata: new
+                if (!_sessionOutcomeSent)
                 {
-                    outcome = "interrupted",
-                    stage = _currentStage,
-                    last_tool = _lastToolName,
-                    input_tokens = _sessionInputTokens,
-                    output_tokens = _sessionOutputTokens,
-                    durationMs = runMs
-                });
+                    _sessionOutcomeSent = true;
+                    var durationMs = (long)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                    TelemetryService.Track(_bimMonkeyApiKey, "session_outcome", metadata: new
+                    {
+                        outcome = "interrupted",
+                        stage = _currentStage,
+                        last_tool = _lastToolName,
+                        input_tokens = _sessionInputTokens,
+                        output_tokens = _sessionOutputTokens,
+                        model = _model,
+                        durationMs
+                    });
+                }
                 OnError?.Invoke("Operation cancelled");
             }
             catch (Exception ex)
             {
-                var runMs = (long)(DateTime.UtcNow - _runStartTime).TotalMilliseconds;
-                TelemetryService.Track(_bimMonkeyApiKey, "session_outcome", metadata: new
+                if (!_sessionOutcomeSent)
                 {
-                    outcome = "error",
-                    stage = _currentStage,
-                    last_tool = _lastToolName,
-                    input_tokens = _sessionInputTokens,
-                    output_tokens = _sessionOutputTokens,
-                    durationMs = runMs
-                });
+                    _sessionOutcomeSent = true;
+                    var durationMs = (long)(DateTime.UtcNow - _sessionStartTime).TotalMilliseconds;
+                    TelemetryService.Track(_bimMonkeyApiKey, "session_outcome", metadata: new
+                    {
+                        outcome = "error",
+                        stage = _currentStage,
+                        last_tool = _lastToolName,
+                        input_tokens = _sessionInputTokens,
+                        output_tokens = _sessionOutputTokens,
+                        model = _model,
+                        durationMs
+                    });
+                }
                 TelemetryService.Track(_bimMonkeyApiKey, "api_error", metadata: new { error = ex.Message });
                 OnError?.Invoke($"Agent error: {ex.Message}");
             }
