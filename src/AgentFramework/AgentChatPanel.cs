@@ -97,6 +97,13 @@ namespace RevitMCPBridge2026.AgentFramework
         private string _lastToolCall;
         private int _feedbackMessageIndex = 0;
 
+        // Correction watcher — arms after write ops, closes when Barrett says "done"
+        private DateTime _correctionWatchStart = DateTime.MinValue;
+        private string _correctionTriggerOperation = null;
+        private bool _correctionWatchActive = false;
+        private string _lastCorrectionDiff = null;
+        private string _lastCorrectionTriggerOp = null;
+
         public AgentChatPanel(UIApplication uiApp)
         {
             _uiApp = uiApp;
@@ -1238,7 +1245,19 @@ namespace RevitMCPBridge2026.AgentFramework
             _agent.SetToolExecutor(ExecuteMCPMethodAsync);
 
             _agent.OnThinking += (msg) => Dispatcher.Invoke(() => ShowProgress(msg));
-            _agent.OnToolCall += (msg) => Dispatcher.Invoke(() => { _lastToolCall = msg; UpdateProgress(msg); AddToolMessage(msg, false); });
+            _agent.OnToolCall += (msg) => Dispatcher.Invoke(() =>
+            {
+                _lastToolCall = msg;
+                UpdateProgress(msg);
+                AddToolMessage(msg, false);
+                var toolName = msg.Replace("Calling: ", "");
+                if (IsWriteOperation(toolName))
+                {
+                    _correctionTriggerOperation = toolName;
+                    _correctionWatchStart = DateTime.Now;
+                    _correctionWatchActive = false;
+                }
+            });
             _agent.OnToolResult += (msg) => Dispatcher.Invoke(() => {
                 UpdateProgress(msg);
                 AddToolMessage(msg, true);
@@ -2644,6 +2663,35 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { /* fire and forget */ }
         }
 
+        /// <summary>
+        /// POST structured correction data to /api/corrections for admin review and federated learning.
+        /// </summary>
+        private async Task SyncCorrectionToBackendAsync(string whatISaid, string whatWasWrong, string correctApproach, string category, string project)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    client.Timeout = TimeSpan.FromSeconds(10);
+                    var body = JsonConvert.SerializeObject(new
+                    {
+                        trigger_operation     = _lastCorrectionTriggerOp,
+                        project_name          = project,
+                        natural_language_rule = correctApproach,
+                        banana_chat_summary   = $"Was: {whatISaid} | Wrong because: {whatWasWrong} | Fix: {correctApproach}",
+                        before_state          = _lastCorrectionDiff != null ? (object)new { diff_summary = _lastCorrectionDiff } : null,
+                        confirmed             = true
+                    });
+                    var httpContent = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
+                    await client.PostAsync(
+                        "https://bimmonkey-production.up.railway.app/api/corrections", httpContent);
+                }
+            }
+            catch { /* fire and forget */ }
+        }
+
         #endregion
 
         #region Memory Operation Handlers
@@ -2849,6 +2897,66 @@ namespace RevitMCPBridge2026.AgentFramework
             });
         }
 
+        private static readonly HashSet<string> _writeOpNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "createSheet", "placeViewOnSheet", "placeViewportOnSheet", "createDraftingView",
+            "createWall", "placeDoor", "placeWindow", "placeFamilyInstance",
+            "setElementParameter", "setParameters", "placeTextNote", "placeKeynote",
+            "tagElements", "createCallout", "createSection", "createElevation",
+            "duplicateView", "placeScheduleOnSheet", "deleteElements", "moveElement",
+            "callMCPMethod", "setViewTemplate", "setSheetRevision", "createDetail",
+            "createFloor", "createRoof", "createCeiling", "modifyElement"
+        };
+
+        private bool IsWriteOperation(string toolName) => _writeOpNames.Contains(toolName);
+
+        private bool IsNegativeCorrectionSignal(string msg)
+        {
+            var lower = msg.ToLower().Trim();
+            if (lower == "no" || lower == "wrong" || lower == "stop" || lower == "wait" || lower == "undo") return true;
+            var starters = new[] {
+                "no,", "no.", "no ", "that's wrong", "thats wrong", "not right", "not like that",
+                "don't do", "dont do", "that's not", "thats not", "incorrect", "that is wrong",
+                "i'll fix", "ill fix", "let me fix", "i'll correct", "ill correct",
+                "wrong,", "wrong.", "actually,", "actually.", "wait,", "stop,"
+            };
+            return starters.Any(s => lower.StartsWith(s) || lower.Contains(" " + s));
+        }
+
+        private bool IsDoneSignal(string msg)
+        {
+            var lower = msg.ToLower().Trim();
+            return lower == "done" || lower == "okay" || lower == "ok" || lower == "finished"
+                || lower.StartsWith("done ") || lower.StartsWith("done,") || lower.StartsWith("done.")
+                || lower.StartsWith("that's it") || lower.StartsWith("thats it")
+                || lower.StartsWith("i'm done") || lower.StartsWith("im done")
+                || lower.StartsWith("all done") || lower.StartsWith("finished");
+        }
+
+        private string BuildCorrectionDiff()
+        {
+            if (_correctionWatchStart == DateTime.MinValue) return null;
+            try
+            {
+                var changes = ChangeTracker.Instance.GetChangesSince(_correctionWatchStart);
+                var relevant = changes.Where(c =>
+                    c.ChangeType == ChangeType.ElementsModified ||
+                    c.ChangeType == ChangeType.ElementsAdded).ToList();
+                if (relevant.Count == 0) return null;
+
+                var sb = new System.Text.StringBuilder();
+                foreach (var c in relevant)
+                {
+                    if (c.Details != null && c.Details.TryGetValue("elements", out var elems))
+                        sb.AppendLine($"[{c.ChangeType}] tx='{c.TransactionName}': {JsonConvert.SerializeObject(elems)}");
+                    else if (c.Details != null && c.Details.TryGetValue("elementIds", out var ids))
+                        sb.AppendLine($"[{c.ChangeType}] tx='{c.TransactionName}': ids={JsonConvert.SerializeObject(ids)}");
+                }
+                return sb.Length > 0 ? sb.ToString() : null;
+            }
+            catch { return null; }
+        }
+
         private string HandleMemoryStoreCorrection(JObject parameters)
         {
             var whatISaid = parameters?["whatISaid"]?.ToString();
@@ -2875,6 +2983,8 @@ namespace RevitMCPBridge2026.AgentFramework
             var memories = LoadMemories();
             memories.Add(memory);
             SaveMemories(memories);
+            _ = SyncMemoryToBackendAsync(memory.Content, "correction", 9);
+            _ = SyncCorrectionToBackendAsync(whatISaid, whatWasWrong, correctApproach, parameters?["category"]?.ToString(), parameters?["project"]?.ToString());
 
             return JsonConvert.SerializeObject(new
             {
@@ -3059,6 +3169,24 @@ namespace RevitMCPBridge2026.AgentFramework
             var message = _inputTextBox.Text.Trim();
             if (string.IsNullOrEmpty(message) || _isProcessing || _subscriptionBlocked) return;
 
+            // Intercept "done" while correction watcher is active
+            if (_correctionWatchActive && IsDoneSignal(message))
+            {
+                var diff = BuildCorrectionDiff();
+                _lastCorrectionDiff = diff;
+                _lastCorrectionTriggerOp = _correctionTriggerOperation;
+                if (!string.IsNullOrEmpty(diff))
+                    message = $"CORRECTION DIFF (what changed in Revit since my last write op — trigger: {_correctionTriggerOperation}):\n{diff}\n\n{message}";
+                _correctionWatchActive = false;
+                _correctionTriggerOperation = null;
+            }
+            // Arm watcher when Barrett signals a correction after a write op
+            else if (_correctionTriggerOperation != null && IsNegativeCorrectionSignal(message))
+            {
+                _correctionWatchActive = true;
+                _correctionWatchStart = DateTime.Now;
+            }
+
             // Track for feedback context
             _lastUserMessage = message;
             _lastToolCall = null;
@@ -3108,23 +3236,21 @@ namespace RevitMCPBridge2026.AgentFramework
                     : $"\n\nPROJECT NOTES FOR '{projectName}' (stored from previous sessions on this project):\n{_projectNotes}\n";
 
                 var persistentIntelBlock = "\n\nPERSISTENT INTELLIGENCE — CRITICAL:\n" +
-                    "You have a memory system that survives across sessions. Use it constantly.\n\n" +
-                    "STORE A CORRECTION immediately when:\n" +
-                    "- Barrett says no, wrong, don't do that, that's not right, actually, stop\n" +
-                    "- A tool call fails and you learn why\n" +
-                    "- You place something incorrectly and Barrett fixes it\n" +
-                    "- Barrett states a preference (I always want..., never put..., use X not Y)\n" +
-                    "Call: memoryStoreCorrection with whatISaid, whatWasWrong, correctApproach, category\n\n" +
+                    "You have a memory system that survives across sessions.\n\n" +
+                    "CORRECTION CAPTURE FLOW:\n" +
+                    "When Barrett criticizes a write operation (says 'no', 'wrong', 'not like that', 'that's not right', 'wait', 'stop', 'undo', 'don't do that', 'I'll fix', 'let me fix'):\n" +
+                    "  • If he hasn't told you the fix: respond EXACTLY → \"Got it — can you show me how you'd do it? I'll watch while you work. Type 'done' when you're finished.\"\n" +
+                    "    Do NOT call memoryStoreCorrection yet — wait for the diff.\n" +
+                    "  • If he states the fix directly ('always put X', 'use Y not Z'): call memoryStoreCorrection immediately.\n" +
+                    "When you receive a message starting with 'CORRECTION DIFF:':\n" +
+                    "  Parse the element changes, synthesize a concise plain-language rule, call memoryStoreCorrection,\n" +
+                    "  then confirm: \"Stored: [rule]. Does that sound right?\"\n\n" +
                     "STORE A MEMORY after important decisions:\n" +
-                    "- Sheet numbering pattern for this project\n" +
-                    "- View template names that are set up\n" +
-                    "- Family names and type names available in this model\n" +
-                    "- Key project facts (building type, occupancy, jurisdiction)\n" +
+                    "- Sheet numbering pattern, view template names, family names, project facts\n" +
                     "Call: memoryStore with content, memoryType (decision/fact/preference), importance 7-9\n\n" +
                     "RECALL MEMORIES when starting a task:\n" +
                     "- Before placing sheets: memoryRecall with query 'sheet layout preferences'\n" +
                     "- Before placing views: memoryRecall with query 'view template names'\n" +
-                    "- When Barrett mentions a project: memoryRecall with the project name\n\n" +
                     "The goal: Barrett should never have to tell you the same thing twice.\n";
 
                 var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{memoryBlock}{firmMemoryBlock}{projectNotesBlock}{persistentIntelBlock}
@@ -3337,6 +3463,35 @@ STYLE:
                 t.Start();
             };
             feedbackPanel.Children.Add(copyBtn);
+
+            // "I'll correct this" — only shown after write ops; arms the correction watcher
+            var capturedOp = _correctionTriggerOperation;
+            if (capturedOp != null)
+            {
+                var correctBtn = new Button
+                {
+                    Content = "✎ correct",
+                    FontSize = 12,
+                    Padding = new Thickness(6, 2, 6, 2),
+                    Margin = new Thickness(8, 0, 0, 0),
+                    Background = Brushes.Transparent,
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(90, 70, 40)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(180, 140, 80)),
+                    Cursor = System.Windows.Input.Cursors.Hand,
+                    ToolTip = "I'll correct this in Revit — type 'done' when finished"
+                };
+                correctBtn.Click += (s, e) =>
+                {
+                    _correctionWatchActive = true;
+                    _correctionWatchStart = DateTime.Now;
+                    _correctionTriggerOperation = capturedOp;
+                    correctBtn.Content = "👁 watching";
+                    correctBtn.IsEnabled = false;
+                    AddSystemMessage("Watching — make your corrections in Revit, then type 'done' when you're finished.");
+                };
+                feedbackPanel.Children.Add(correctBtn);
+            }
+
             container.Children.Add(feedbackPanel);
         }
 
