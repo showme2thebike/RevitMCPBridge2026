@@ -1074,6 +1074,7 @@ Key capabilities:
 - Call ANY of the 700+ Revit MCP methods via callMCPMethod (use listAllMethods to discover them)
 - Trigger a full or scoped CD generation run via triggerGeneration
 - Query the firm's approved drawing library via queryLibrary
+- Visual QC via compareViewToLibrary: captures the current Revit view and compares it side-by-side against an actual approved library reference image using Claude vision. Use this proactively when asked to check, compare, QC, or review a view or sheet. Pass detailType (e.g. stair, wall section) to target a specific library example
 - Run code compliance checks by calling detectBuildingConditions then reasoning about the results
 - Identify missing details by comparing model conditions against the approved library
 
