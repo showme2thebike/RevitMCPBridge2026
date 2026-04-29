@@ -520,7 +520,11 @@ namespace RevitMCPBridge
             // immediately ready when the first client connects.
             NamedPipeServerStream standbyPipe = new NamedPipeServerStream(
                 _pipeName, PipeDirection.InOut, 254, PipeTransmissionMode.Byte, PipeOptions.None);
-            Task standbyWait = Task.Run(() => standbyPipe.WaitForConnection(), cancellationToken);
+            // WaitForConnectionAsync(token) actually cancels when the token fires.
+            // Task.Run(() => WaitForConnection(), token) does NOT — the token only
+            // prevents task scheduling if already cancelled, leaving a zombie pipe
+            // that accepts the next client but HandleClient exits immediately (cancelled).
+            Task standbyWait = standbyPipe.WaitForConnectionAsync(cancellationToken);
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -537,7 +541,7 @@ namespace RevitMCPBridge
                     // that causes "semaphore timeout" on the next connection attempt.
                     standbyPipe = new NamedPipeServerStream(
                         _pipeName, PipeDirection.InOut, 254, PipeTransmissionMode.Byte, PipeOptions.None);
-                    standbyWait = Task.Run(() => standbyPipe.WaitForConnection(), cancellationToken);
+                    standbyWait = standbyPipe.WaitForConnectionAsync(cancellationToken);
 
                     _ = Task.Run(async () => await HandleClient(clientPipe, cancellationToken), cancellationToken);
                 }
@@ -556,7 +560,7 @@ namespace RevitMCPBridge
                     await Task.Delay(1000, cancellationToken);
                     standbyPipe = new NamedPipeServerStream(
                         _pipeName, PipeDirection.InOut, 254, PipeTransmissionMode.Byte, PipeOptions.None);
-                    standbyWait = Task.Run(() => standbyPipe.WaitForConnection(), cancellationToken);
+                    standbyWait = standbyPipe.WaitForConnectionAsync(cancellationToken);
                 }
             }
         }
