@@ -1890,19 +1890,15 @@ namespace RevitMCPBridge2026.AgentFramework
             if (_playwrightAuthed) return;
             if (_playwright == null || !_playwright.IsConnected || string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
 
-            // Navigate to a public page on the target origin so localStorage is accessible
+            // Railway validates the API key and 302 redirects to app.bimmonkey.ai/library?_bmk=key&_pw=1.
+            // That full page load triggers module-level code in App.jsx which writes bm_api_key and
+            // bm_pw_session into localStorage. RequireAuth reads bm_pw_session from localStorage (not
+            // the URL), so the bypass survives React Router's internal redirect to /library/project-hub.
             await _playwright.CallToolAsync("browser_navigate", new JObject
             {
-                ["url"] = "https://app.bimmonkey.ai/login"
-            }, 15000);
-            await Task.Delay(1000);
-
-            // Inject auth directly — survives all SPA navigations without needing URL params
-            var safeKey = _bimMonkeyApiKey.Replace("\\", "\\\\").Replace("'", "\\'");
-            await _playwright.CallToolAsync("browser_evaluate", new JObject
-            {
-                ["script"] = $"localStorage.setItem('bm_api_key','{safeKey}');localStorage.setItem('bm_pw_session','1');"
-            });
+                ["url"] = $"https://bimmonkey-production.up.railway.app/api/auth/headless?key={_bimMonkeyApiKey}"
+            }, 20000);
+            await Task.Delay(3000); // redirect + React hydration + Router redirect
 
             _playwrightAuthed = true;
         }
