@@ -1899,7 +1899,8 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 // First capture the view via MCP, then analyze with Claude vision
                 parameters = parameters ?? new JObject();
-                parameters["apiKey"] = _apiKey;  // Pass our API key for vision analysis
+                parameters["apiKey"] = _apiKey;
+                parameters["model"] = _selectedModel;
 
                 // Call MCP to execute the analysis in Revit context
                 var mcpRequest = new JObject

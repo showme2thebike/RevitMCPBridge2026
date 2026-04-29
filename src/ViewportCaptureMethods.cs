@@ -778,6 +778,7 @@ namespace RevitMCPBridge
                 }
 
                 var question = parameters["question"]?.ToString() ?? "Describe what you see in this Revit view.";
+                var model = parameters["model"]?.ToString() ?? "claude-sonnet-4-6";
 
                 // Capture view to base64
                 var captureParams = new JObject();
@@ -801,7 +802,7 @@ namespace RevitMCPBridge
                 var viewId = capture["result"]["viewId"]?.ToObject<int>() ?? 0;
 
                 // Call Claude's vision API
-                var analysisResult = CallClaudeVision(apiKey, base64Image, question, viewName);
+                var analysisResult = CallClaudeVision(apiKey, base64Image, question, viewName, model);
 
                 return JsonConvert.SerializeObject(new
                 {
@@ -825,7 +826,7 @@ namespace RevitMCPBridge
         /// <summary>
         /// Call Claude API with vision capability to analyze an image.
         /// </summary>
-        private static string CallClaudeVision(string apiKey, string base64Image, string question, string viewName)
+        private static string CallClaudeVision(string apiKey, string base64Image, string question, string viewName, string model = "claude-sonnet-4-6")
         {
             using (var client = new System.Net.Http.HttpClient())
             {
@@ -835,7 +836,7 @@ namespace RevitMCPBridge
 
                 var requestBody = new
                 {
-                    model = "claude-3-5-haiku-20241022",  // Use Haiku for cost-effective vision
+                    model = model,
                     max_tokens = 1024,
                     messages = new[]
                     {
