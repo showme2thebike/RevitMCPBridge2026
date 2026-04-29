@@ -2016,10 +2016,14 @@ namespace RevitMCPBridge2026.AgentFramework
                     var url = parameters?["url"]?.ToString() ?? "";
                     if (url.Contains("app.bimmonkey.ai") && !url.Contains("/api/auth/headless"))
                     {
+                        // Auth first: Railway validates key and redirects to app.bimmonkey.ai?_bmk=key.
+                        // React's PlaywrightAuthHandler reads _bmk and saves to localStorage.
+                        // Wait for redirect + hydration before navigating to the real URL.
                         await _playwright.CallToolAsync("browser_navigate", new JObject
                         {
                             ["url"] = $"https://bimmonkey-production.up.railway.app/api/auth/headless?key={_bimMonkeyApiKey}"
                         });
+                        await Task.Delay(2500);
                     }
                 }
                 return await _playwright.CallToolAsync(methodName, parameters);
