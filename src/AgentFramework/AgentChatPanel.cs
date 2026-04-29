@@ -1806,40 +1806,50 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private void EnsureMCPConnection()
         {
-            lock (_pipeLock)
+            // Must be called under _pipeLock
+            if (_mcpPipe == null || !_mcpPipe.IsConnected)
             {
-                if (_mcpPipe == null || !_mcpPipe.IsConnected)
-                {
-                    // Dispose old connection if exists
-                    _mcpWriter?.Dispose();
-                    _mcpReader?.Dispose();
-                    _mcpPipe?.Dispose();
+                try { _mcpWriter?.Dispose(); } catch { }
+                try { _mcpReader?.Dispose(); } catch { }
+                try { _mcpPipe?.Dispose();   } catch { }
 
-                    // Create new connection
-                    _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2026", PipeDirection.InOut);
-                    _mcpPipe.Connect(5000);
-                    _mcpWriter = new StreamWriter(_mcpPipe) { AutoFlush = true };
-                    _mcpReader = new StreamReader(_mcpPipe);
-                }
+                _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2026", PipeDirection.InOut);
+                _mcpPipe.Connect(5000);
+                _mcpWriter = new StreamWriter(_mcpPipe) { AutoFlush = true };
+                _mcpReader = new StreamReader(_mcpPipe);
             }
+        }
+
+        /// <summary>
+        /// Force-close pipe streams WITHOUT acquiring _pipeLock.
+        /// If a thread is blocked in ReadLine() inside lock(_pipeLock), disposing the
+        /// streams here causes ReadLine() to throw IOException and release the lock.
+        /// </summary>
+        private void ForceClosePipe()
+        {
+            var pipe   = _mcpPipe;
+            var writer = _mcpWriter;
+            var reader = _mcpReader;
+            _mcpPipe   = null;
+            _mcpWriter = null;
+            _mcpReader = null;
+            try { writer?.Dispose(); } catch { }
+            try { reader?.Dispose(); } catch { }
+            try { pipe?.Dispose();   } catch { }
         }
 
         private void DisconnectMCP()
         {
             _proactiveTimer?.Stop();
-
-            // Save learned preferences before pipe closes — synchronous, direct, no MCP needed
             SavePreferences();
 
-            lock (_pipeLock)
-            {
-                _mcpWriter?.Dispose();
-                _mcpReader?.Dispose();
-                _mcpPipe?.Dispose();
-                _mcpWriter = null;
-                _mcpReader = null;
-                _mcpPipe = null;
-            }
+            // Force-close WITHOUT the lock — if a thread is stuck in ReadLine() inside
+            // lock(_pipeLock), this causes it to throw IOException and release the lock.
+            // Acquiring the lock directly here would deadlock in that scenario.
+            ForceClosePipe();
+
+            // Wait for any thread blocked in the lock to exit
+            lock (_pipeLock) { }
         }
 
         /// <summary>
@@ -1980,7 +1990,9 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 try
                 {
-                    var response = await Task.Run(() =>
+                    // WRITE under lock on a thread pool thread — Connect(5000) and WriteLine
+                    // are blocking; running on STA/UI thread causes "Not Responding".
+                    var readerCapture = await Task.Run(() =>
                     {
                         lock (_pipeLock)
                         {
@@ -1988,23 +2000,29 @@ namespace RevitMCPBridge2026.AgentFramework
                             {
                                 EnsureMCPConnection();
                                 _mcpWriter.WriteLine(requestJson);
-
-                                // Read with timeout simulation via check
-                                var result = _mcpReader.ReadLine();
-                                return result;
+                                return _mcpReader;
                             }
                             catch (IOException ioEx)
                             {
-                                // Pipe broken - need to reconnect
-                                DisconnectMCP();
-                                throw new MCPConnectionException("Connection lost", ioEx);
-                            }
-                            catch (TimeoutException)
-                            {
-                                throw new MCPTimeoutException($"Method '{methodName}' timed out");
+                                ForceClosePipe();
+                                throw new MCPConnectionException("Write failed", ioEx);
                             }
                         }
                     });
+
+                    // READ outside the lock with a real timeout via Task.WhenAny.
+                    // ReadLine() is blocking — Task.Run puts it on a thread pool thread.
+                    // On timeout, ForceClosePipe() disposes the stream causing ReadLine()
+                    // to throw IOException so the orphaned task completes (exception ignored).
+                    var readTask    = Task.Run(() => readerCapture?.ReadLine());
+                    var timeoutTask = Task.Delay(MCPTimeoutMs);
+                    var winner      = await Task.WhenAny(readTask, timeoutTask);
+                    if (winner == timeoutTask)
+                    {
+                        ForceClosePipe();
+                        throw new MCPTimeoutException($"Method '{methodName}' timed out after {MCPTimeoutMs}ms");
+                    }
+                    var response = await readTask;
 
                     if (string.IsNullOrEmpty(response))
                     {
@@ -3445,12 +3463,12 @@ STYLE:
             var userMsg = _lastUserMessage;
             var toolCall = _lastToolCall;
 
-            var thumbsUp = MakeFeedbackButton("\U0001F44D", leftMargin: 0);
+            var thumbsUp = MakeFeedbackButton("\U0001F44D", tooltip: "Like", leftMargin: 0);
             thumbsUp.Tag = messageIndex;
             thumbsUp.Click += (s, e) => OnThumbsUp(userMsg, assistMsg, (Button)s, feedbackPanel);
             feedbackPanel.Children.Add(thumbsUp);
 
-            var thumbsDown = MakeFeedbackButton("\U0001F44E");
+            var thumbsDown = MakeFeedbackButton("\U0001F44E", tooltip: "Dislike");
             thumbsDown.Tag = messageIndex;
             thumbsDown.Click += (s, e) => OnThumbsDown(userMsg, assistMsg, toolCall, (Button)s, feedbackPanel);
             feedbackPanel.Children.Add(thumbsDown);
@@ -3468,7 +3486,7 @@ STYLE:
 
             // ⟳ Repeat — resend the last user message when server didn't push through
             var capturedUserMsg = userMsg;
-            var repeatBtn = MakeFeedbackButton("⟳", tooltip: "Repeat — resend the last message");
+            var repeatBtn = MakeFeedbackButton("⟳", tooltip: "Repeat");
             repeatBtn.Click += async (s, e) =>
             {
                 if (_isProcessing || string.IsNullOrEmpty(capturedUserMsg)) return;
@@ -3481,7 +3499,7 @@ STYLE:
             var capturedOp = _correctionTriggerOperation;
             if (capturedOp != null)
             {
-                var correctBtn = MakeFeedbackButton("\U0001F527", tooltip: "I'll correct this in Revit — type 'done' when finished");
+                var correctBtn = MakeFeedbackButton("\U0001F527", tooltip: "Fix");
                 correctBtn.Click += (s, e) =>
                 {
                     _correctionWatchActive = true;
