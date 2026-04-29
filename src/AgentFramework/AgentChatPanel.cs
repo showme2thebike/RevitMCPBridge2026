@@ -60,6 +60,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private bool _subscriptionBlocked;
         private string _firmMemory;
         private string _projectNotes;
+        private PlaywrightMCPClient _playwright;
 
         // Streaming bubble state
         private System.Windows.Controls.TextBox _streamingTextBox;
@@ -1241,8 +1242,30 @@ namespace RevitMCPBridge2026.AgentFramework
         private void InitializeAgent()
         {
             _agent = new AgentCore(_apiKey, _selectedModel, _bimMonkeyApiKey);
-            _agent.RegisterTools(ToolDefinitions.GetAllTools());
+            var allTools = new System.Collections.Generic.List<ToolDefinition>(ToolDefinitions.GetAllTools());
+            _agent.RegisterTools(allTools);
             _agent.SetToolExecutor(ExecuteMCPMethodAsync);
+
+            // Start Playwright MCP in background and merge browser_* tools
+            Task.Run(async () =>
+            {
+                try
+                {
+                    _playwright?.Dispose();
+                    _playwright = new PlaywrightMCPClient();
+                    var playwrightTools = await _playwright.StartAsync();
+                    if (playwrightTools.Count > 0)
+                    {
+                        allTools.AddRange(playwrightTools);
+                        _agent.RegisterTools(allTools);
+                        System.Diagnostics.Debug.WriteLine($"[Playwright] {playwrightTools.Count} browser tools registered");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Playwright] Init failed: {ex.Message}");
+                }
+            });
 
             _agent.OnThinking += (msg) => Dispatcher.Invoke(() => ShowProgress(msg));
             _agent.OnToolCall += (msg) => Dispatcher.Invoke(() =>
@@ -1850,6 +1873,87 @@ namespace RevitMCPBridge2026.AgentFramework
 
             // Wait for any thread blocked in the lock to exit
             lock (_pipeLock) { }
+
+            try { _playwright?.Dispose(); _playwright = null; } catch { }
+        }
+
+        private async Task<string> HandleCompareViewToLibraryAsync(JObject parameters)
+        {
+            if (_playwright == null || !_playwright.IsConnected)
+                return JsonConvert.SerializeObject(new { success = false, error = "Playwright not connected — browser tools unavailable." });
+            if (string.IsNullOrEmpty(_apiKey))
+                return JsonConvert.SerializeObject(new { success = false, error = "Anthropic API key not configured." });
+
+            try
+            {
+                var captureParams = new JObject { ["width"] = 1200, ["height"] = 900 };
+                if (parameters?["viewId"] != null) captureParams["viewId"] = parameters["viewId"];
+                var captureJson = await ExecuteMCPWithRetryAsync("captureViewportToBase64", captureParams);
+                var capture = JObject.Parse(captureJson);
+                if (capture["success"]?.ToObject<bool>() != true)
+                    return JsonConvert.SerializeObject(new { success = false, error = "Failed to capture Revit view: " + capture["error"] });
+                var revitBase64 = capture["result"]?["base64"]?.ToString();
+                var viewName = capture["result"]?["viewName"]?.ToString() ?? "current view";
+                if (string.IsNullOrEmpty(revitBase64))
+                    return JsonConvert.SerializeObject(new { success = false, error = "Revit view capture returned no image data." });
+
+                var libraryUrl = parameters?["libraryUrl"]?.ToString();
+                if (string.IsNullOrEmpty(libraryUrl))
+                    libraryUrl = "https://app.bimmonkey.ai/library";
+
+                await _playwright.CallToolAsync("browser_navigate", new JObject
+                {
+                    ["url"] = $"https://bimmonkey-production.up.railway.app/api/auth/headless?key={_bimMonkeyApiKey}"
+                });
+                await Task.Delay(2500);
+
+                var libraryBase64 = await _playwright.CallToolForBase64Async("browser_take_screenshot", new JObject());
+                if (string.IsNullOrEmpty(libraryBase64))
+                    return JsonConvert.SerializeObject(new { success = false, error = "Failed to screenshot library page." });
+
+                var question = parameters?["question"]?.ToString()
+                    ?? "Compare the Revit drawing (image 1) against the library reference (image 2). Identify: what matches, what differs, and any quality or standards issues.";
+
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.Timeout = TimeSpan.FromSeconds(90);
+                    client.DefaultRequestHeaders.Add("x-api-key", _apiKey);
+                    client.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
+
+                    var requestBody = new
+                    {
+                        model = _selectedModel,
+                        max_tokens = 2048,
+                        messages = new[]
+                        {
+                            new
+                            {
+                                role = "user",
+                                content = new object[]
+                                {
+                                    new { type = "text", text = $"Image 1 — Current Revit view: {viewName}" },
+                                    new { type = "image", source = new { type = "base64", media_type = "image/png", data = revitBase64 } },
+                                    new { type = "text", text = $"Image 2 — Library reference: {libraryUrl}" },
+                                    new { type = "image", source = new { type = "base64", media_type = "image/png", data = libraryBase64 } },
+                                    new { type = "text", text = question }
+                                }
+                            }
+                        }
+                    };
+
+                    var json = JsonConvert.SerializeObject(requestBody);
+                    var content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
+                    var response = await client.PostAsync("https://api.anthropic.com/v1/messages", content);
+                    var body = await response.Content.ReadAsStringAsync();
+                    var parsed = JObject.Parse(body);
+                    var analysis = parsed["content"]?[0]?["text"]?.ToString() ?? body;
+                    return JsonConvert.SerializeObject(new { success = true, result = new { viewName, libraryUrl, analysis, comparedAt = DateTime.Now.ToString("o") } });
+                }
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { success = false, error = ex.Message });
+            }
         }
 
         /// <summary>
@@ -1903,6 +2007,27 @@ namespace RevitMCPBridge2026.AgentFramework
                 var content = LoadKnowledgeFile(fileName);
                 return await Task.FromResult(JsonConvert.SerializeObject(new { success = true, fileName = fileName, content = content }));
             }
+
+            // Playwright browser tools — route to Playwright MCP process
+            if (methodName.StartsWith("browser_") && _playwright != null && _playwright.IsConnected)
+            {
+                if (methodName == "browser_navigate" && !string.IsNullOrEmpty(_bimMonkeyApiKey))
+                {
+                    var url = parameters?["url"]?.ToString() ?? "";
+                    if (url.Contains("app.bimmonkey.ai") && !url.Contains("/api/auth/headless"))
+                    {
+                        await _playwright.CallToolAsync("browser_navigate", new JObject
+                        {
+                            ["url"] = $"https://bimmonkey-production.up.railway.app/api/auth/headless?key={_bimMonkeyApiKey}"
+                        });
+                    }
+                }
+                return await _playwright.CallToolAsync(methodName, parameters);
+            }
+
+            // Compare current Revit view against a library reference screenshot
+            if (methodName == "compareViewToLibrary")
+                return await HandleCompareViewToLibraryAsync(parameters);
 
             // Handle vision analysis - needs API key which we have locally
             if (methodName == "analyzeView")
