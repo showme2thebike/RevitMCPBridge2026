@@ -1969,12 +1969,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     var libraryBase64  = Convert.ToBase64String(imgBytes);
                     var libraryMime    = imgResp.Content.Headers.ContentType?.MediaType ?? "image/png";
 
-                    // 4. Send both images to Claude vision for comparison
-                    http.DefaultRequestHeaders.Clear();
-                    http.DefaultRequestHeaders.Add("x-api-key", _apiKey);
-                    http.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
-                    http.Timeout = TimeSpan.FromSeconds(90);
-
+                    // 4. Send both images to Claude vision — separate client (can't modify Timeout after first request)
                     var question = parameters?["question"]?.ToString()
                         ?? "Compare the Revit drawing (image 1) against the approved library reference (image 2). Identify: what matches the firm standard, what differs, and any quality or compliance issues.";
 
@@ -2001,7 +1996,11 @@ namespace RevitMCPBridge2026.AgentFramework
 
                     var reqJson  = JsonConvert.SerializeObject(requestBody);
                     var reqBody  = new System.Net.Http.StringContent(reqJson, System.Text.Encoding.UTF8, "application/json");
-                    var response = await http.PostAsync("https://api.anthropic.com/v1/messages", reqBody);
+                    using var anthropic = new System.Net.Http.HttpClient();
+                    anthropic.Timeout = TimeSpan.FromSeconds(90);
+                    anthropic.DefaultRequestHeaders.Add("x-api-key", _apiKey);
+                    anthropic.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
+                    var response = await anthropic.PostAsync("https://api.anthropic.com/v1/messages", reqBody);
                     var respBody = await response.Content.ReadAsStringAsync();
                     var parsed   = JObject.Parse(respBody);
                     var analysis = parsed["content"]?[0]?["text"]?.ToString() ?? respBody;
