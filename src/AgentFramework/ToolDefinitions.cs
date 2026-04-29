@@ -70,15 +70,24 @@ namespace RevitMCPBridge2026.AgentFramework
                 new ToolDefinition
                 {
                     Name = "compareViewToLibrary",
-                    Description = "VISUAL QC: Capture current Revit view and compare against a library reference using AI vision. Returns analysis of what matches, what differs, and quality issues.",
+                    Description = @"VISUAL QC: Screenshot the current Revit view and compare it against approved library references using AI vision.
+
+Use this tool when the user says things like:
+- ""compare my view to the library"" / ""check this against the library""
+- ""does this match our standards?"" / ""how does this look vs our examples?""
+- ""QC this view"" / ""visual check"" / ""quality check""
+- ""compare"" / ""check against"" / ""look at the library""
+- ""is this right?"" / ""does this look correct?""
+
+Returns: what matches, what differs, and any quality or standards issues.",
                     InputSchema = new
                     {
                         type = "object",
                         properties = new
                         {
-                            viewId     = new { type = "integer", description = "View or sheet ID to compare (optional, uses active view)" },
-                            libraryUrl = new { type = "string",  description = "URL of library reference page to screenshot. Defaults to /library." },
-                            question   = new { type = "string",  description = "What to compare or verify." }
+                            viewId     = new { type = "integer", description = "View or sheet ID to compare (optional, uses active view if omitted)" },
+                            libraryUrl = new { type = "string",  description = "Specific library page URL to screenshot. Defaults to /library/project-hub." },
+                            question   = new { type = "string",  description = "What specifically to compare or verify (optional, defaults to general QC)." }
                         },
                         required = new string[] { }
                     }
