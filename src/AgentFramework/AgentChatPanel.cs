@@ -1347,7 +1347,8 @@ namespace RevitMCPBridge2026.AgentFramework
             // TOKEN USAGE — split input/output display matching 0421h format
             _agent.OnUsage += (inputTokens, outputTokens, cacheRead, cacheCreation) => Dispatcher.Invoke(() =>
             {
-                string inStr  = inputTokens  >= 1000 ? $"{inputTokens  / 1000}K" : inputTokens.ToString();
+                int totalInput = inputTokens + cacheRead + cacheCreation;
+                string inStr  = totalInput   >= 1000 ? $"{totalInput   / 1000}K" : totalInput.ToString();
                 string outStr = outputTokens >= 1000 ? $"{outputTokens / 1000}K" : outputTokens.ToString();
                 _tokenText.Text = cacheRead > 0
                     ? $"↑ {inStr}  ↓ {outStr}  ⚡{(cacheRead >= 1000 ? $"{cacheRead / 1000}K" : cacheRead.ToString())} cached"
