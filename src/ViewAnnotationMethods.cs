@@ -508,8 +508,9 @@ namespace RevitMCPBridge
                             dimLinePoint = midpoint + perpendicular * 0.5;
                         }
 
-                        // For drafting views, we need to create detail lines first
-                        // and use their references for dimensioning
+                        // Create short detail lines as persistent reference anchors.
+                        // These must NOT be deleted — the dimension holds live references to them.
+                        // At 0.001 ft they are sub-hairline and invisible at any print scale.
                         var detailLine1 = doc.Create.NewDetailCurve(view, Line.CreateBound(point1, point1 + new XYZ(0.001, 0, 0)));
                         var detailLine2 = doc.Create.NewDetailCurve(view, Line.CreateBound(point2, point2 + new XYZ(0.001, 0, 0)));
 
@@ -518,10 +519,6 @@ namespace RevitMCPBridge
                         referenceArray.Append(detailLine2.GeometryCurve.GetEndPointReference(0));
 
                         var dimension = doc.Create.NewDimension(view, line, referenceArray);
-
-                        // Clean up temporary detail lines
-                        doc.Delete(detailLine1.Id);
-                        doc.Delete(detailLine2.Id);
 
                         trans.Commit();
 
