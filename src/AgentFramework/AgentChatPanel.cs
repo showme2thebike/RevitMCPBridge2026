@@ -61,6 +61,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private string _firmMemory;
         private string _projectNotes;
         private PlaywrightMCPClient _playwright;
+        private bool _playwrightAuthed = false; // true once localStorage is seeded for this session
 
         // Streaming bubble state
         private System.Windows.Controls.TextBox _streamingTextBox;
@@ -1875,6 +1876,35 @@ namespace RevitMCPBridge2026.AgentFramework
             lock (_pipeLock) { }
 
             try { _playwright?.Dispose(); _playwright = null; } catch { }
+            _playwrightAuthed = false;
+        }
+
+        /// <summary>
+        /// Seeds bm_api_key and bm_pw_session into the browser's localStorage for app.bimmonkey.ai.
+        /// Navigates to /login (public page) to establish the origin, then uses browser_evaluate
+        /// to inject directly — no redirect chain, no URL param race conditions.
+        /// Sets _playwrightAuthed so subsequent calls in the same session skip re-auth.
+        /// </summary>
+        private async Task EnsurePlaywrightAuthAsync()
+        {
+            if (_playwrightAuthed) return;
+            if (_playwright == null || !_playwright.IsConnected || string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+
+            // Navigate to a public page on the target origin so localStorage is accessible
+            await _playwright.CallToolAsync("browser_navigate", new JObject
+            {
+                ["url"] = "https://app.bimmonkey.ai/login"
+            }, 15000);
+            await Task.Delay(1000);
+
+            // Inject auth directly — survives all SPA navigations without needing URL params
+            var safeKey = _bimMonkeyApiKey.Replace("\\", "\\\\").Replace("'", "\\'");
+            await _playwright.CallToolAsync("browser_evaluate", new JObject
+            {
+                ["script"] = $"localStorage.setItem('bm_api_key','{safeKey}');localStorage.setItem('bm_pw_session','1');"
+            });
+
+            _playwrightAuthed = true;
         }
 
         private async Task<string> HandleCompareViewToLibraryAsync(JObject parameters)
@@ -1899,13 +1929,15 @@ namespace RevitMCPBridge2026.AgentFramework
 
                 var libraryUrl = parameters?["libraryUrl"]?.ToString();
                 if (string.IsNullOrEmpty(libraryUrl))
-                    libraryUrl = "https://app.bimmonkey.ai/library";
+                    libraryUrl = "https://app.bimmonkey.ai/library/project-hub";
+
+                await EnsurePlaywrightAuthAsync();
 
                 await _playwright.CallToolAsync("browser_navigate", new JObject
                 {
-                    ["url"] = $"https://bimmonkey-production.up.railway.app/api/auth/headless?key={_bimMonkeyApiKey}"
-                });
-                await Task.Delay(2500);
+                    ["url"] = libraryUrl
+                }, 20000);
+                await Task.Delay(2000);
 
                 var libraryBase64 = await _playwright.CallToolForBase64Async("browser_take_screenshot", new JObject());
                 if (string.IsNullOrEmpty(libraryBase64))
@@ -2011,20 +2043,11 @@ namespace RevitMCPBridge2026.AgentFramework
             // Playwright browser tools — route to Playwright MCP process
             if (methodName.StartsWith("browser_") && _playwright != null && _playwright.IsConnected)
             {
-                if (methodName == "browser_navigate" && !string.IsNullOrEmpty(_bimMonkeyApiKey))
+                if (methodName == "browser_navigate")
                 {
                     var url = parameters?["url"]?.ToString() ?? "";
-                    if (url.Contains("app.bimmonkey.ai") && !url.Contains("/api/auth/headless"))
-                    {
-                        // Auth first: Railway validates key and redirects to app.bimmonkey.ai?_bmk=key.
-                        // React's PlaywrightAuthHandler reads _bmk and saves to localStorage.
-                        // Wait for redirect + hydration before navigating to the real URL.
-                        await _playwright.CallToolAsync("browser_navigate", new JObject
-                        {
-                            ["url"] = $"https://bimmonkey-production.up.railway.app/api/auth/headless?key={_bimMonkeyApiKey}"
-                        });
-                        await Task.Delay(2500);
-                    }
+                    if (url.Contains("app.bimmonkey.ai"))
+                        await EnsurePlaywrightAuthAsync();
                 }
                 return await _playwright.CallToolAsync(methodName, parameters);
             }
