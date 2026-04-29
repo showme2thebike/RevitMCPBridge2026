@@ -281,3 +281,104 @@
    └── Loads memory_smart_context
    └── Ready for commands
 ```
+
+---
+
+## Banana Chat — AgentCore Architecture (v0.4+)
+
+Banana Chat is the in-Revit AI chat panel (`AgentChatPanel.cs`). It drives a full agentic loop
+via `AgentCore.cs` using raw HTTP to the Anthropic Messages API (no SDK).
+
+### API Call Structure
+
+Every call to Claude is built in `CallClaudeAsync` as:
+
+```
+POST https://api.anthropic.com/v1/messages
+{
+  model, max_tokens,
+  cache_control: { type: "ephemeral" },          ← automatic caching on message history
+  system: [{ type: "text", text: "...", cache_control: { type: "ephemeral" } }],
+  tools: [ ...all tools..., { ..., cache_control: { type: "ephemeral" } } ],  ← last tool only
+  messages: [ ...conversation history... ],
+  stream: true
+}
+```
+
+### Prompt Caching Strategy (v0.4.20260428)
+
+Three explicit cache breakpoints using 5-minute TTL:
+
+| Breakpoint | What it covers | Change frequency |
+|---|---|---|
+| Last tool definition | All tool definitions | Static — never changes within a session |
+| System block | persistentIntelBlock (firm memory, rules) | Per session — same across all turns |
+| Automatic (top-level) | Growing message history | Per turn — advances each call |
+
+**Why this matters for agentic loops:** Barrett's sessions average ~158 API calls (each tool
+execution is a new API call). Without caching, tools + system are priced at $3/MTok × 158 times.
+With caching, they are written once at $3.75/MTok then read at $0.30/MTok — ~90% savings on
+the static prefix for sessions with many tool calls.
+
+**Scaling benefit:** Going from 54 → 100 tools with caching costs ~$0.47/session extra vs
+~$4.50/session extra without caching. Caching makes tool count a session-fixed cost, not a
+per-call multiplier.
+
+### Token Tracking
+
+`UsageInfo` captures four fields from every streaming response (`message_start` SSE event):
+
+| Field | API key | Meaning |
+|---|---|---|
+| `InputTokens` | `input_tokens` | Uncached tokens after last breakpoint |
+| `OutputTokens` | `output_tokens` | Generated tokens |
+| `CacheReadInputTokens` | `cache_read_input_tokens` | Tokens served from cache (0.1x price) |
+| `CacheCreationInputTokens` | `cache_creation_input_tokens` | Tokens written to cache (1.25x price) |
+
+All four are accumulated at session level and sent in `session_outcome` telemetry.
+
+**Status bar display:** `↑ 12K  ↓ 956  ⚡ 200K cached` — the `⚡` counter appears once
+caching is active (second API call onward in a session).
+
+**Cost formula:**
+```
+cost = (inputTokens / 1M × basePrice)
+     + (cacheCreation / 1M × basePrice × 1.25)
+     + (cacheRead / 1M × basePrice × 0.10)
+     + (outputTokens / 1M × outputPrice)
+```
+
+### Federated Learning — Corrections System
+
+Three paths for Barrett to submit a correction:
+
+1. **Conversational** — Barrett says something negative after a write op, watches Claude fix it,
+   then says "done". Banana Chat injects a `CORRECTION DIFF: trigger=<op>` message; Claude
+   synthesizes a rule and calls `memoryStoreCorrection`, which POSTs to `/api/corrections`.
+
+2. **Wrench button (🔧)** — Appears after any write operation. Starts the correction watcher
+   explicitly without requiring negative language.
+
+3. **Thumbs-down (👎)** — Dialog asks what went wrong. Rule is POSTed directly to
+   `/api/corrections`, bypassing the diff flow.
+
+**Backend storage:** `banana_corrections` table on Railway PostgreSQL:
+- `firm_id`, `trigger_operation`, `natural_language_rule`, `before_state`, `after_state`
+- `confirmed`, `promoted_to_layer1`, `promoted_at`
+
+**Admin review** at `/admin` → Corrections tab:
+- Rolling list of all corrections (respects excludeFirms filter for Eric/Barrett)
+- Patterns section: corrections from 2+ firms on the same `trigger_operation` → eligible
+  for promotion to Layer 1 (system prompt)
+- "Promote to Layer 1" button marks the pattern; Eric manually adds the rule to
+  `persistentIntelBlock` in `AgentChatPanel.cs`
+
+### Railway Backend Endpoints (BIM Monkey)
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `POST /api/corrections` | Bearer API key | Plugin stores a captured correction |
+| `GET /api/admin/corrections` | x-admin-key | Rolling list + cross-firm patterns |
+| `PATCH /api/admin/corrections/:id/promote` | x-admin-key | Mark pattern as promoted |
+| `POST /api/telemetry` | Bearer API key | Plugin session events (session_start, tool_call, session_outcome) |
+| `GET /api/admin/plugin-telemetry` | x-admin-key | Aggregated plugin usage stats |
