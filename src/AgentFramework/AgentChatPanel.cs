@@ -1905,13 +1905,14 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private async Task<string> HandleCompareViewToLibraryAsync(JObject parameters)
         {
-            if (_playwright == null || !_playwright.IsConnected)
-                return JsonConvert.SerializeObject(new { success = false, error = "Playwright not connected — browser tools unavailable." });
             if (string.IsNullOrEmpty(_apiKey))
                 return JsonConvert.SerializeObject(new { success = false, error = "Anthropic API key not configured." });
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+                return JsonConvert.SerializeObject(new { success = false, error = "BIM Monkey API key not configured." });
 
             try
             {
+                // 1. Capture current Revit view
                 var captureParams = new JObject { ["width"] = 1200, ["height"] = 900 };
                 if (parameters?["viewId"] != null) captureParams["viewId"] = parameters["viewId"];
                 var captureJson = await ExecuteMCPWithRetryAsync("captureViewportToBase64", captureParams);
@@ -1923,30 +1924,59 @@ namespace RevitMCPBridge2026.AgentFramework
                 if (string.IsNullOrEmpty(revitBase64))
                     return JsonConvert.SerializeObject(new { success = false, error = "Revit view capture returned no image data." });
 
-                var libraryUrl = parameters?["libraryUrl"]?.ToString();
-                if (string.IsNullOrEmpty(libraryUrl))
-                    libraryUrl = "https://app.bimmonkey.ai/library/project-hub";
-
-                await EnsurePlaywrightAuthAsync();
-
-                await _playwright.CallToolAsync("browser_navigate", new JObject
+                using (var http = new System.Net.Http.HttpClient())
                 {
-                    ["url"] = libraryUrl
-                }, 20000);
-                await Task.Delay(2000);
+                    http.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    http.Timeout = TimeSpan.FromSeconds(20);
 
-                var libraryBase64 = await _playwright.CallToolForBase64Async("browser_take_screenshot", new JObject());
-                if (string.IsNullOrEmpty(libraryBase64))
-                    return JsonConvert.SerializeObject(new { success = false, error = "Failed to screenshot library page." });
+                    // 2. Query library for approved examples (filter by detailType / projectName if provided)
+                    var detailType  = parameters?["detailType"]?.ToString();
+                    var projectName = parameters?["projectName"]?.ToString();
+                    var libQueryUrl = "https://bimmonkey-production.up.railway.app/api/library?limit=20";
+                    if (!string.IsNullOrEmpty(detailType))
+                        libQueryUrl += $"&detailType={Uri.EscapeDataString(detailType)}";
 
-                var question = parameters?["question"]?.ToString()
-                    ?? "Compare the Revit drawing (image 1) against the library reference (image 2). Identify: what matches, what differs, and any quality or standards issues.";
+                    var libResp = await http.GetAsync(libQueryUrl);
+                    if (!libResp.IsSuccessStatusCode)
+                        return JsonConvert.SerializeObject(new { success = false, error = $"Library query failed: {(int)libResp.StatusCode}" });
 
-                using (var client = new System.Net.Http.HttpClient())
-                {
-                    client.Timeout = TimeSpan.FromSeconds(90);
-                    client.DefaultRequestHeaders.Add("x-api-key", _apiKey);
-                    client.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
+                    var libBody    = JObject.Parse(await libResp.Content.ReadAsStringAsync());
+                    var examples   = libBody["examples"] as JArray;
+                    if (examples == null || examples.Count == 0)
+                        return JsonConvert.SerializeObject(new { success = false, error = "No approved library examples found. Upload and approve some drawings first." });
+
+                    // Pick best match: prefer same projectName, otherwise first result
+                    JObject best = null;
+                    if (!string.IsNullOrEmpty(projectName))
+                        foreach (JObject ex in examples)
+                            if (ex["project_name"]?.ToString()?.IndexOf(projectName, StringComparison.OrdinalIgnoreCase) >= 0)
+                            { best = ex; break; }
+                    if (best == null) best = examples[0] as JObject;
+
+                    var exampleId      = best?["id"]?.ToString();
+                    var exampleProject = best?["project_name"]?.ToString() ?? "library";
+                    var exampleType    = best?["detail_type"]?.ToString() ?? "";
+
+                    if (string.IsNullOrEmpty(exampleId))
+                        return JsonConvert.SerializeObject(new { success = false, error = "Library example missing ID." });
+
+                    // 3. Fetch full-resolution image directly from the library API
+                    var imgResp = await http.GetAsync($"https://bimmonkey-production.up.railway.app/api/library/{exampleId}/image");
+                    if (!imgResp.IsSuccessStatusCode)
+                        return JsonConvert.SerializeObject(new { success = false, error = $"Could not fetch library image (example {exampleId}): {(int)imgResp.StatusCode}" });
+
+                    var imgBytes       = await imgResp.Content.ReadAsByteArrayAsync();
+                    var libraryBase64  = Convert.ToBase64String(imgBytes);
+                    var libraryMime    = imgResp.Content.Headers.ContentType?.MediaType ?? "image/png";
+
+                    // 4. Send both images to Claude vision for comparison
+                    http.DefaultRequestHeaders.Clear();
+                    http.DefaultRequestHeaders.Add("x-api-key", _apiKey);
+                    http.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
+                    http.Timeout = TimeSpan.FromSeconds(90);
+
+                    var question = parameters?["question"]?.ToString()
+                        ?? "Compare the Revit drawing (image 1) against the approved library reference (image 2). Identify: what matches the firm standard, what differs, and any quality or compliance issues.";
 
                     var requestBody = new
                     {
@@ -1961,21 +1991,26 @@ namespace RevitMCPBridge2026.AgentFramework
                                 {
                                     new { type = "text", text = $"Image 1 — Current Revit view: {viewName}" },
                                     new { type = "image", source = new { type = "base64", media_type = "image/png", data = revitBase64 } },
-                                    new { type = "text", text = $"Image 2 — Library reference: {libraryUrl}" },
-                                    new { type = "image", source = new { type = "base64", media_type = "image/png", data = libraryBase64 } },
+                                    new { type = "text", text = $"Image 2 — Approved library reference: {exampleProject} ({exampleType})" },
+                                    new { type = "image", source = new { type = "base64", media_type = libraryMime, data = libraryBase64 } },
                                     new { type = "text", text = question }
                                 }
                             }
                         }
                     };
 
-                    var json = JsonConvert.SerializeObject(requestBody);
-                    var content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json");
-                    var response = await client.PostAsync("https://api.anthropic.com/v1/messages", content);
-                    var body = await response.Content.ReadAsStringAsync();
-                    var parsed = JObject.Parse(body);
-                    var analysis = parsed["content"]?[0]?["text"]?.ToString() ?? body;
-                    return JsonConvert.SerializeObject(new { success = true, result = new { viewName, libraryUrl, analysis, comparedAt = DateTime.Now.ToString("o") } });
+                    var reqJson  = JsonConvert.SerializeObject(requestBody);
+                    var reqBody  = new System.Net.Http.StringContent(reqJson, System.Text.Encoding.UTF8, "application/json");
+                    var response = await http.PostAsync("https://api.anthropic.com/v1/messages", reqBody);
+                    var respBody = await response.Content.ReadAsStringAsync();
+                    var parsed   = JObject.Parse(respBody);
+                    var analysis = parsed["content"]?[0]?["text"]?.ToString() ?? respBody;
+
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        result  = new { viewName, referenceExample = exampleProject, detailType = exampleType, analysis, comparedAt = DateTime.Now.ToString("o") }
+                    });
                 }
             }
             catch (Exception ex)

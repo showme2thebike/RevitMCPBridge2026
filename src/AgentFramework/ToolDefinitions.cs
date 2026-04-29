@@ -70,7 +70,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 new ToolDefinition
                 {
                     Name = "compareViewToLibrary",
-                    Description = @"VISUAL QC: Screenshot the current Revit view and compare it against approved library references using AI vision.
+                    Description = @"VISUAL QC: Capture the current Revit view and compare it side-by-side against an approved library reference image using Claude vision. No browser required — fetches the reference image directly from the library API.
 
 Use this tool when the user says things like:
 - ""compare my view to the library"" / ""check this against the library""
@@ -79,15 +79,17 @@ Use this tool when the user says things like:
 - ""compare"" / ""check against"" / ""look at the library""
 - ""is this right?"" / ""does this look correct?""
 
-Returns: what matches, what differs, and any quality or standards issues.",
+Pass detailType (e.g. ""stair"", ""door"", ""window"") and/or projectName to target a specific library example.
+Returns: what matches the firm standard, what differs, and quality/compliance issues.",
                     InputSchema = new
                     {
                         type = "object",
                         properties = new
                         {
-                            viewId     = new { type = "integer", description = "View or sheet ID to compare (optional, uses active view if omitted)" },
-                            libraryUrl = new { type = "string",  description = "Specific library page URL to screenshot. Defaults to /library/project-hub." },
-                            question   = new { type = "string",  description = "What specifically to compare or verify (optional, defaults to general QC)." }
+                            viewId      = new { type = "integer", description = "View or sheet ID to compare (optional, uses active view if omitted)" },
+                            detailType  = new { type = "string",  description = "Filter library by detail type, e.g. 'stair', 'door', 'window', 'wall section'" },
+                            projectName = new { type = "string",  description = "Filter library by project name, e.g. 'NE 70th', 'Baines'" },
+                            question    = new { type = "string",  description = "What specifically to compare or verify (optional, defaults to general QC)" }
                         },
                         required = new string[] { }
                     }
