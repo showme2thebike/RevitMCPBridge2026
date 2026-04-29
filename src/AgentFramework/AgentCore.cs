@@ -73,7 +73,7 @@ namespace RevitMCPBridge2026.AgentFramework
         public event Action OnComplete;
         public event Action<string> OnLocalModel;
         public event Action<VerificationResult> OnVerification;
-        public event Action<int, int> OnUsage; // cumulative (inputTokens, outputTokens) after each API call
+        public event Action<int, int, int, int> OnUsage; // cumulative (inputTokens, outputTokens, cacheRead, cacheCreation) after each API call
         public event Action<string> OnChunk;  // streaming text delta — fires per SSE chunk
 
         private string _bimMonkeyApiKey;
@@ -81,6 +81,8 @@ namespace RevitMCPBridge2026.AgentFramework
         // Session-level token and timing tracking (cumulative across all RunAsync calls until ClearHistory)
         private int _sessionInputTokens = 0;
         private int _sessionOutputTokens = 0;
+        private int _sessionCacheReadTokens = 0;
+        private int _sessionCacheCreationTokens = 0;
         private DateTime _sessionStartTime;
         private string _currentStage = "thinking";
         private string _lastToolName = null;
@@ -137,6 +139,8 @@ namespace RevitMCPBridge2026.AgentFramework
             _conversationHistory.Clear();
             _sessionInputTokens = 0;
             _sessionOutputTokens = 0;
+            _sessionCacheReadTokens = 0;
+            _sessionCacheCreationTokens = 0;
             _sessionStartSent = false;
             _sessionOutcomeSent = false;
         }
@@ -160,6 +164,8 @@ namespace RevitMCPBridge2026.AgentFramework
                     last_tool = _lastToolName,
                     input_tokens = _sessionInputTokens,
                     output_tokens = _sessionOutputTokens,
+                    cache_read_tokens = _sessionCacheReadTokens,
+                    cache_creation_tokens = _sessionCacheCreationTokens,
                     model = _model,
                     durationMs
                 }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
@@ -462,9 +468,11 @@ namespace RevitMCPBridge2026.AgentFramework
                     // Accumulate token usage and notify UI
                     if (response.Usage != null)
                     {
-                        _sessionInputTokens += response.Usage.InputTokens;
-                        _sessionOutputTokens += response.Usage.OutputTokens;
-                        OnUsage?.Invoke(_sessionInputTokens, _sessionOutputTokens);
+                        _sessionInputTokens        += response.Usage.InputTokens;
+                        _sessionOutputTokens       += response.Usage.OutputTokens;
+                        _sessionCacheReadTokens    += response.Usage.CacheReadInputTokens;
+                        _sessionCacheCreationTokens += response.Usage.CacheCreationInputTokens;
+                        OnUsage?.Invoke(_sessionInputTokens, _sessionOutputTokens, _sessionCacheReadTokens, _sessionCacheCreationTokens);
                     }
 
                     var assistantContent = new List<ContentBlock>();
@@ -848,11 +856,17 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 try
                 {
+                    var systemBlock = new[]
+                    {
+                        new { type = "text", text = systemPrompt ?? GetDefaultSystemPrompt(), cache_control = new { type = "ephemeral" } }
+                    };
+
                     var requestBody = new
                     {
                         model = _model,
                         max_tokens = 8192,
-                        system = systemPrompt ?? GetDefaultSystemPrompt(),
+                        cache_control = new { type = "ephemeral" },
+                        system = systemBlock,
                         messages = FormatMessagesForAPI(),
                         tools = FormatToolsForAPI(),
                         stream = true
@@ -880,6 +894,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     var textSb = new StringBuilder();
                     var toolBlocks = new Dictionary<int, (string Id, string Name, StringBuilder Input)>();
                     int inputTokens = 0, outputTokens = 0;
+                    int cacheReadTokens = 0, cacheCreationTokens = 0;
                     string stopReason = null;
 
                     using (var response = (HttpWebResponse)request.GetResponse())
@@ -899,7 +914,9 @@ namespace RevitMCPBridge2026.AgentFramework
                             switch (evt["type"]?.ToString())
                             {
                                 case "message_start":
-                                    inputTokens = evt["message"]?["usage"]?["input_tokens"]?.Value<int>() ?? 0;
+                                    inputTokens        = evt["message"]?["usage"]?["input_tokens"]?.Value<int>()                ?? 0;
+                                    cacheReadTokens    = evt["message"]?["usage"]?["cache_read_input_tokens"]?.Value<int>()     ?? 0;
+                                    cacheCreationTokens = evt["message"]?["usage"]?["cache_creation_input_tokens"]?.Value<int>() ?? 0;
                                     break;
 
                                 case "content_block_start":
@@ -954,7 +971,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     {
                         Content = content,
                         StopReason = stopReason ?? "end_turn",
-                        Usage = new UsageInfo { InputTokens = inputTokens, OutputTokens = outputTokens }
+                        Usage = new UsageInfo { InputTokens = inputTokens, OutputTokens = outputTokens, CacheReadInputTokens = cacheReadTokens, CacheCreationInputTokens = cacheCreationTokens }
                     };
                 }
                 catch (WebException ex)
@@ -1026,12 +1043,21 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private List<object> FormatToolsForAPI()
         {
-            return _tools.Select(t => new
+            var result = new List<object>(_tools.Count);
+            for (int i = 0; i < _tools.Count; i++)
             {
-                name = t.Name,
-                description = t.Description,
-                input_schema = t.InputSchema
-            }).Cast<object>().ToList();
+                var t = _tools[i];
+                var obj = new JObject
+                {
+                    ["name"]         = t.Name,
+                    ["description"]  = t.Description,
+                    ["input_schema"] = JToken.FromObject(t.InputSchema)
+                };
+                if (i == _tools.Count - 1)
+                    obj["cache_control"] = JObject.FromObject(new { type = "ephemeral" });
+                result.Add(obj);
+            }
+            return result;
         }
 
         private string GetDefaultSystemPrompt()
@@ -1110,6 +1136,12 @@ Rules:
 
         [JsonProperty("output_tokens")]
         public int OutputTokens { get; set; }
+
+        [JsonProperty("cache_read_input_tokens")]
+        public int CacheReadInputTokens { get; set; }
+
+        [JsonProperty("cache_creation_input_tokens")]
+        public int CacheCreationInputTokens { get; set; }
     }
 
     public class ClaudeResponse

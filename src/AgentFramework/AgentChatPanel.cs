@@ -1321,12 +1321,14 @@ namespace RevitMCPBridge2026.AgentFramework
             _agent.OnComplete += () => Dispatcher.Invoke(() => { HideProgress(); SetProcessing(false); });
 
             // TOKEN USAGE — split input/output display matching 0421h format
-            _agent.OnUsage += (inputTokens, outputTokens) => Dispatcher.Invoke(() =>
+            _agent.OnUsage += (inputTokens, outputTokens, cacheRead, cacheCreation) => Dispatcher.Invoke(() =>
             {
                 string inStr  = inputTokens  >= 1000 ? $"{inputTokens  / 1000}K" : inputTokens.ToString();
                 string outStr = outputTokens >= 1000 ? $"{outputTokens / 1000}K" : outputTokens.ToString();
-                _tokenText.Text = $"↑ {inStr}  ↓ {outStr}";
-                var cost = EstimateSessionCost(inputTokens, outputTokens, _selectedModel);
+                _tokenText.Text = cacheRead > 0
+                    ? $"↑ {inStr}  ↓ {outStr}  ⚡{(cacheRead >= 1000 ? $"{cacheRead / 1000}K" : cacheRead.ToString())} cached"
+                    : $"↑ {inStr}  ↓ {outStr}";
+                var cost = EstimateSessionCost(inputTokens, outputTokens, cacheRead, cacheCreation, _selectedModel);
                 if (cost.HasValue && _costText != null)
                     _costText.Text = $"${cost.Value:F2}";
             });
@@ -1784,10 +1786,9 @@ namespace RevitMCPBridge2026.AgentFramework
             { "claude-haiku-4-5-20251001",  (0.80,  4.00)  },
         };
 
-        private double? EstimateSessionCost(int inputTokens, int outputTokens, string modelId)
+        private double? EstimateSessionCost(int inputTokens, int outputTokens, int cacheRead, int cacheCreation, string modelId)
         {
             if (string.IsNullOrEmpty(modelId)) return null;
-            // Match on substring for robustness
             (double input, double output) pricing = (3.00, 15.00); // default: Sonnet
             foreach (var kv in _modelPricing)
             {
@@ -1797,7 +1798,10 @@ namespace RevitMCPBridge2026.AgentFramework
                     break;
                 }
             }
-            return (inputTokens / 1_000_000.0 * pricing.input) + (outputTokens / 1_000_000.0 * pricing.output);
+            double regularCost    = (inputTokens    / 1_000_000.0 * pricing.input) + (outputTokens / 1_000_000.0 * pricing.output);
+            double cacheReadCost  =  cacheRead       / 1_000_000.0 * pricing.input * 0.10;
+            double cacheWriteCost =  cacheCreation   / 1_000_000.0 * pricing.input * 1.25;
+            return regularCost + cacheReadCost + cacheWriteCost;
         }
 
         private void EnsureMCPConnection()
@@ -3176,7 +3180,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 _lastCorrectionDiff = diff;
                 _lastCorrectionTriggerOp = _correctionTriggerOperation;
                 if (!string.IsNullOrEmpty(diff))
-                    message = $"CORRECTION DIFF (what changed in Revit since my last write op — trigger: {_correctionTriggerOperation}):\n{diff}\n\n{message}";
+                    message = $"CORRECTION DIFF: trigger={_correctionTriggerOperation}\n{diff}\n\n{message}";
                 _correctionWatchActive = false;
                 _correctionTriggerOperation = null;
             }
