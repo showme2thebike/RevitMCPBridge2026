@@ -2906,7 +2906,7 @@ namespace RevitMCPBridge
         ///   newReference: { elementId, referenceType, faceSide (optional) }
         ///   insertAtIndex: (optional) Where to insert (default = append at end)
         /// </summary>
-        [MCPMethod("addSegmentToDimension", Category = "Dimensioning", Description = "Add a reference to an existing dimension to extend the dimension string")]
+        [MCPMethod("addSegmentToDimension", Category = "Dimensioning", Description = "Add a reference to an existing dimension to extend the dimension string. LIMITATION: property lines cannot be added as dimension references via the API — they do not expose geometric references. To dimension to a property line, the user must manually use Edit Witness Lines in the Revit UI. Supports: walls, grids, floors, structural elements, detail lines.")]
         public static string AddSegmentToDimension(UIApplication uiApp, JObject parameters)
         {
             try

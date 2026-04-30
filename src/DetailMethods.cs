@@ -9347,7 +9347,7 @@ namespace RevitMCPBridge2026
 
                         if (startPt.DistanceTo(endPt) < 0.001)
                         {
-                            createdLines.Add(new { name = name, success = false, error = "Line too short" });
+                            createdLines.Add(new { name, success = false, error = $"Line too short ({startPt.DistanceTo(endPt):F6} ft). Coordinates must be in Revit internal units (feet). Minimum length is 0.001 ft (0.012\"). Check that startX/startY and endX/endY are not identical." });
                             continue;
                         }
 

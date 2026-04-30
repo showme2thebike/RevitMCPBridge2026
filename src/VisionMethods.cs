@@ -492,21 +492,36 @@ namespace RevitMCPBridge
         /// <summary>
         /// Set the view range for a plan view.
         /// </summary>
-        [MCPMethod("setViewRange", Category = "Vision", Description = "Set the view range for a plan view")]
+        [MCPMethod("setViewRange", Category = "Vision", Description = "Set the view range for a plan view. Pass viewId to target a specific view (recommended), or omit to use the active view. All offsets are in feet from the associated level. Fails if a view template controls the view range — detach the template first using applyViewTemplate with templateId=-1.")]
         public static string SetViewRange(UIApplication uiApp, JObject parameters)
         {
             try
             {
                 var doc = uiApp.ActiveUIDocument?.Document;
                 if (doc == null)
-                {
                     return JsonConvert.SerializeObject(new { success = false, error = "No active document" });
+
+                ViewPlan view = null;
+                if (parameters["viewId"] != null)
+                {
+                    var viewId = new ElementId(parameters["viewId"].ToObject<int>());
+                    view = doc.GetElement(viewId) as ViewPlan;
+                    if (view == null)
+                        return JsonConvert.SerializeObject(new { success = false, error = $"View {parameters["viewId"]} not found or is not a plan view" });
+                }
+                else
+                {
+                    view = uiApp.ActiveUIDocument.ActiveView as ViewPlan;
+                    if (view == null)
+                        return JsonConvert.SerializeObject(new { success = false, error = "Active view is not a plan view" });
                 }
 
-                var view = uiApp.ActiveUIDocument.ActiveView as ViewPlan;
-                if (view == null)
+                // Block if view template controls view range
+                var templateId = view.ViewTemplateId;
+                if (templateId != null && templateId != ElementId.InvalidElementId)
                 {
-                    return JsonConvert.SerializeObject(new { success = false, error = "Active view is not a plan view" });
+                    var tmpl = doc.GetElement(templateId) as View;
+                    return JsonConvert.SerializeObject(new { success = false, error = $"View has a template applied ('{tmpl?.Name ?? templateId.Value.ToString()}') that controls the view range. Detach it first: call applyViewTemplate with templateId=-1." });
                 }
 
                 var topOffset = parameters["topOffset"]?.Value<double>();

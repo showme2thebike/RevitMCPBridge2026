@@ -353,17 +353,29 @@ namespace RevitMCPBridge
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                // Property lines are in the Site category
+                // In Revit 2026, property lines are ModelCurve elements (no dedicated PropertyLine.Create API).
+                // Collect all ModelCurve elements whose subcategory or line style name contains "Property" or "Site".
                 var lines = new FilteredElementCollector(doc)
-                    .OfCategory(BuiltInCategory.OST_Site)
+                    .OfClass(typeof(ModelCurve))
                     .WhereElementIsNotElementType()
-                    .Where(e => e.Name.Contains("Property") || e.Category?.Name == "Property Lines")
+                    .ToElements()
+                    .OfType<ModelCurve>()
+                    .Where(mc => {
+                        var catName = mc.Category?.Name ?? "";
+                        var styleName = (mc.LineStyle as GraphicsStyle)?.GraphicsStyleCategory?.Name ?? "";
+                        return catName.IndexOf("Property", StringComparison.OrdinalIgnoreCase) >= 0
+                            || styleName.IndexOf("Property", StringComparison.OrdinalIgnoreCase) >= 0
+                            || catName.IndexOf("Site", StringComparison.OrdinalIgnoreCase) >= 0;
+                    })
                     .Select(l => new
                     {
                         lineId = l.Id.Value,
-                        name = l.Name
+                        elementId = l.Id.Value,
+                        name = l.Name,
+                        category = l.Category?.Name,
+                        lineStyle = (l.LineStyle as GraphicsStyle)?.GraphicsStyleCategory?.Name
                     })
-                    .ToList();
+                    .ToList<object>();
 
                 return JsonConvert.SerializeObject(new
                 {
@@ -1561,12 +1573,20 @@ namespace RevitMCPBridge
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                // Look for property line elements under site category
+                // In Revit 2026, property lines are ModelCurve elements.
                 var propertyLines = new FilteredElementCollector(doc)
-                    .OfCategory(BuiltInCategory.OST_Site)
+                    .OfClass(typeof(ModelCurve))
                     .WhereElementIsNotElementType()
-                    .Where(e => e.Name.IndexOf("Property", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                e.Name.IndexOf("Boundary", StringComparison.OrdinalIgnoreCase) >= 0)
+                    .ToElements()
+                    .OfType<ModelCurve>()
+                    .Where(mc => {
+                        var catName = mc.Category?.Name ?? "";
+                        var styleName = (mc.LineStyle as GraphicsStyle)?.GraphicsStyleCategory?.Name ?? "";
+                        return catName.IndexOf("Property", StringComparison.OrdinalIgnoreCase) >= 0
+                            || styleName.IndexOf("Property", StringComparison.OrdinalIgnoreCase) >= 0
+                            || catName.IndexOf("Site", StringComparison.OrdinalIgnoreCase) >= 0;
+                    })
+                    .Cast<Element>()
                     .ToList();
 
                 var boundaryPoints = new List<object>();

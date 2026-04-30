@@ -1244,19 +1244,23 @@ namespace RevitMCPBridge2026
                         value = null;
                     }
 
-                    parameterList.Add(new
+                    try
                     {
-                        name = param.Definition.Name,
-                        value,
-                        displayValue = param.AsValueString(),
-                        storageType = param.StorageType.ToString(),
-                        isReadOnly = param.IsReadOnly,
-                        isShared = param.IsShared,
-                        hasValue = param.HasValue,
-                        unit = param.GetUnitTypeId()?.TypeId,
-                        parameterType = param.Definition.GetDataType()?.TypeId ?? "Unknown",
-                        group = param.Definition.GetGroupTypeId()?.TypeId ?? "Unknown"
-                    });
+                        parameterList.Add(new
+                        {
+                            name = param.Definition.Name,
+                            value,
+                            displayValue = param.AsValueString(),
+                            storageType = param.StorageType.ToString(),
+                            isReadOnly = param.IsReadOnly,
+                            isShared = param.IsShared,
+                            hasValue = param.HasValue,
+                            unit = param.GetUnitTypeId()?.TypeId,
+                            parameterType = param.Definition.GetDataType()?.TypeId ?? "Unknown",
+                            group = param.Definition.GetGroupTypeId()?.TypeId ?? "Unknown"
+                        });
+                    }
+                    catch { /* skip unreadable parameters (common on views with template-locked params) */ }
                 }
 
                 return JsonConvert.SerializeObject(new

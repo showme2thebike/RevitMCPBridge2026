@@ -517,7 +517,7 @@ namespace RevitMCPBridge
         /// <summary>
         /// Apply a view template
         /// </summary>
-        [MCPMethod("applyViewTemplate", Category = "View", Description = "Apply a view template to a view")]
+        [MCPMethod("applyViewTemplate", Category = "View", Description = "Apply a view template to a view. Pass templateId=-1 to detach the current template.")]
         public static string ApplyViewTemplate(UIApplication uiApp, JObject parameters)
         {
             try
@@ -525,14 +525,34 @@ namespace RevitMCPBridge
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 var viewId = new ElementId(int.Parse(parameters["viewId"].ToString()));
-                var templateId = new ElementId(int.Parse(parameters["templateId"].ToString()));
-
+                var templateIdInt = int.Parse(parameters["templateId"].ToString());
                 var view = doc.GetElement(viewId) as View;
+
+                if (view == null)
+                    return ResponseBuilder.Error("View not found", "ELEMENT_NOT_FOUND").Build();
+
+                // templateId = -1 means detach
+                if (templateIdInt == -1)
+                {
+                    using (var trans = new Transaction(doc, "Detach View Template"))
+                    {
+                        trans.Start();
+                        view.ViewTemplateId = ElementId.InvalidElementId;
+                        trans.Commit();
+                        return ResponseBuilder.Success()
+                            .With("viewId", (int)viewId.Value)
+                            .With("detached", true)
+                            .WithMessage("View template detached.")
+                            .Build();
+                    }
+                }
+
+                var templateId = new ElementId(templateIdInt);
                 var template = doc.GetElement(templateId) as View;
 
-                if (view == null || template == null)
+                if (template == null)
                 {
-                    return ResponseBuilder.Error("View or template not found", "ELEMENT_NOT_FOUND").Build();
+                    return ResponseBuilder.Error("Template not found", "ELEMENT_NOT_FOUND").Build();
                 }
 
                 using (var trans = new Transaction(doc, "Apply View Template"))
@@ -936,10 +956,10 @@ namespace RevitMCPBridge
                         });
 
                     if (templateOverridingCrop)
-                        builder = builder.WithMessage(
-                            $"WARNING: cropBoxActive is false — the view template '{templateName}' is controlling the crop region. " +
-                            "The crop coordinates were written but may not display. To fix: detach the view from the template " +
-                            "(call setViewTemplate with templateId=null), set the crop, then reapply the template if needed.");
+                        return ResponseBuilder.Error(
+                            $"Crop box was written but view template '{templateName}' is overriding it (cropBoxActive=false). " +
+                            "Detach the template first: call applyViewTemplate with templateId=-1, then set the crop box, then reapply the template.",
+                            "TEMPLATE_OVERRIDE").Build();
 
                     return builder.Build();
                 }
@@ -2170,6 +2190,17 @@ namespace RevitMCPBridge
                 if (view == null)
                 {
                     return ResponseBuilder.Error("View not found", "ELEMENT_NOT_FOUND").Build();
+                }
+
+                // Block if view template is controlling visibility
+                var viewTemplateId = view.ViewTemplateId;
+                if (viewTemplateId != null && viewTemplateId != ElementId.InvalidElementId)
+                {
+                    var tmpl = doc.GetElement(viewTemplateId) as View;
+                    return ResponseBuilder.Error(
+                        $"View has a template applied ('{tmpl?.Name ?? viewTemplateId.Value.ToString()}') that controls category visibility. " +
+                        "Detach it first: call applyViewTemplate with templateId=-1.",
+                        "TEMPLATE_OVERRIDE").Build();
                 }
 
                 // Get category by name or built-in category
