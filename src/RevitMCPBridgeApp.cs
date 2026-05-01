@@ -231,7 +231,7 @@ namespace RevitMCPBridge
             // ── AI Enablement ─────────────────────────────────────────────
             var aiPanel = application.CreateRibbonPanel(_tabName, "AI Enablement");
 
-            var platformButtonData = new PushButtonData("BimMonkeyPlatform", "Web\nPlatform", asm,
+            var platformButtonData = new PushButtonData("BimMonkeyPlatform", "Web\nApp", asm,
                 "RevitMCPBridge.Commands.OpenPlatformCommand")
                 { ToolTip = "Open BIM Monkey dashboard" };
             var platformButton = aiPanel.AddItem(platformButtonData) as PushButton;

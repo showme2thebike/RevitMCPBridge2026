@@ -354,7 +354,7 @@ Use to find specific files like Revit models, PDFs, or scripts.",
                 new ToolDefinition
                 {
                     Name = "projectNoteStore",
-                    Description = @"Save a project-specific note visible on the web platform (app.bimmonkey.ai/brain).
+                    Description = @"Save a project-specific note visible on the web app (app.bimmonkey.ai/brain).
 Use this when Barrett says 'note for this project', 'save that for this project', or gives project-specific instructions.
 Notes are scoped to the current project and appear in the Project Notes section of the Brain page.",
                     InputSchema = new
