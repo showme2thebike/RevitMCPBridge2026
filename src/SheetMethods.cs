@@ -841,14 +841,14 @@ namespace RevitMCPBridge
                         var vpType = doc.GetElement(vpTypeElemId) as ElementType;
                         if (vpType == null)
                         {
-                            trans.RollBack();
-                            // OfCategory(OST_Viewports) on ElementType returns empty — use GetValidTypes() instead
+                            // Collect valid types BEFORE rollback — viewport is invalid after trans.RollBack()
                             var available = viewport.GetValidTypes()
                                 .Select(id => doc.GetElement(id) as ElementType)
                                 .Where(t => t != null)
                                 .OrderBy(t => t.Name)
                                 .Select(t => new { id = (int)t.Id.Value, name = t.Name })
                                 .ToList();
+                            trans.RollBack();
                             return ResponseBuilder.Error(
                                 $"viewportTypeId {viewportTypeIdParam.Value} is not a valid viewport type in this project.",
                                 "INVALID_VIEWPORT_TYPE")

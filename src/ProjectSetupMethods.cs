@@ -1395,7 +1395,8 @@ namespace RevitMCPBridge
                     {
                         groupTypeId = (int)gt.Id.Value,
                         name = gt.Name,
-                        category = gt.Category?.Name ?? "Model"
+                        category = gt.Category?.Name ?? "Model",
+                        isDetailGroup = (gt.Category != null && gt.Category.Name != null && gt.Category.Name.IndexOf("Detail", StringComparison.OrdinalIgnoreCase) >= 0)
                     })
                     .ToList();
 
