@@ -1312,6 +1312,21 @@ namespace RevitMCPBridge
                             return JsonConvert.SerializeObject(new { success = false, error = $"Floor {floorId.Value} not found." });
                         }
 
+                        // NewFamilyInstance(faceRef,...) only works for WorkPlaneBased families
+                        var placementType = fixtureType.Family.FamilyPlacementType;
+                        if (placementType != FamilyPlacementType.WorkPlaneBased)
+                        {
+                            trans.RollBack();
+                            return JsonConvert.SerializeObject(new
+                            {
+                                success = false,
+                                error = $"Family '{fixtureType.FamilyName}' is {placementType} — floor-underside hosting requires a WorkPlaneBased family. " +
+                                        "Most recessed can fixtures are CeilingBased and must use ceilingId instead. " +
+                                        "Check the family's placement type in Revit Family Editor.",
+                                actualPlacementType = placementType.ToString()
+                            });
+                        }
+
                         // Get the bottom face references of the floor
                         var bottomFaceRefs = HostObjectUtils.GetBottomFaces(floor);
                         if (bottomFaceRefs == null || bottomFaceRefs.Count == 0)

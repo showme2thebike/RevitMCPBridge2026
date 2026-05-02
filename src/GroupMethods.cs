@@ -69,7 +69,8 @@ namespace RevitMCPBridge
                     {
                         groupTypeId = gt.Id.Value,
                         name = gt.Name,
-                        category = gt.Category?.Name ?? "Unknown"
+                        category = gt.Category?.Name ?? "Unknown",
+                        isDetailGroup = gt.Category?.Name?.IndexOf("Detail", StringComparison.OrdinalIgnoreCase) >= 0
                     })
                     .ToList();
 
@@ -199,6 +200,18 @@ namespace RevitMCPBridge
                 var x = parameters["x"]?.Value<double>();
                 var y = parameters["y"]?.Value<double>();
                 var z = parameters["z"]?.Value<double>() ?? 0;
+
+                // Also accept location:[x,y,z] array format
+                if (!x.HasValue || !y.HasValue)
+                {
+                    var loc = parameters["location"]?.ToObject<double[]>();
+                    if (loc != null && loc.Length >= 2)
+                    {
+                        x = loc[0];
+                        y = loc[1];
+                        if (loc.Length >= 3) z = loc[2];
+                    }
+                }
 
                 if (!groupTypeId.HasValue)
                 {
