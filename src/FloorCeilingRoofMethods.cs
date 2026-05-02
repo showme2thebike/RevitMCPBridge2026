@@ -1183,7 +1183,7 @@ namespace RevitMCPBridge
         /// Place light fixtures in ceiling at specified points or in grid pattern
         /// Parameters: ceilingId, fixtureTypeId (optional), points: [[x,y], ...] OR gridSpacing (for auto layout)
         /// </summary>
-        [MCPMethod("placeLightFixture", Category = "FloorCeilingRoof", Description = "Place light fixtures in ceiling at specified points or in a grid pattern")]
+        [MCPMethod("placeLightFixture", Category = "FloorCeilingRoof", Description = "Place face-hosted light fixtures. Provide ceilingId for ceiling-hosted or floorId for face-hosted to floor underside (no ceilings required). Never creates ceilings or floors.")]
         public static string PlaceLightFixture(UIApplication uiApp, JObject parameters)
         {
             try
@@ -1191,53 +1191,69 @@ namespace RevitMCPBridge
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 var ceilingId = parameters["ceilingId"]?.Value<int>();
+                var floorId = parameters["floorId"]?.Value<int>();
                 var fixtureTypeId = parameters["fixtureTypeId"]?.Value<int>();
                 var points = parameters["points"]?.ToObject<double[][]>();
                 var gridSpacing = parameters["gridSpacing"]?.Value<double>();
+                var checkViewId = parameters["viewId"]?.Value<int>();
 
-                if (!ceilingId.HasValue)
+                // Require exactly one host type
+                if (!ceilingId.HasValue && !floorId.HasValue)
                 {
-                    return JsonConvert.SerializeObject(new { success = false, error = "ceilingId is required" });
+                    // List available hosts to help Claude pick the right one
+                    var availableCeilings = new FilteredElementCollector(doc)
+                        .OfClass(typeof(Ceiling))
+                        .Cast<Ceiling>()
+                        .Select(c => new { id = (int)c.Id.Value, levelId = (int)c.LevelId.Value })
+                        .ToList();
+                    var availableFloors = new FilteredElementCollector(doc)
+                        .OfClass(typeof(Floor))
+                        .Cast<Floor>()
+                        .Select(f => new { id = (int)f.Id.Value, levelId = (int)f.LevelId.Value })
+                        .ToList();
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = "Provide ceilingId (ceiling-hosted) or floorId (face-hosted to floor underside). Do NOT create a ceiling or floor as a workaround.",
+                        availableCeilings,
+                        availableFloors
+                    });
                 }
 
-                var ceiling = doc.GetElement(new ElementId(ceilingId.Value)) as Ceiling;
-                if (ceiling == null)
-                {
-                    return JsonConvert.SerializeObject(new { success = false, error = "Ceiling not found" });
-                }
-
-                // Find light fixture family type
+                // Resolve fixture type
                 FamilySymbol fixtureType = null;
                 if (fixtureTypeId.HasValue)
-                {
                     fixtureType = doc.GetElement(new ElementId(fixtureTypeId.Value)) as FamilySymbol;
+
+                if (fixtureType == null && fixtureTypeId.HasValue)
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = $"fixtureTypeId {fixtureTypeId.Value} not found. Use getLoadedFamilies to find the correct typeId."
+                    });
                 }
+
                 if (fixtureType == null)
                 {
-                    fixtureType = new FilteredElementCollector(doc)
+                    // No silent guessing — require explicit typeId
+                    var loadedFixtures = new FilteredElementCollector(doc)
                         .OfCategory(BuiltInCategory.OST_LightingFixtures)
                         .OfClass(typeof(FamilySymbol))
                         .Cast<FamilySymbol>()
-                        .FirstOrDefault(f => f.Name.Contains("2x4") || f.Name.Contains("Troffer") || f.Name.Contains("Recessed"));
-
-                    if (fixtureType == null)
+                        .Select(f => new { id = (int)f.Id.Value, family = f.FamilyName, type = f.Name })
+                        .ToList();
+                    return JsonConvert.SerializeObject(new
                     {
-                        fixtureType = new FilteredElementCollector(doc)
-                            .OfCategory(BuiltInCategory.OST_LightingFixtures)
-                            .OfClass(typeof(FamilySymbol))
-                            .Cast<FamilySymbol>()
-                            .FirstOrDefault();
-                    }
+                        success = false,
+                        error = "fixtureTypeId is required. Choose from the loaded fixture types below.",
+                        loadedFixtureTypes = loadedFixtures
+                    });
                 }
 
-                if (fixtureType == null)
-                {
-                    return JsonConvert.SerializeObject(new { success = false, error = "No light fixture type found. Load a lighting fixture family first." });
-                }
-
-                var level = doc.GetElement(ceiling.LevelId) as Level;
-                var heightOffset = ceiling.get_Parameter(BuiltInParameter.CEILING_HEIGHTABOVELEVEL_PARAM)?.AsDouble() ?? 9.0;
                 var placedFixtures = new List<long>();
+                var placementErrors = new List<string>();
+                string hostMode;
 
                 using (var trans = new Transaction(doc, "Place Light Fixtures"))
                 {
@@ -1247,79 +1263,150 @@ namespace RevitMCPBridge
                     trans.SetFailureHandlingOptions(failureOptions);
 
                     if (!fixtureType.IsActive)
-                    {
                         fixtureType.Activate();
-                    }
 
-                    List<XYZ> placementPoints = new List<XYZ>();
-
-                    if (points != null && points.Length > 0)
+                    if (ceilingId.HasValue)
                     {
-                        // Use specified points
-                        foreach (var pt in points)
+                        // ── Ceiling-hosted path ──────────────────────────────────────
+                        hostMode = "ceiling";
+                        var ceiling = doc.GetElement(new ElementId(ceilingId.Value)) as Ceiling;
+                        if (ceiling == null)
                         {
-                            if (pt.Length >= 2)
-                            {
-                                placementPoints.Add(new XYZ(pt[0], pt[1], level.Elevation + heightOffset));
-                            }
+                            trans.RollBack();
+                            return JsonConvert.SerializeObject(new { success = false, error = $"Ceiling {ceilingId.Value} not found." });
                         }
-                    }
-                    else if (gridSpacing.HasValue)
-                    {
-                        // Auto-generate grid points within ceiling bounds
-                        var bb = ceiling.get_BoundingBox(null);
-                        if (bb != null)
-                        {
-                            double startX = bb.Min.X + gridSpacing.Value / 2;
-                            double startY = bb.Min.Y + gridSpacing.Value / 2;
-                            double z = level.Elevation + heightOffset;
 
-                            for (double x = startX; x < bb.Max.X; x += gridSpacing.Value)
+                        var level = doc.GetElement(ceiling.LevelId) as Level;
+                        var heightOffset = ceiling.get_Parameter(BuiltInParameter.CEILING_HEIGHTABOVELEVEL_PARAM)?.AsDouble() ?? 9.0;
+
+                        var placementPoints = BuildPlacementPoints(points, gridSpacing, level.Elevation + heightOffset,
+                            ceiling.get_BoundingBox(null));
+                        if (placementPoints == null)
+                        {
+                            trans.RollBack();
+                            return JsonConvert.SerializeObject(new { success = false, error = "Either points or gridSpacing is required." });
+                        }
+
+                        foreach (var pt in placementPoints)
+                        {
+                            try
                             {
-                                for (double y = startY; y < bb.Max.Y; y += gridSpacing.Value)
-                                {
-                                    placementPoints.Add(new XYZ(x, y, z));
-                                }
+                                var inst = doc.Create.NewFamilyInstance(pt, fixtureType, ceiling, level,
+                                    Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
+                                if (inst != null) placedFixtures.Add(inst.Id.Value);
+                            }
+                            catch (Exception ex)
+                            {
+                                placementErrors.Add($"Point ({pt.X:F2},{pt.Y:F2}): {ex.Message}");
                             }
                         }
                     }
                     else
                     {
-                        return JsonConvert.SerializeObject(new { success = false, error = "Either points or gridSpacing is required" });
-                    }
-
-                    foreach (var pt in placementPoints)
-                    {
-                        try
+                        // ── Floor-face-hosted path ───────────────────────────────────
+                        hostMode = "floor-underside";
+                        var floor = doc.GetElement(new ElementId(floorId.Value)) as Floor;
+                        if (floor == null)
                         {
-                            var instance = doc.Create.NewFamilyInstance(pt, fixtureType, ceiling, level, Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
-                            if (instance != null)
-                            {
-                                placedFixtures.Add(instance.Id.Value);
-                            }
+                            trans.RollBack();
+                            return JsonConvert.SerializeObject(new { success = false, error = $"Floor {floorId.Value} not found." });
                         }
-                        catch
+
+                        // Get the bottom face references of the floor
+                        var bottomFaceRefs = HostObjectUtils.GetBottomFaces(floor);
+                        if (bottomFaceRefs == null || bottomFaceRefs.Count == 0)
                         {
-                            // Skip points that fail (may be outside ceiling boundary)
+                            trans.RollBack();
+                            return JsonConvert.SerializeObject(new { success = false, error = $"Floor {floorId.Value} has no bottom face. Cannot host fixtures." });
+                        }
+                        var faceRef = bottomFaceRefs[0];
+
+                        // Determine Z from floor bottom face
+                        var floorBB = floor.get_BoundingBox(null);
+                        double faceZ = floorBB?.Min.Z ?? (doc.GetElement(floor.LevelId) as Level)?.Elevation ?? 0;
+
+                        var level = doc.GetElement(floor.LevelId) as Level;
+                        var placementPoints = BuildPlacementPoints(points, gridSpacing, faceZ,
+                            floor.get_BoundingBox(null));
+                        if (placementPoints == null)
+                        {
+                            trans.RollBack();
+                            return JsonConvert.SerializeObject(new { success = false, error = "Either points or gridSpacing is required." });
+                        }
+
+                        foreach (var pt in placementPoints)
+                        {
+                            try
+                            {
+                                // Face-hosted overload: Reference face, XYZ location on face, XYZ faceNormal direction, FamilySymbol
+                                var inst = doc.Create.NewFamilyInstance(faceRef,
+                                    new XYZ(pt.X, pt.Y, faceZ), XYZ.BasisX, fixtureType);
+                                if (inst != null) placedFixtures.Add(inst.Id.Value);
+                            }
+                            catch (Exception ex)
+                            {
+                                placementErrors.Add($"Point ({pt.X:F2},{pt.Y:F2}): {ex.Message}");
+                            }
                         }
                     }
 
                     trans.Commit();
                 }
 
+                // Visibility check: warn if any placed fixtures are invisible in the target view
+                var invisibleIds = new List<long>();
+                if (checkViewId.HasValue && placedFixtures.Count > 0)
+                {
+                    var view = doc.GetElement(new ElementId(checkViewId.Value)) as View;
+                    if (view != null)
+                    {
+                        foreach (var fixtureElemId in placedFixtures)
+                        {
+                            var elem = doc.GetElement(new ElementId(fixtureElemId));
+                            if (elem?.get_BoundingBox(view) == null)
+                                invisibleIds.Add(fixtureElemId);
+                        }
+                    }
+                }
+
                 return JsonConvert.SerializeObject(new
                 {
                     success = true,
+                    hostMode,
                     fixtureCount = placedFixtures.Count,
                     fixtureIds = placedFixtures,
                     fixtureType = fixtureType.Name,
-                    ceilingId = ceilingId.Value
+                    placementErrors = placementErrors.Count > 0 ? placementErrors : null,
+                    invisibleInView = invisibleIds.Count > 0
+                        ? new { count = invisibleIds.Count, ids = invisibleIds, warning = "These fixtures were placed but are not visible in the specified view. Check view range, discipline filters, or view visibility settings." }
+                        : null
                 });
             }
             catch (Exception ex)
             {
                 return ResponseBuilder.FromException(ex).Build();
             }
+        }
+
+        private static List<XYZ> BuildPlacementPoints(double[][] points, double? gridSpacing, double z, BoundingBoxXYZ bb)
+        {
+            if (points != null && points.Length > 0)
+            {
+                return points
+                    .Where(pt => pt.Length >= 2)
+                    .Select(pt => new XYZ(pt[0], pt[1], z))
+                    .ToList();
+            }
+            if (gridSpacing.HasValue && bb != null)
+            {
+                var result = new List<XYZ>();
+                double half = gridSpacing.Value / 2;
+                for (double x = bb.Min.X + half; x < bb.Max.X; x += gridSpacing.Value)
+                    for (double y = bb.Min.Y + half; y < bb.Max.Y; y += gridSpacing.Value)
+                        result.Add(new XYZ(x, y, z));
+                return result;
+            }
+            return null;
         }
 
         /// <summary>

@@ -53,7 +53,27 @@ namespace RevitMCPBridge
 
                     if (parameters["textTypeId"] != null)
                     {
-                        textTypeId = new ElementId(int.Parse(parameters["textTypeId"].ToString()));
+                        var requestedId = new ElementId(int.Parse(parameters["textTypeId"].ToString()));
+                        var validatedType = doc.GetElement(requestedId) as TextNoteType;
+                        if (validatedType == null)
+                        {
+                            // ID doesn't resolve — Revit would silently fall back to default (often wrong type).
+                            // Return the full list so Claude can pick the correct one.
+                            var validTypes = new FilteredElementCollector(doc)
+                                .OfClass(typeof(TextNoteType))
+                                .Cast<TextNoteType>()
+                                .OrderBy(t => t.Name)
+                                .Select(t => new { id = (int)t.Id.Value, name = t.Name })
+                                .ToList();
+                            return JsonConvert.SerializeObject(new
+                            {
+                                success = false,
+                                error = $"textTypeId {requestedId.Value} is not a valid TextNoteType in this project. " +
+                                        "This ID may be from a different model. Use one of the validTextNoteTypes below.",
+                                validTextNoteTypes = validTypes
+                            });
+                        }
+                        textTypeId = requestedId;
                         selectedReason = "user specified";
                     }
                     else
@@ -1262,7 +1282,25 @@ namespace RevitMCPBridge
 
                     if (parameters["textTypeId"] != null)
                     {
-                        textTypeId = new ElementId(int.Parse(parameters["textTypeId"].ToString()));
+                        var requestedId = new ElementId(int.Parse(parameters["textTypeId"].ToString()));
+                        var validatedType = doc.GetElement(requestedId) as TextNoteType;
+                        if (validatedType == null)
+                        {
+                            var validTypes = new FilteredElementCollector(doc)
+                                .OfClass(typeof(TextNoteType))
+                                .Cast<TextNoteType>()
+                                .OrderBy(t => t.Name)
+                                .Select(t => new { id = (int)t.Id.Value, name = t.Name })
+                                .ToList();
+                            return JsonConvert.SerializeObject(new
+                            {
+                                success = false,
+                                error = $"textTypeId {requestedId.Value} is not a valid TextNoteType in this project. " +
+                                        "This ID may be from a different model. Use one of the validTextNoteTypes below.",
+                                validTextNoteTypes = validTypes
+                            });
+                        }
+                        textTypeId = requestedId;
                         selectedReason = "user specified";
                     }
                     else

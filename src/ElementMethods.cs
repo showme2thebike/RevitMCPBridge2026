@@ -774,6 +774,86 @@ namespace RevitMCPBridge
         }
 
         /// <summary>
+        /// Copy view-specific elements from one view to another (equivalent to Paste Aligned).
+        /// Use this for annotations, detail lines, dimensions, text notes, and detail group instances
+        /// that live in a specific view and need to appear in another view.
+        /// Parameters:
+        /// - sourceViewId: view where the elements currently live
+        /// - elementIds: array of element IDs to copy
+        /// - destinationViewId: target view
+        /// - translateX, translateY: optional offset from original position (feet, default 0)
+        /// </summary>
+        [MCPMethod("copyElementsToView", Category = "Element", Description = "Copy view-specific elements (annotations, detail lines, group instances) from one view to another — equivalent to Paste Aligned")]
+        public static string CopyElementsToView(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                var sourceViewId = parameters["sourceViewId"]?.Value<int>();
+                var destViewId = parameters["destinationViewId"]?.Value<int>();
+
+                if (!sourceViewId.HasValue)
+                    return JsonConvert.SerializeObject(new { success = false, error = "sourceViewId is required" });
+                if (parameters["elementIds"] == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = "elementIds is required" });
+                if (!destViewId.HasValue)
+                    return JsonConvert.SerializeObject(new { success = false, error = "destinationViewId is required" });
+
+                var sourceView = doc.GetElement(new ElementId(sourceViewId.Value)) as View;
+                if (sourceView == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = $"Source view {sourceViewId.Value} not found" });
+
+                var destView = doc.GetElement(new ElementId(destViewId.Value)) as View;
+                if (destView == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = $"Destination view {destViewId.Value} not found" });
+
+                var elementIds = parameters["elementIds"].ToObject<int[]>()
+                    .Select(id => new ElementId(id))
+                    .ToList();
+
+                var translateX = parameters["translateX"]?.Value<double>() ?? 0;
+                var translateY = parameters["translateY"]?.Value<double>() ?? 0;
+                // Cross-view copy: pass null transform for same relative position, or a 2D offset if requested
+                Transform transform = (translateX != 0 || translateY != 0)
+                    ? Transform.CreateTranslation(new XYZ(translateX, translateY, 0))
+                    : null;
+
+                using (var trans = new Transaction(doc, "Copy Elements To View"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    var options = new CopyPasteOptions();
+                    var copiedIds = ElementTransformUtils.CopyElements(
+                        sourceView,
+                        elementIds,
+                        destView,
+                        transform,
+                        options);
+
+                    trans.Commit();
+
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        originalCount = elementIds.Count,
+                        copiedCount = copiedIds.Count,
+                        copiedIds = copiedIds.Select(id => (int)id.Value).ToArray(),
+                        sourceViewId = sourceViewId.Value,
+                        destinationViewId = destViewId.Value
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
         /// Delete elements by ID
         /// Parameters:
         /// - elementIds: array of element IDs to delete

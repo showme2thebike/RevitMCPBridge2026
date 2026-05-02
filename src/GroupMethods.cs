@@ -216,6 +216,26 @@ namespace RevitMCPBridge
                     return JsonConvert.SerializeObject(new { success = false, error = "Group type not found" });
                 }
 
+                // Detail groups are view-specific. PlaceGroup only works if the correct view
+                // is active in the UI. Check and warn if there's a mismatch.
+                bool isDetailGroup = groupType.Category?.Name?.IndexOf("Detail", StringComparison.OrdinalIgnoreCase) >= 0;
+                var viewId = parameters["viewId"]?.Value<int>();
+
+                if (isDetailGroup && viewId.HasValue)
+                {
+                    var activeView = uiApp.ActiveUIDocument.ActiveView;
+                    if (activeView == null || activeView.Id.Value != viewId.Value)
+                    {
+                        return JsonConvert.SerializeObject(new
+                        {
+                            success = false,
+                            error = $"Detail group placement requires view {viewId.Value} to be the active view in Revit. " +
+                                    $"Currently active view is '{activeView?.Name ?? "none"}' (id {activeView?.Id.Value}). " +
+                                    "Switch to the target view and retry, or use copyElements from an existing instance in that view."
+                        });
+                    }
+                }
+
                 using (var trans = new Transaction(doc, "Place Group"))
                 {
                     trans.Start();
@@ -226,12 +246,22 @@ namespace RevitMCPBridge
                     var location = new XYZ(x.Value, y.Value, z);
                     var group = doc.Create.PlaceGroup(location, groupType);
 
+                    if (group == null)
+                    {
+                        trans.RollBack();
+                        var hint = isDetailGroup
+                            ? "Detail groups must be placed while their target view is active. Ensure the correct view is open in Revit, or use copyElements from an existing group instance in that view."
+                            : "PlaceGroup returned null. Verify the groupTypeId is correct and the document is in an editable state.";
+                        return JsonConvert.SerializeObject(new { success = false, error = hint });
+                    }
+
                     trans.Commit();
 
                     return JsonConvert.SerializeObject(new
                     {
                         success = true,
                         groupId = group.Id.Value,
+                        isDetailGroup,
                         location = new { x = x.Value, y = y.Value, z = z }
                     });
                 }
