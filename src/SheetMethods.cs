@@ -597,7 +597,7 @@ namespace RevitMCPBridge
         /// Place a view on a sheet
         /// Accepts either "location" array [x,y] OR separate "x"/"y" params
         /// </summary>
-        [MCPMethod("placeViewOnSheet", Category = "Sheet", Description = "Place a view onto a sheet at a specified location")]
+        [MCPMethod("placeViewOnSheet", Category = "Sheet", Description = "Place a view onto a sheet at a specified location. Optional: pass viewportTypeId to set the viewport type in the same transaction (e.g. 'WS - Viewport Title').")]
         public static string PlaceViewOnSheet(UIApplication uiApp, JObject parameters)
         {
             try
@@ -832,6 +832,33 @@ namespace RevitMCPBridge
                             .Build();
                     }
 
+                    // Apply viewport type if specified — same transaction, one undo step
+                    string appliedViewportTypeName = null;
+                    var viewportTypeIdParam = parameters["viewportTypeId"]?.Value<int>();
+                    if (viewportTypeIdParam.HasValue)
+                    {
+                        var vpTypeElemId = new ElementId(viewportTypeIdParam.Value);
+                        var vpType = doc.GetElement(vpTypeElemId) as ElementType;
+                        if (vpType == null)
+                        {
+                            trans.RollBack();
+                            var available = new FilteredElementCollector(doc)
+                                .OfClass(typeof(ElementType))
+                                .OfCategory(BuiltInCategory.OST_Viewports)
+                                .Cast<ElementType>()
+                                .OrderBy(t => t.Name)
+                                .Select(t => new { id = (int)t.Id.Value, name = t.Name })
+                                .ToList();
+                            return ResponseBuilder.Error(
+                                $"viewportTypeId {viewportTypeIdParam.Value} is not a valid viewport ElementType in this project.",
+                                "INVALID_VIEWPORT_TYPE")
+                                .With("availableViewportTypes", available)
+                                .Build();
+                        }
+                        viewport.ChangeTypeId(vpTypeElemId);
+                        appliedViewportTypeName = vpType.Name;
+                    }
+
                     trans.Commit();
 
                     return ResponseBuilder.Success()
@@ -841,6 +868,7 @@ namespace RevitMCPBridge
                         .With("viewName", view.Name)
                         .With("sheetNumber", sheet.SheetNumber)
                         .With("location", new[] { point.X, point.Y, 0.0 })
+                        .With("viewportType", appliedViewportTypeName)
                         .With("positionConstrained", wasConstrained)
                         .With("originalLocation", wasConstrained ? new[] { originalX, originalY } : null)
                         .With("printableArea", new
