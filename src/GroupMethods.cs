@@ -724,14 +724,23 @@ namespace RevitMCPBridge
                 // then reconstruct the 4 rectangle corners using the plane's own XVec/YVec.
                 // This is the only approach guaranteed to produce on-plane points for any view type
                 // (plan, elevation, section, drafting) without "Curve must be in the plane" errors.
-                var sketchPlane = view.SketchPlane;
-                if (sketchPlane == null)
-                    return JsonConvert.SerializeObject(new { success = false, error = "View has no sketch plane — cannot draw detail lines." });
-
-                var plane = sketchPlane.GetPlane();
-                var xVec = plane.XVec;
-                var yVec = plane.YVec;
-                var planeOrigin = plane.Origin;
+                XYZ xVec, yVec, planeOrigin;
+                if (view.SketchPlane != null)
+                {
+                    var plane = view.SketchPlane.GetPlane();
+                    xVec = plane.XVec;
+                    yVec = plane.YVec;
+                    planeOrigin = plane.Origin;
+                }
+                else
+                {
+                    // Elevation/section views have no SketchPlane — derive the drawing plane
+                    // from CropBox.Transform: BasisX=right, BasisY=up, Origin=on the view plane.
+                    var ct = view.CropBox.Transform;
+                    xVec = ct.BasisX;
+                    yVec = ct.BasisY;
+                    planeOrigin = ct.Origin;
+                }
                 var bbT = bb.Transform;
 
                 double uMin = double.MaxValue, uMax = double.MinValue;
