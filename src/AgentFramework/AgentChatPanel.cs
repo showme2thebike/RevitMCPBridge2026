@@ -46,6 +46,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private UIApplication _uiApp;
         private string _apiKey;
         private string _bimMonkeyApiKey;
+        private string _userFirstName;         // contact_name from /api/auth/verify
         private string _selectedModel;
         private string _firmStandardsDoc;     // fetched from Railway on init, injected into every prompt
         private string _correctionsKnowledge; // fetched from plugin on init, injected into every prompt
@@ -163,7 +164,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (AskToContinueSession(previousSession))
                     {
                         RestoreSession(previousSession);
-                        AddAssistantMessage("Welcome back! I remember our previous conversation. What would you like to continue working on?");
+                        ShowStartupGreeting();
                     }
                 };
                 sessionRestored = true; // suppress default welcome; Loaded handler covers both paths
@@ -1569,6 +1570,11 @@ namespace RevitMCPBridge2026.AgentFramework
                     var body = await resp.Content.ReadAsStringAsync();
                     var obj = JObject.Parse(body);
                     var status = obj["subscriptionStatus"]?.ToString();
+
+                    // Store first name for greeting — use first word of contactName
+                    var contactName = obj["contactName"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(contactName))
+                        _userFirstName = contactName.Split(' ')[0];
 
                     // Block if explicitly expired or cancelled — not on trial or active
                     bool blocked = (status == "expired" || status == "cancelled");
@@ -3276,13 +3282,15 @@ namespace RevitMCPBridge2026.AgentFramework
                 hasAlert = true;
             }
 
+            var namePrefix = string.IsNullOrWhiteSpace(_userFirstName) ? "Hello!" : $"Hey {_userFirstName}!";
+
             if (hasAlert)
             {
                 lines.AppendLine("\nShould I run a full completeness check before we start?");
-                return lines.ToString().Trim();
+                return $"{namePrefix} {lines.ToString().Trim()}";
             }
 
-            return "Hello! I'm ready to help with your drawings. What would you like to work on today?";
+            return $"{namePrefix} I'm ready to help with your drawings. What would you like to work on today?";
         }
 
         private void RelockDocument()
@@ -3765,7 +3773,11 @@ namespace RevitMCPBridge2026.AgentFramework
                     "- Before placing views: memoryRecall with query 'view template names'\n" +
                     "The goal: Barrett should never have to tell you the same thing twice.\n";
 
-                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{memoryBlock}{firmMemoryBlock}{projectNotesBlock}{persistentIntelBlock}
+                var userNameBlock = string.IsNullOrWhiteSpace(_userFirstName)
+                    ? ""
+                    : $"\n\nUSER: The person you are speaking with is {_userFirstName}. Always use their name when addressing them directly.\n";
+
+                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{userNameBlock}{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{memoryBlock}{firmMemoryBlock}{projectNotesBlock}{persistentIntelBlock}
 
 CURRENT PROJECT: {projectName}
 
