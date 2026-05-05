@@ -541,6 +541,24 @@ namespace RevitMCPBridge2026.AgentFramework
             }
         }
 
+        // Sprint 11 — attach a PDF redline from ribbon button
+        public void AttachRedlinePdf(string filePath)
+        {
+            try
+            {
+                var bytes = System.IO.File.ReadAllBytes(filePath);
+                var base64 = Convert.ToBase64String(bytes);
+                var fileName = System.IO.Path.GetFileName(filePath);
+                AddAttachment(new AttachedImage { Base64Data = base64, MediaType = "application/pdf", Label = $"PDF: {fileName}" });
+                AddAssistantMessage($"Redline attached: {fileName}\n\nWhat would you like me to do with it? I can summarize the markup, list requested changes, or identify items to action in Revit.");
+                Activate();
+            }
+            catch (Exception ex)
+            {
+                AddAssistantMessage($"Could not attach PDF: {ex.Message}");
+            }
+        }
+
         // Sprint 2B — file browse to attach an image
         private void BrowseAndAttachImage()
         {
@@ -3864,7 +3882,12 @@ STYLE:
                     if (!string.IsNullOrWhiteSpace(message))
                         blocks.Add(new { type = "text", text = message });
                     foreach (var att in _pendingAttachments)
-                        blocks.Add(new { type = "image", source = new { type = "base64", media_type = att.MediaType, data = att.Base64Data } });
+                    {
+                        if (att.MediaType == "application/pdf")
+                            blocks.Add(new { type = "document", source = new { type = "base64", media_type = att.MediaType, data = att.Base64Data } });
+                        else
+                            blocks.Add(new { type = "image", source = new { type = "base64", media_type = att.MediaType, data = att.Base64Data } });
+                    }
                     _agent.SetNextMessageContent(blocks);
                     _pendingAttachments.Clear();
                     RefreshAttachmentPreview();

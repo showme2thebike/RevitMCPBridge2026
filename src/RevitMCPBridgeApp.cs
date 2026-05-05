@@ -296,10 +296,9 @@ namespace RevitMCPBridge
             // ── Redline Review ─────────────────────────────────────────────
             var redlinePanel = application.CreateRibbonPanel(_tabName, "Redline Review");
 
-            var redlineLoadData = new PushButtonData("RedlineLoad", "Load", asm,
-                "RevitMCPBridge.Commands.RedlineLoadCommand")
-                { ToolTip = "Load a redline PDF for Banana Chat to analyze",
-                  AvailabilityClassName = "RevitMCPBridge.Commands.RedlineNotAnalyzingAvailability" };
+            var redlineLoadData = new PushButtonData("RedlineLoad", "Redline\nReview", asm,
+                "RevitMCPBridge2026.AgentFramework.LaunchRedlineReviewCommand")
+                { ToolTip = "Attach a redline PDF to Banana Chat — opens a file picker, sends the PDF to Claude for markup analysis. No terminal required." };
             var redlineLoadButton = redlinePanel.AddItem(redlineLoadData) as PushButton;
             redlineLoadButton.LargeImage = CreateButtonIcon("redline-load", 32);
             redlineLoadButton.Image      = CreateButtonIcon("redline-load", 16);

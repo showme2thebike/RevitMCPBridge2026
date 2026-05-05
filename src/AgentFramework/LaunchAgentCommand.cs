@@ -14,6 +14,8 @@ namespace RevitMCPBridge2026.AgentFramework
     {
         private static AgentChatPanel _panel;
 
+        public static AgentChatPanel GetPanel() => _panel;
+
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
             try
