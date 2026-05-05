@@ -401,6 +401,12 @@ namespace RevitMCPBridge2026.AgentFramework
         /// Run the agent with a user message - THE AGENTIC LOOP
         /// Now with LOCAL MODEL routing for simple commands
         /// </summary>
+        // Sprint 2B — pending content override; set before RunAsync to send vision blocks
+        private List<object> _pendingContentOverride;
+
+        /// <summary>Queue a multi-block content array (text + images) for the next RunAsync call.</summary>
+        public void SetNextMessageContent(List<object> contentBlocks) => _pendingContentOverride = contentBlocks;
+
         public async Task RunAsync(string userMessage, string systemPrompt = null)
         {
             _cancellationTokenSource = new CancellationTokenSource();
@@ -451,7 +457,16 @@ namespace RevitMCPBridge2026.AgentFramework
                     _model = allowedModel;
                 }
 
-                _conversationHistory.Add(new Message { Role = "user", Content = userMessage });
+                // Use pre-built content blocks (e.g. text + images) if set, otherwise plain string
+                if (_pendingContentOverride != null)
+                {
+                    _conversationHistory.Add(new Message { Role = "user", Content = _pendingContentOverride });
+                    _pendingContentOverride = null;
+                }
+                else
+                {
+                    _conversationHistory.Add(new Message { Role = "user", Content = userMessage });
+                }
 
                 int maxIterations = 50;
                 int iteration = 0;
@@ -1018,23 +1033,33 @@ namespace RevitMCPBridge2026.AgentFramework
                     }
                     formatted.Add(new { role = msg.Role, content = contentList });
                 }
-                else if (msg.Content is List<object> toolResults)
+                else if (msg.Content is List<object> rawList)
                 {
-                    var contentList = new List<object>();
-                    foreach (var item in toolResults)
+                    if (rawList.Count > 0 && rawList[0] is ToolResultBlock)
                     {
-                        if (item is ToolResultBlock trb)
+                        // Tool result blocks from the agentic loop
+                        var contentList = new List<object>();
+                        foreach (var item in rawList)
                         {
-                            contentList.Add(new
+                            if (item is ToolResultBlock trb)
                             {
-                                type = "tool_result",
-                                tool_use_id = trb.ToolUseId,
-                                content = trb.Content,
-                                is_error = trb.IsError ? (bool?)true : null
-                            });
+                                contentList.Add(new
+                                {
+                                    type = "tool_result",
+                                    tool_use_id = trb.ToolUseId,
+                                    content = trb.Content,
+                                    is_error = trb.IsError ? (bool?)true : null
+                                });
+                            }
                         }
+                        formatted.Add(new { role = msg.Role, content = contentList });
                     }
-                    formatted.Add(new { role = msg.Role, content = contentList });
+                    else
+                    {
+                        // Vision blocks: anonymous { type, text } or { type, source } objects —
+                        // pass directly so JSON.NET serializes them as the API expects
+                        formatted.Add(new { role = msg.Role, content = rawList });
+                    }
                 }
             }
 
@@ -1140,6 +1165,13 @@ Rules:
         public string ToolUseId { get; set; }
         public string Content { get; set; }
         public bool IsError { get; set; }
+    }
+
+    /// <summary>Image attached to a Banana Chat message (Sprint 2B).</summary>
+    public class ImageAttachment
+    {
+        public string Base64Data { get; set; }
+        public string MediaType { get; set; }  // "image/png" or "image/jpeg"
     }
 
     public class UsageInfo

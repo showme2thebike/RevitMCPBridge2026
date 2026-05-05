@@ -63,6 +63,17 @@ namespace RevitMCPBridge2026.AgentFramework
         private PlaywrightMCPClient _playwright;
         private bool _playwrightAuthed = false; // true once localStorage is seeded for this session
 
+        // Attachment state (Sprint 2B/5)
+        private List<AttachedImage> _pendingAttachments = new List<AttachedImage>();
+        private StackPanel _attachmentPreviewPanel;
+
+        // Document lock (Sprint 4)
+        private string _lockedDocTitle;
+        private TextBlock _lockedDocLabel;
+
+        // Snap View button reference (Sprint 5)
+        private Button _snapButton;
+
         // Streaming bubble state
         private System.Windows.Controls.TextBox _streamingTextBox;
         private StackPanel _streamingContainer;
@@ -112,6 +123,9 @@ namespace RevitMCPBridge2026.AgentFramework
 
             // Initialize project name for session tracking
             _sessionProjectName = uiApp?.ActiveUIDocument?.Document?.Title ?? "Unknown";
+
+            // Lock to the document that was active when the panel opened
+            _lockedDocTitle = uiApp?.ActiveUIDocument?.Document?.Title;
 
             // Window setup
             Title = "Banana Chat";
@@ -302,6 +316,14 @@ namespace RevitMCPBridge2026.AgentFramework
             titleStack.Children.Add(title);
             titleStack.Children.Add(_statusText);
             titleStack.Children.Add(statsRow);
+            _lockedDocLabel = new TextBlock
+            {
+                Text = string.IsNullOrEmpty(_lockedDocTitle) ? "Model: none" : $"Model: {_lockedDocTitle}",
+                Foreground = new SolidColorBrush(Color.FromRgb(100, 180, 100)),
+                FontSize = 11,
+                Margin = new Thickness(0, 2, 0, 0)
+            };
+            titleStack.Children.Add(_lockedDocLabel);
             Grid.SetColumn(titleStack, 0);
             grid.Children.Add(titleStack);
 
@@ -316,6 +338,12 @@ namespace RevitMCPBridge2026.AgentFramework
             settingsButton.Margin = new Thickness(8, 0, 0, 0);
             settingsButton.Click += (s, e) => ShowSettingsDialog();
             buttonStack.Children.Add(settingsButton);
+
+            var relockButton = CreateButton("Relock", false);
+            relockButton.Margin = new Thickness(8, 0, 0, 0);
+            relockButton.ToolTip = "Lock to the currently active Revit document";
+            relockButton.Click += (s, e) => RelockDocument();
+            buttonStack.Children.Add(relockButton);
 
             Grid.SetColumn(buttonStack, 1);
             grid.Children.Add(buttonStack);
@@ -414,6 +442,17 @@ namespace RevitMCPBridge2026.AgentFramework
                 Padding = new Thickness(12)
             };
 
+            var outerStack = new StackPanel { Orientation = Orientation.Vertical };
+
+            // Attachment preview strip (hidden until attachments are added)
+            _attachmentPreviewPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 0, 0, 6),
+                Visibility = Visibility.Collapsed
+            };
+            outerStack.Children.Add(_attachmentPreviewPanel);
+
             var grid = new Grid();
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -444,7 +483,21 @@ namespace RevitMCPBridge2026.AgentFramework
                 Margin = new Thickness(8, 0, 0, 0)
             };
 
+            // Paperclip button (Sprint 2B/5)
+            var attachButton = CreateButton("📎", false);
+            attachButton.ToolTip = "Attach image (or Ctrl+V to paste from clipboard)";
+            attachButton.Click += (s, e) => BrowseAndAttachImage();
+            buttonStack.Children.Add(attachButton);
+
+            // Snap View button (Sprint 5) — captures current Revit viewport and attaches as image
+            _snapButton = CreateButton("Snap", false);
+            _snapButton.Margin = new Thickness(4, 0, 0, 0);
+            _snapButton.ToolTip = "Attach a screenshot of the current Revit view";
+            _snapButton.Click += async (s, e) => await SnapCurrentViewAsync();
+            buttonStack.Children.Add(_snapButton);
+
             _stopButton = CreateButton("Stop", false);
+            _stopButton.Margin = new Thickness(8, 0, 0, 0);
             _stopButton.Visibility = Visibility.Collapsed;
             _stopButton.Click += (s, e) => StopAgent();
             buttonStack.Children.Add(_stopButton);
@@ -457,8 +510,63 @@ namespace RevitMCPBridge2026.AgentFramework
             Grid.SetColumn(buttonStack, 1);
             grid.Children.Add(buttonStack);
 
-            border.Child = grid;
+            outerStack.Children.Add(grid);
+            border.Child = outerStack;
             return border;
+        }
+
+        // Sprint 5 — capture current Revit view and attach as image
+        private async Task SnapCurrentViewAsync()
+        {
+            if (_snapButton != null) _snapButton.IsEnabled = false;
+            try
+            {
+                var captureParams = new JObject { ["width"] = 1200, ["height"] = 900 };
+                var json = await ExecuteMCPWithRetryAsync("captureViewportToBase64", captureParams);
+                var result = JObject.Parse(json);
+                if (result["success"]?.ToObject<bool>() != true)
+                {
+                    AddAssistantMessage("Could not capture view: " + result["error"]);
+                    return;
+                }
+                var base64 = result["result"]?["base64"]?.ToString();
+                var viewName = result["result"]?["viewName"]?.ToString() ?? "current view";
+                if (string.IsNullOrEmpty(base64)) { AddAssistantMessage("Capture returned empty image."); return; }
+                AddAttachment(new AttachedImage { Base64Data = base64, MediaType = "image/png", Label = $"View: {viewName}" });
+            }
+            catch (Exception ex)
+            {
+                AddAssistantMessage($"Snap failed: {ex.Message}");
+            }
+            finally
+            {
+                if (_snapButton != null) _snapButton.IsEnabled = true;
+            }
+        }
+
+        // Sprint 2B — file browse to attach an image
+        private void BrowseAndAttachImage()
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Attach Image",
+                Filter = "Images (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg",
+                Multiselect = false
+            };
+            if (dlg.ShowDialog() != true) return;
+
+            try
+            {
+                var bytes = System.IO.File.ReadAllBytes(dlg.FileName);
+                var ext = System.IO.Path.GetExtension(dlg.FileName).ToLower();
+                var mediaType = ext == ".jpg" || ext == ".jpeg" ? "image/jpeg" : "image/png";
+                var label = System.IO.Path.GetFileName(dlg.FileName);
+                AddAttachment(new AttachedImage { Base64Data = Convert.ToBase64String(bytes), MediaType = mediaType, Label = label });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Attach file failed: {ex.Message}");
+            }
         }
 
         private Button CreateButton(string text, bool isPrimary)
@@ -2139,6 +2247,8 @@ namespace RevitMCPBridge2026.AgentFramework
                 if (string.IsNullOrEmpty(innerMethod))
                     return JsonConvert.SerializeObject(new { success = false, error = "callMCPMethod requires a 'method' parameter" });
                 var innerParams = parameters?["parameters"] as JObject ?? new JObject();
+                var callGuard = CheckDocumentGuard(innerMethod);
+                if (callGuard != null) return callGuard;
                 return await ExecuteMCPWithRetryAsync(innerMethod, innerParams);
             }
             if (methodName == "listAllMethods")
@@ -2146,6 +2256,10 @@ namespace RevitMCPBridge2026.AgentFramework
                 // Forward to the pipe's listMethods (or getMethods) endpoint
                 return await ExecuteMCPWithRetryAsync("listMethods", parameters ?? new JObject());
             }
+
+            // Document lock guard — stop write ops if wrong model is active
+            var mcpGuard = CheckDocumentGuard(methodName);
+            if (mcpGuard != null) return mcpGuard;
 
             // All other tools go through MCP with retry logic
             return await ExecuteMCPWithRetryAsync(methodName, parameters);
@@ -3116,6 +3230,34 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private bool IsWriteOperation(string toolName) => _writeOpNames.Contains(toolName);
 
+        private void RelockDocument()
+        {
+            var doc = _uiApp?.ActiveUIDocument?.Document;
+            if (doc == null)
+            {
+                MessageBox.Show("No document is currently open in Revit.", "No Document");
+                return;
+            }
+            _lockedDocTitle = doc.Title;
+            if (_lockedDocLabel != null)
+                Dispatcher.Invoke(() => _lockedDocLabel.Text = $"Model: {_lockedDocTitle}");
+            AddAssistantMessage($"Document lock updated to: {_lockedDocTitle}");
+        }
+
+        private string CheckDocumentGuard(string methodName)
+        {
+            if (string.IsNullOrEmpty(_lockedDocTitle)) return null;
+            if (!IsWriteOperation(methodName)) return null;
+            var currentDoc = _uiApp?.ActiveUIDocument?.Document?.Title;
+            if (string.IsNullOrEmpty(currentDoc)) return null;
+            if (string.Equals(currentDoc, _lockedDocTitle, StringComparison.OrdinalIgnoreCase)) return null;
+            return JsonConvert.SerializeObject(new
+            {
+                success = false,
+                error = $"DOCUMENT LOCK: Active Revit document is \"{currentDoc}\" but this session is locked to \"{_lockedDocTitle}\". Switch to the correct model in Revit, or click Relock in the chat header to update the lock."
+            });
+        }
+
         private bool IsNegativeCorrectionSignal(string msg)
         {
             var lower = msg.ToLower().Trim();
@@ -3352,21 +3494,130 @@ namespace RevitMCPBridge2026.AgentFramework
             public string Source { get; set; }
         }
 
+        /// <summary>Image attached via clipboard paste or file browse.</summary>
+        private class AttachedImage
+        {
+            public string Base64Data { get; set; }
+            public string MediaType { get; set; }   // "image/png" or "image/jpeg"
+            public string Label { get; set; }        // display label in preview strip
+        }
+
         private async void InputTextBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)  // hooked as PreviewKeyDown
         {
-            // Ctrl+Enter or just Enter (when not holding Shift) to submit
+            bool ctrl = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0;
+
+            // Sprint 2C — explicitly handle standard text-editing shortcuts so Revit can't intercept them
+            if (ctrl)
+            {
+                switch (e.Key)
+                {
+                    case System.Windows.Input.Key.A:
+                        _inputTextBox.SelectAll();
+                        e.Handled = true;
+                        return;
+                    case System.Windows.Input.Key.C:
+                        _inputTextBox.Copy();
+                        e.Handled = true;
+                        return;
+                    case System.Windows.Input.Key.X:
+                        _inputTextBox.Cut();
+                        e.Handled = true;
+                        return;
+                    case System.Windows.Input.Key.Z:
+                        _inputTextBox.Undo();
+                        e.Handled = true;
+                        return;
+                    case System.Windows.Input.Key.Y:
+                        _inputTextBox.Redo();
+                        e.Handled = true;
+                        return;
+                    case System.Windows.Input.Key.V:
+                        // Sprint 2B — if clipboard has an image, attach it; otherwise paste text normally
+                        if (System.Windows.Clipboard.ContainsImage())
+                        {
+                            HandleImagePaste();
+                            e.Handled = true;
+                            return;
+                        }
+                        _inputTextBox.Paste();
+                        e.Handled = true;
+                        return;
+                }
+            }
+
+            // Ctrl+Enter or plain Enter (Shift+Enter adds newline) to submit
             if (e.Key == System.Windows.Input.Key.Enter && !_isProcessing && !_subscriptionBlocked)
             {
-                bool ctrlPressed = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0;
                 bool shiftPressed = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0;
-
-                // Submit on Ctrl+Enter, or plain Enter (Shift+Enter adds newline)
-                if (ctrlPressed || !shiftPressed)
+                if (ctrl || !shiftPressed)
                 {
                     e.Handled = true;
                     await SendMessage();
                 }
-                // Shift+Enter allows adding a newline
+            }
+        }
+
+        // Sprint 2B — capture clipboard image and add to pending attachments
+        private void HandleImagePaste()
+        {
+            try
+            {
+                var bitmapSource = System.Windows.Clipboard.GetImage();
+                if (bitmapSource == null) return;
+
+                var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmapSource));
+                using (var ms = new System.IO.MemoryStream())
+                {
+                    encoder.Save(ms);
+                    var base64 = Convert.ToBase64String(ms.ToArray());
+                    AddAttachment(new AttachedImage { Base64Data = base64, MediaType = "image/png", Label = "Screenshot" });
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Image paste failed: {ex.Message}");
+            }
+        }
+
+        // Sprint 2B — add image to pending list and update preview strip
+        private void AddAttachment(AttachedImage img)
+        {
+            _pendingAttachments.Add(img);
+            RefreshAttachmentPreview();
+        }
+
+        private void RemoveAttachment(AttachedImage img)
+        {
+            _pendingAttachments.Remove(img);
+            RefreshAttachmentPreview();
+        }
+
+        private void RefreshAttachmentPreview()
+        {
+            _attachmentPreviewPanel.Children.Clear();
+            _attachmentPreviewPanel.Visibility = _pendingAttachments.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+            foreach (var att in _pendingAttachments)
+            {
+                var chip = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromRgb(0, 100, 180)),
+                    CornerRadius = new CornerRadius(4),
+                    Padding = new Thickness(8, 4, 8, 4),
+                    Margin = new Thickness(0, 0, 6, 0),
+                    Cursor = System.Windows.Input.Cursors.Hand
+                };
+                var chipText = new TextBlock
+                {
+                    Text = $"📎 {att.Label}  ✕",
+                    Foreground = Brushes.White,
+                    FontSize = 12
+                };
+                var captured = att;
+                chip.MouseLeftButtonUp += (s, e) => RemoveAttachment(captured);
+                chip.Child = chipText;
+                _attachmentPreviewPanel.Children.Add(chip);
             }
         }
 
@@ -3502,6 +3753,20 @@ STYLE:
 - Don't just describe what you could do - actually do it
 - Follow the WORKFLOWS exactly as specified above
 - VERIFY your work visually when placing elements on sheets";
+
+                // Sprint 2B — inject image attachments as vision blocks if present
+                if (_pendingAttachments.Count > 0)
+                {
+                    var blocks = new List<object>();
+                    // Only add text block if non-empty — Claude rejects empty text blocks
+                    if (!string.IsNullOrWhiteSpace(message))
+                        blocks.Add(new { type = "text", text = message });
+                    foreach (var att in _pendingAttachments)
+                        blocks.Add(new { type = "image", source = new { type = "base64", media_type = att.MediaType, data = att.Base64Data } });
+                    _agent.SetNextMessageContent(blocks);
+                    _pendingAttachments.Clear();
+                    RefreshAttachmentPreview();
+                }
 
                 await _agent.RunAsync(message, systemPrompt);
             }

@@ -336,11 +336,10 @@ namespace RevitMCPBridge
         /// </summary>
         private static void ApplyButtonKeyTips()
         {
-            // Map button name suffix → KeyTip letter
+            // Map button name suffix → KeyTip letter (must match PushButtonData first parameter)
             var keyTips = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 { "AIAssistant",       "B" },  // Banana Chat — Alt→BM→B
-                { "OpenClaude",        "C" },
                 { "BimMonkeyPlatform", "W" },
                 { "StartMCPServer",    "1" },
                 { "StopMCPServer",     "2" },
@@ -351,7 +350,6 @@ namespace RevitMCPBridge
                 { "RedlineCancel",     "N" },
                 { "RedlineClear",      "D" },
                 { "FAQ",               "F" },
-                { "AIAssistant",       "B" },
                 { "MCPSettings",       "E" },
                 { "MCPHelp",           "H" },
             };
@@ -361,19 +359,38 @@ namespace RevitMCPBridge
             {
                 if (tab.Title != "BIM Monkey") continue;
                 foreach (var panel in tab.Panels)
-                {
-                    foreach (var item in panel.Source.Items)
-                    {
-                        if (item is Autodesk.Windows.RibbonButton btn && btn.Id != null)
-                        {
-                            // Id format: "CustomCtrl_%BIM Monkey%PanelName%ButtonName"
-                            var lastPart = btn.Id.Split('%').LastOrDefault() ?? "";
-                            if (keyTips.TryGetValue(lastPart, out var tip))
-                                btn.KeyTip = tip;
-                        }
-                    }
-                }
+                    ApplyKeyTipsToItems(panel.Source.Items, keyTips);
                 break;
+            }
+        }
+
+        private static void ApplyKeyTipsToItems(
+            System.Collections.ObjectModel.ObservableCollection<Autodesk.Windows.RibbonItem> items,
+            Dictionary<string, string> keyTips)
+        {
+            foreach (var item in items)
+            {
+                if (item is Autodesk.Windows.RibbonButton btn && btn.Id != null)
+                {
+                    var lastPart = btn.Id.Split('%').LastOrDefault() ?? "";
+                    if (keyTips.TryGetValue(lastPart, out var tip))
+                        btn.KeyTip = tip;
+                }
+                // Recurse into row panels, split buttons, and other containers
+                else if (item is Autodesk.Windows.RibbonRowPanel rowPanel)
+                {
+                    ApplyKeyTipsToItems(rowPanel.Items, keyTips);
+                }
+                else if (item is Autodesk.Windows.RibbonSplitButton splitBtn)
+                {
+                    foreach (var child in splitBtn.Items)
+                        if (child is Autodesk.Windows.RibbonButton childBtn && childBtn.Id != null)
+                        {
+                            var lastPart = childBtn.Id.Split('%').LastOrDefault() ?? "";
+                            if (keyTips.TryGetValue(lastPart, out var tip))
+                                childBtn.KeyTip = tip;
+                        }
+                }
             }
         }
 
@@ -478,8 +495,9 @@ namespace RevitMCPBridge
             panel.AddSeparator();
 
             // AI Assistant button - Launch the Agent Chat Panel
+            // Note: use "AIAssistant2" to avoid duplicate name with the AI Enablement panel button
             var aiAssistantButtonData = new PushButtonData(
-                "AIAssistant",
+                "AIAssistant2",
                 "AI\nAssistant",
                 Assembly.GetExecutingAssembly().Location,
                 "RevitMCPBridge2026.AgentFramework.LaunchAgentCommand")
