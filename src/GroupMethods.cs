@@ -719,13 +719,16 @@ namespace RevitMCPBridge
                     return JsonConvert.SerializeObject(new { success = false, error = "Could not get bounding box for this group in the specified view." });
 
                 double offsetFt = (parameters?["offsetInches"]?.ToObject<double>() ?? (1.0 / 16.0)) / 12.0;
-                double minX = bb.Min.X - offsetFt, minY = bb.Min.Y - offsetFt;
-                double maxX = bb.Max.X + offsetFt, maxY = bb.Max.Y + offsetFt;
+                // bb.Min/Max are in view-local space; Z=0 projects onto the view's sketch plane.
+                // Transform to world so the lines lie in the correct plane for any view type.
+                var t = bb.Transform;
+                double uMin = bb.Min.X - offsetFt, vMin = bb.Min.Y - offsetFt;
+                double uMax = bb.Max.X + offsetFt, vMax = bb.Max.Y + offsetFt;
 
                 var corners = new[]
                 {
-                    new XYZ(minX, minY, 0), new XYZ(maxX, minY, 0),
-                    new XYZ(maxX, maxY, 0), new XYZ(minX, maxY, 0)
+                    t.OfPoint(new XYZ(uMin, vMin, 0)), t.OfPoint(new XYZ(uMax, vMin, 0)),
+                    t.OfPoint(new XYZ(uMax, vMax, 0)), t.OfPoint(new XYZ(uMin, vMax, 0))
                 };
 
                 var styleNameParam = parameters?["lineStyle"]?.ToString() ?? "Medium Lines";
