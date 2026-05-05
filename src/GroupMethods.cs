@@ -719,16 +719,46 @@ namespace RevitMCPBridge
                     return JsonConvert.SerializeObject(new { success = false, error = "Could not get bounding box for this group in the specified view." });
 
                 double offsetFt = (parameters?["offsetInches"]?.ToObject<double>() ?? (1.0 / 16.0)) / 12.0;
-                // bb.Min/Max are in view-local space; Z=0 projects onto the view's sketch plane.
-                // Transform to world so the lines lie in the correct plane for any view type.
-                var t = bb.Transform;
-                double uMin = bb.Min.X - offsetFt, vMin = bb.Min.Y - offsetFt;
-                double uMax = bb.Max.X + offsetFt, vMax = bb.Max.Y + offsetFt;
+
+                // Project all 8 world corners of the bounding box onto the view's sketch plane,
+                // then reconstruct the 4 rectangle corners using the plane's own XVec/YVec.
+                // This is the only approach guaranteed to produce on-plane points for any view type
+                // (plan, elevation, section, drafting) without "Curve must be in the plane" errors.
+                var sketchPlane = view.SketchPlane;
+                if (sketchPlane == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = "View has no sketch plane — cannot draw detail lines." });
+
+                var plane = sketchPlane.GetPlane();
+                var xVec = plane.XVec;
+                var yVec = plane.YVec;
+                var planeOrigin = plane.Origin;
+                var bbT = bb.Transform;
+
+                double uMin = double.MaxValue, uMax = double.MinValue;
+                double vMin = double.MaxValue, vMax = double.MinValue;
+                foreach (int xi in new[] { 0, 1 })
+                foreach (int yi in new[] { 0, 1 })
+                foreach (int zi in new[] { 0, 1 })
+                {
+                    var localPt = new XYZ(
+                        xi == 0 ? bb.Min.X : bb.Max.X,
+                        yi == 0 ? bb.Min.Y : bb.Max.Y,
+                        zi == 0 ? bb.Min.Z : bb.Max.Z);
+                    var wp = bbT.OfPoint(localPt) - planeOrigin;
+                    double u = wp.DotProduct(xVec);
+                    double v = wp.DotProduct(yVec);
+                    if (u < uMin) uMin = u; if (u > uMax) uMax = u;
+                    if (v < vMin) vMin = v; if (v > vMax) vMax = v;
+                }
+                uMin -= offsetFt; uMax += offsetFt;
+                vMin -= offsetFt; vMax += offsetFt;
 
                 var corners = new[]
                 {
-                    t.OfPoint(new XYZ(uMin, vMin, 0)), t.OfPoint(new XYZ(uMax, vMin, 0)),
-                    t.OfPoint(new XYZ(uMax, vMax, 0)), t.OfPoint(new XYZ(uMin, vMax, 0))
+                    planeOrigin + uMin * xVec + vMin * yVec,
+                    planeOrigin + uMax * xVec + vMin * yVec,
+                    planeOrigin + uMax * xVec + vMax * yVec,
+                    planeOrigin + uMin * xVec + vMax * yVec
                 };
 
                 var styleNameParam = parameters?["lineStyle"]?.ToString() ?? "Medium Lines";
