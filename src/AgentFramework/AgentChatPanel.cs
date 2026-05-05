@@ -47,6 +47,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private string _apiKey;
         private string _bimMonkeyApiKey;
         private string _userFirstName;         // contact_name from /api/auth/verify
+        private StartupSummary _startupSummary; // cached at first SendMessage, injected into system prompt
         private string _selectedModel;
         private string _firmStandardsDoc;     // fetched from Railway on init, injected into every prompt
         private string _correctionsKnowledge; // fetched from plugin on init, injected into every prompt
@@ -3777,7 +3778,32 @@ namespace RevitMCPBridge2026.AgentFramework
                     ? ""
                     : $"\n\nUSER: The person you are speaking with is {_userFirstName}. Always use their name when addressing them directly.\n";
 
-                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{userNameBlock}{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{memoryBlock}{firmMemoryBlock}{projectNotesBlock}{persistentIntelBlock}
+                // Fetch startup summary once and cache — gives Claude context for "yes" responses to the greeting
+                if (_startupSummary == null)
+                    _startupSummary = IssuanceDateMethods.GetStartupSummary(_uiApp);
+
+                var startupBlock = "";
+                if (_startupSummary != null)
+                {
+                    var sb = new System.Text.StringBuilder("\n\nSESSION STARTUP CONTEXT (checked when Banana Chat opened):\n");
+                    if (!string.IsNullOrEmpty(_startupSummary.IssueDate) && _startupSummary.DaysUntilIssue.HasValue)
+                    {
+                        var d = _startupSummary.DaysUntilIssue.Value;
+                        sb.AppendLine(d == 0 ? $"- Issue date: TODAY ({_startupSummary.IssueDate})"
+                            : d > 0 ? $"- Issue date: {_startupSummary.IssueDate} ({d} days out)"
+                            : $"- Issue date: {_startupSummary.IssueDate} (OVERDUE by {Math.Abs(d)} days)");
+                    }
+                    if (_startupSummary.EmptySheetCount > 0)
+                        sb.AppendLine($"- Empty sheets: {_startupSummary.EmptySheetCount}");
+                    if (!_startupSummary.HasDoorSchedule)
+                        sb.AppendLine("- No door schedule found in set");
+                    if (!_startupSummary.HasWindowSchedule)
+                        sb.AppendLine("- No window schedule found in set");
+                    sb.AppendLine("\nIf the user says 'yes', 'sure', 'go ahead', or agrees to a completeness check, run: auditSheets, findUnplacedRooms, suggestViewRenames, findDuplicateFamilyTypes — then summarize all findings.");
+                    startupBlock = sb.ToString();
+                }
+
+                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{userNameBlock}{startupBlock}{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{memoryBlock}{firmMemoryBlock}{projectNotesBlock}{persistentIntelBlock}
 
 CURRENT PROJECT: {projectName}
 
