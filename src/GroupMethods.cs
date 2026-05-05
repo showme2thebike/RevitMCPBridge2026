@@ -681,5 +681,96 @@ namespace RevitMCPBridge
                 return ResponseBuilder.FromException(ex).Build();
             }
         }
+
+        // ── traceDetailGroupBoundary ─────────────────────────────────────────────
+
+        [MCPMethod("traceDetailGroupBoundary", Category = "Groups",
+            Description = "Draw a detail line rectangle around the bounding box of a detail group to visually highlight its outside edge. Useful for clarifying detail and elevation drawings. Parameters: groupId (required), viewId (optional — defaults to active view), lineStyle (optional — line style name, default 'Medium Lines'), offsetInches (optional — expand box by this many inches on each side, default 1/16\").")]
+        public static string TraceDetailGroupBoundary(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var activeView = uiApp.ActiveUIDocument.ActiveView;
+
+                int groupIdVal = parameters?["groupId"]?.ToObject<int>()
+                    ?? throw new ArgumentException("groupId is required.");
+
+                var group = doc.GetElement(new ElementId(groupIdVal)) as Group;
+                if (group == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = $"No group found with id {groupIdVal}." });
+                var groupCategoryName = group.GroupType?.Category?.Name ?? "";
+                bool isDetailGroup = groupCategoryName.IndexOf("Detail", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (!isDetailGroup)
+                    return JsonConvert.SerializeObject(new { success = false, error = $"Element {groupIdVal} is not a detail group (category={groupCategoryName})." });
+
+                // Resolve view
+                View view = activeView;
+                int? viewIdParam = parameters?["viewId"]?.ToObject<int?>();
+                if (viewIdParam.HasValue)
+                {
+                    view = doc.GetElement(new ElementId(viewIdParam.Value)) as View;
+                    if (view == null)
+                        return JsonConvert.SerializeObject(new { success = false, error = $"No view found with id {viewIdParam}." });
+                }
+
+                var bb = group.get_BoundingBox(view);
+                if (bb == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = "Could not get bounding box for this group in the specified view." });
+
+                double offsetFt = (parameters?["offsetInches"]?.ToObject<double>() ?? (1.0 / 16.0)) / 12.0;
+                double minX = bb.Min.X - offsetFt, minY = bb.Min.Y - offsetFt;
+                double maxX = bb.Max.X + offsetFt, maxY = bb.Max.Y + offsetFt;
+
+                var corners = new[]
+                {
+                    new XYZ(minX, minY, 0), new XYZ(maxX, minY, 0),
+                    new XYZ(maxX, maxY, 0), new XYZ(minX, maxY, 0)
+                };
+
+                var styleNameParam = parameters?["lineStyle"]?.ToString() ?? "Medium Lines";
+                var style = new FilteredElementCollector(doc)
+                    .OfClass(typeof(GraphicsStyle))
+                    .Cast<GraphicsStyle>()
+                    .Where(gs => gs.GraphicsStyleType == GraphicsStyleType.Projection)
+                    .FirstOrDefault(gs => gs.Name.Equals(styleNameParam, StringComparison.OrdinalIgnoreCase))
+                    ?? new FilteredElementCollector(doc)
+                        .OfClass(typeof(GraphicsStyle))
+                        .Cast<GraphicsStyle>()
+                        .FirstOrDefault(gs => gs.GraphicsStyleType == GraphicsStyleType.Projection
+                            && gs.Name.IndexOf("Medium", StringComparison.OrdinalIgnoreCase) >= 0);
+
+                var createdIds = new List<int>();
+                using (var tx = new Transaction(doc, "Trace Detail Group Boundary"))
+                {
+                    tx.Start();
+                    for (int i = 0; i < 4; i++)
+                    {
+                        var from = corners[i];
+                        var to = corners[(i + 1) % 4];
+                        if (from.DistanceTo(to) < 0.001) continue;
+                        var dl = doc.Create.NewDetailCurve(view, Line.CreateBound(from, to));
+                        if (style != null) dl.LineStyle = style;
+                        createdIds.Add((int)dl.Id.Value);
+                    }
+                    tx.Commit();
+                }
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    groupId = groupIdVal,
+                    viewId = (int)view.Id.Value,
+                    linesCreated = createdIds.Count,
+                    lineIds = createdIds,
+                    lineStyle = style?.Name ?? "default",
+                    message = $"Boundary rectangle drawn around group {groupIdVal} in '{view.Name}'."
+                });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
     }
 }
