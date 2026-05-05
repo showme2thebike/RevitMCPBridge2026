@@ -3251,19 +3251,17 @@ namespace RevitMCPBridge2026.AgentFramework
             var lines = new System.Text.StringBuilder();
             bool hasAlert = false;
 
-            // Issue date alert
+            // Issue date alert — only surface if within 14 days (beyond that it's noise)
             if (!string.IsNullOrEmpty(s.IssueDate) && s.DaysUntilIssue.HasValue)
             {
                 var d = s.DaysUntilIssue.Value;
                 if (d == 0)
-                    lines.AppendLine($"⚠️ Your drawings are due TODAY ({DateTime.Parse(s.IssueDate):MMM d}).");
-                else if (d > 0 && d <= 7)
-                    lines.AppendLine($"Your drawings are going out in {d} day{(d == 1 ? "" : "s")} ({DateTime.Parse(s.IssueDate):MMM d}).");
-                else if (d > 7)
-                    lines.AppendLine($"Issue date: {DateTime.Parse(s.IssueDate):MMM d, yyyy} ({d} days out).");
-                else
-                    lines.AppendLine($"⚠️ Issue date was {DateTime.Parse(s.IssueDate):MMM d, yyyy} ({Math.Abs(d)} days ago) — is there a new date?");
-                hasAlert = true;
+                { lines.AppendLine($"⚠️ Your drawings are due TODAY ({DateTime.Parse(s.IssueDate):MMM d})."); hasAlert = true; }
+                else if (d > 0 && d <= 14)
+                { lines.AppendLine($"Your drawings are going out in {d} day{(d == 1 ? "" : "s")} ({DateTime.Parse(s.IssueDate):MMM d})."); hasAlert = true; }
+                else if (d < 0)
+                { lines.AppendLine($"⚠️ Issue date was {DateTime.Parse(s.IssueDate):MMM d, yyyy} ({Math.Abs(d)} days ago) — is there a new date?"); hasAlert = true; }
+                // > 14 days: stay silent
             }
 
             // Sheet gaps
@@ -3784,8 +3782,8 @@ namespace RevitMCPBridge2026.AgentFramework
                     "The goal: Barrett should never have to tell you the same thing twice.\n";
 
                 var userNameBlock = string.IsNullOrWhiteSpace(_userFirstName)
-                    ? ""
-                    : $"\n\nUSER: The person you are speaking with is {_userFirstName}. Always use their name when addressing them directly.\n";
+                    ? $"\n\nTODAY'S DATE: {DateTime.Today:yyyy-MM-dd}\n"
+                    : $"\n\nUSER: The person you are speaking with is {_userFirstName}. Always use their name when addressing them directly.\nTODAY'S DATE: {DateTime.Today:yyyy-MM-dd}\n";
 
                 // Fetch startup summary once and cache — gives Claude context for "yes" responses to the greeting
                 if (_startupSummary == null)
