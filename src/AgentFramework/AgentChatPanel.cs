@@ -171,13 +171,8 @@ namespace RevitMCPBridge2026.AgentFramework
 
             if (!sessionRestored)
             {
-                // Welcome message for new session
-                AddAssistantMessage("Hello! I'm your Revit AI assistant. I can help you with:\n\n" +
-                    "• Placing and organizing annotations\n" +
-                    "• Finding information about elements\n" +
-                    "• Managing sheets and views\n" +
-                    "• Intelligent placement with collision avoidance\n\n" +
-                    "What would you like to do?");
+                // Sprint 8/9 — smart greeting: check issue date + sheet health before welcoming
+                Loaded += (s, e) => ShowStartupGreeting();
             }
 
             // Ctrl+Shift+K to clear chat from anywhere in the window
@@ -3229,6 +3224,66 @@ namespace RevitMCPBridge2026.AgentFramework
         };
 
         private bool IsWriteOperation(string toolName) => _writeOpNames.Contains(toolName);
+
+        // Sprint 8/9 — session startup intelligence
+        private void ShowStartupGreeting()
+        {
+            try
+            {
+                var summary = IssuanceDateMethods.GetStartupSummary(_uiApp);
+                AddAssistantMessage(BuildSmartGreeting(summary));
+            }
+            catch
+            {
+                AddAssistantMessage("Hello! I'm your Revit AI assistant. What would you like to work on today?");
+            }
+        }
+
+        private string BuildSmartGreeting(StartupSummary s)
+        {
+            var lines = new System.Text.StringBuilder();
+            bool hasAlert = false;
+
+            // Issue date alert
+            if (!string.IsNullOrEmpty(s.IssueDate) && s.DaysUntilIssue.HasValue)
+            {
+                var d = s.DaysUntilIssue.Value;
+                if (d == 0)
+                    lines.AppendLine($"⚠️ Your drawings are due TODAY ({DateTime.Parse(s.IssueDate):MMM d}).");
+                else if (d > 0 && d <= 7)
+                    lines.AppendLine($"Your drawings are going out in {d} day{(d == 1 ? "" : "s")} ({DateTime.Parse(s.IssueDate):MMM d}).");
+                else if (d > 7)
+                    lines.AppendLine($"Issue date: {DateTime.Parse(s.IssueDate):MMM d, yyyy} ({d} days out).");
+                else
+                    lines.AppendLine($"⚠️ Issue date was {DateTime.Parse(s.IssueDate):MMM d, yyyy} ({Math.Abs(d)} days ago) — is there a new date?");
+                hasAlert = true;
+            }
+
+            // Sheet gaps
+            if (s.EmptySheetCount > 0)
+            {
+                lines.AppendLine($"I see {s.EmptySheetCount} empty sheet{(s.EmptySheetCount == 1 ? "" : "s")} in the set.");
+                hasAlert = true;
+            }
+            if (!s.HasDoorSchedule && s.TotalSheets > 0)
+            {
+                lines.AppendLine("No door schedule found in the set.");
+                hasAlert = true;
+            }
+            if (!s.HasWindowSchedule && s.TotalSheets > 0)
+            {
+                lines.AppendLine("No window schedule found in the set.");
+                hasAlert = true;
+            }
+
+            if (hasAlert)
+            {
+                lines.AppendLine("\nShould I run a full completeness check before we start?");
+                return lines.ToString().Trim();
+            }
+
+            return "Hello! I'm ready to help with your drawings. What would you like to work on today?";
+        }
 
         private void RelockDocument()
         {
