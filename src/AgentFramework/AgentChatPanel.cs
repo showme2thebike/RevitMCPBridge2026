@@ -3285,6 +3285,15 @@ namespace RevitMCPBridge2026.AgentFramework
 
             var namePrefix = string.IsNullOrWhiteSpace(_userFirstName) ? "Hello!" : $"Hey {_userFirstName}!";
 
+            // No issue date set — ask for it naturally
+            if (string.IsNullOrEmpty(s.IssueDate) && s.TotalSheets > 0)
+            {
+                var q = hasAlert
+                    ? $"{namePrefix} {lines.ToString().Trim()}\n\nWhen are these drawings going out? I'll keep track of the date for you."
+                    : $"{namePrefix} When are these drawings going out? I'll keep track of the date for you.";
+                return q;
+            }
+
             if (hasAlert)
             {
                 lines.AppendLine("\nShould I run a full completeness check before we start?");
@@ -3799,7 +3808,9 @@ namespace RevitMCPBridge2026.AgentFramework
                         sb.AppendLine("- No door schedule found in set");
                     if (!_startupSummary.HasWindowSchedule)
                         sb.AppendLine("- No window schedule found in set");
-                    sb.AppendLine("\nIf the user says 'yes', 'sure', 'go ahead', or agrees to a completeness check, run: auditSheets, findUnplacedRooms, suggestViewRenames, findDuplicateFamilyTypes — then summarize all findings.");
+                    if (string.IsNullOrEmpty(_startupSummary.IssueDate))
+                        sb.AppendLine("\nNo issue date is set. If the user gives any date or timeframe ('Friday', 'May 15', 'in two weeks'), call setIssuanceDate with the resolved date — do not ask them to type a command.");
+                    sb.AppendLine("If the user says 'yes', 'sure', 'go ahead', or agrees to a completeness check, run: auditSheets, findUnplacedRooms, suggestViewRenames, findDuplicateFamilyTypes — then summarize all findings.");
                     startupBlock = sb.ToString();
                 }
 
