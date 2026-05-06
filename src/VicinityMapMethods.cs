@@ -115,6 +115,12 @@ namespace RevitMCPBridge
                 ViewDrafting draftView = null;
                 var streetPoints = new Dictionary<string, List<XYZ>>(StringComparer.OrdinalIgnoreCase);
 
+                // Pre-compute scale so it can be applied inside the transaction
+                int rawDenom = (int)Math.Ceiling(radiusFt * 2.0 / 5.0 * 12.0);
+                int[] stdScales = { 12, 24, 48, 96, 120, 192, 240, 360, 480, 600, 960, 1200, 1440, 1920, 2400, 2880, 3600, 4800, 6000 };
+                int suggestedScale = stdScales.FirstOrDefault(s => s >= rawDenom);
+                if (suggestedScale == 0) suggestedScale = rawDenom;
+
                 using (var trans = new Transaction(doc, "Create Vicinity Map"))
                 {
                     trans.Start();
@@ -196,6 +202,19 @@ namespace RevitMCPBridge
                         }
                     }
 
+                    // Auto-apply scale and expand annotation crop to encompass all drawn content
+                    try
+                    {
+                        draftView.Scale = suggestedScale;
+                        double margin = radiusFt * 1.15;
+                        var cropBox = new BoundingBoxXYZ();
+                        cropBox.Min = new XYZ(-margin, -margin, -1);
+                        cropBox.Max = new XYZ(margin, margin, 1);
+                        draftView.CropBox = cropBox;
+                        draftView.CropBoxActive = true;
+                    }
+                    catch { /* some view types don't support crop modification — safe to skip */ }
+
                     trans.Commit();
                 }
 
@@ -219,9 +238,18 @@ namespace RevitMCPBridge
                     string direction = (angleDeg > 45 && angleDeg < 135) ? "vertical" : "horizontal";
                     if (angleDeg > 20 && angleDeg < 70) direction = "diagonal";
 
+                    // Abbreviate common road name components for compact map labels
+                    string label = kv.Key.ToUpper()
+                        .Replace("NORTHEAST ", "NE ").Replace("NORTHWEST ", "NW ")
+                        .Replace("SOUTHEAST ", "SE ").Replace("SOUTHWEST ", "SW ")
+                        .Replace(" STREET", " ST").Replace(" AVENUE", " AVE")
+                        .Replace(" BOULEVARD", " BLVD").Replace(" DRIVE", " DR")
+                        .Replace(" ROAD", " RD").Replace(" PLACE", " PL")
+                        .Replace(" COURT", " CT").Replace(" LANE", " LN");
+
                     namedStreets.Add(new
                     {
-                        name = kv.Key,
+                        name = label,
                         x = Math.Round(mx, 1),
                         y = Math.Round(my, 1),
                         angleDeg = Math.Round(angleDeg, 1),
@@ -229,13 +257,6 @@ namespace RevitMCPBridge
                         direction
                     });
                 }
-
-                // Suggest a scale so the full radius fits in ~5 inches on a sheet.
-                // Rounds up to the nearest standard architectural scale denominator.
-                int rawDenom = (int)Math.Ceiling(radiusFt * 2.0 / 5.0 * 12.0);
-                int[] stdScales = { 12, 24, 48, 96, 120, 192, 240, 360, 480, 600, 960, 1200, 1440, 1920, 2400, 2880, 3600, 4800, 6000 };
-                int suggestedScale = stdScales.FirstOrDefault(s => s >= rawDenom);
-                if (suggestedScale == 0) suggestedScale = rawDenom;
 
                 return JsonConvert.SerializeObject(new
                 {

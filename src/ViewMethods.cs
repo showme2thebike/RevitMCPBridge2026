@@ -4201,13 +4201,16 @@ namespace RevitMCPBridge
                     .Cast<TextNote>();
                 foreach (var tn in textNotes)
                 {
+                    double rotRad = 0;
+                    try { var bb = tn.get_BoundingBox(null); if (bb != null) rotRad = Math.Atan2(bb.Transform.BasisX.Y, bb.Transform.BasisX.X); } catch { }
                     annotations.Add(new JObject
                     {
-                        ["type"]    = "textNote",
-                        ["id"]      = (long)tn.Id.Value,
-                        ["text"]    = tn.Text?.Trim(),
-                        ["x"]       = Math.Round(tn.Coord.X * 12, 4),
-                        ["y"]       = Math.Round(tn.Coord.Y * 12, 4)
+                        ["type"]        = "textNote",
+                        ["id"]          = (long)tn.Id.Value,
+                        ["text"]        = tn.Text?.Trim(),
+                        ["x"]           = Math.Round(tn.Coord.X * 12, 4),
+                        ["y"]           = Math.Round(tn.Coord.Y * 12, 4),
+                        ["rotationRad"] = Math.Round(rotRad, 4)
                     });
                 }
 

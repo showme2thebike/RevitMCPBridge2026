@@ -2259,11 +2259,14 @@ namespace RevitMCPBridge
 
                 // Parse parameters
                 var elementIds = parameters["elementIds"].ToObject<int[]>();
-                var centerPoint = parameters["centerPoint"].ToObject<double[]>();
                 var angleDegrees = double.Parse(parameters["angle"].ToString());
-                var axis = parameters["axis"]?.ToObject<double[]>() ?? new double[] { 0, 0, 1 }; // Default Z axis
+                var axis = parameters["axis"]?.ToObject<double[]>() ?? new double[] { 0, 0, 1 };
 
-                var center = new XYZ(centerPoint[0], centerPoint[1], centerPoint[2]);
+                // Accept centerPoint as array [x,y,z] or object {x,y,z} — TextNotes have LocationPoint not LocationCurve
+                double cx = 0, cy = 0, cz = 0;
+                if (parameters["centerPoint"] is JArray cArr) { cx = (double)cArr[0]; cy = (double)cArr[1]; cz = cArr.Count > 2 ? (double)cArr[2] : 0; }
+                else if (parameters["centerPoint"] is JObject cObj) { cx = cObj["x"]?.ToObject<double>() ?? 0; cy = cObj["y"]?.ToObject<double>() ?? 0; cz = cObj["z"]?.ToObject<double>() ?? 0; }
+                var center = new XYZ(cx, cy, cz);
                 var axisDirection = new XYZ(axis[0], axis[1], axis[2]).Normalize();
                 var rotationAxis = Line.CreateUnbound(center, axisDirection);
                 var angleRadians = angleDegrees * Math.PI / 180.0;
@@ -2288,7 +2291,7 @@ namespace RevitMCPBridge
                     {
                         success = true,
                         elementCount = elementIds.Length,
-                        centerPoint = centerPoint,
+                        centerPoint = new[] { cx, cy, cz },
                         angleDegrees = angleDegrees,
                         axis = axis
                     });

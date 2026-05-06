@@ -171,13 +171,18 @@ namespace RevitMCPBridge
                         };
                     }
 
-                    // Set rotation if specified
+                    var textNote = TextNote.Create(doc, viewId, point, text, options);
+
+                    // TextNoteOptions.Rotation is silently ignored in Revit 2026 — rotate via RotateElement
                     if (parameters["rotation"] != null)
                     {
-                        options.Rotation = double.Parse(parameters["rotation"].ToString());
+                        double angleRad = double.Parse(parameters["rotation"].ToString());
+                        if (Math.Abs(angleRad) > 0.001)
+                        {
+                            var rotAxis = Line.CreateUnbound(new XYZ(point.X, point.Y, 0), XYZ.BasisZ);
+                            ElementTransformUtils.RotateElement(doc, textNote.Id, rotAxis, angleRad);
+                        }
                     }
-
-                    var textNote = TextNote.Create(doc, viewId, point, text, options);
 
                     trans.Commit();
 
