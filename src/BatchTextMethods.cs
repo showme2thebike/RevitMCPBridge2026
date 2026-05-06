@@ -1173,7 +1173,7 @@ namespace RevitMCPBridge2026
         #region Text Note Creation
 
         [MCPMethod("createTextNote", Category = "Annotation",
-            Description = "Place a text note in any view at an exact position with optional rotation. Parameters: viewId (required), x (required, feet in view-local space), y (required), text (required), angleDegrees (optional, 0=horizontal, 90=vertical reading bottom-to-top for N-S street labels), textTypeName (optional, partial match), horizontalAlignment ('left', 'center', 'right', default 'center').")]
+            Description = "Place a text note in any view at an exact position with optional rotation. Parameters: viewId (required), x (required, feet in view-local space), y (required), text (required), angleDegrees (optional, 0=horizontal, 90=vertical reading bottom-to-top for N-S street labels), rotation (optional, radians — alias for angleDegrees, takes precedence), keepReadable (optional bool, default false — when false disables Revit auto-orient so rotated text stays rotated; set true only if you want Revit to flip text to stay readable), textTypeName (optional, partial match), horizontalAlignment ('left', 'center', 'right', default 'center').")]
         public static string CreateTextNote(UIApplication uiApp, JObject parameters)
         {
             try
@@ -1189,7 +1189,15 @@ namespace RevitMCPBridge2026
                 double x = parameters?["x"]?.ToObject<double>() ?? throw new ArgumentException("x is required.");
                 double y = parameters?["y"]?.ToObject<double>() ?? throw new ArgumentException("y is required.");
                 string text = parameters?["text"]?.ToString() ?? throw new ArgumentException("text is required.");
-                double angleDeg = parameters?["angleDegrees"]?.ToObject<double>() ?? 0.0;
+
+                // Accept rotation (radians) or angleDegrees — rotation wins if both provided
+                double angleRad;
+                if (parameters?["rotation"] != null)
+                    angleRad = parameters["rotation"].ToObject<double>();
+                else
+                    angleRad = (parameters?["angleDegrees"]?.ToObject<double>() ?? 0.0) * Math.PI / 180.0;
+
+                bool keepReadable = parameters?["keepReadable"]?.ToObject<bool>() ?? false;
                 string textTypeName = parameters?["textTypeName"]?.ToString();
                 string alignStr = parameters?["horizontalAlignment"]?.ToString() ?? "center";
 
@@ -1212,9 +1220,9 @@ namespace RevitMCPBridge2026
                 if (textType == null)
                     return JsonConvert.SerializeObject(new { success = false, error = "No text types found in document." });
 
+                // Do NOT set opts.Rotation — silently ignored in Revit 2026; apply via RotateElement below
                 var opts = new TextNoteOptions(textType.Id)
                 {
-                    Rotation = angleDeg * Math.PI / 180.0,
                     HorizontalAlignment = alignment,
                 };
 
@@ -1222,6 +1230,22 @@ namespace RevitMCPBridge2026
                 {
                     tx.Start();
                     var tn = TextNote.Create(doc, view.Id, new XYZ(x, y, 0), text, opts);
+
+                    // Apply rotation via RotateElement — the only reliable method in Revit 2026
+                    if (Math.Abs(angleRad) > 0.001)
+                    {
+                        var rotAxis = Line.CreateUnbound(new XYZ(x, y, 0), XYZ.BasisZ);
+                        ElementTransformUtils.RotateElement(doc, tn.Id, rotAxis, angleRad);
+                    }
+
+                    // Disable "Keep Readable" so Revit doesn't auto-flip rotated text back to horizontal
+                    if (!keepReadable)
+                    {
+                        var krParam = tn.LookupParameter("Keep Readable");
+                        if (krParam != null && !krParam.IsReadOnly)
+                            krParam.Set(0);
+                    }
+
                     tx.Commit();
                     return JsonConvert.SerializeObject(new
                     {
@@ -1229,7 +1253,7 @@ namespace RevitMCPBridge2026
                         id = (int)tn.Id.Value,
                         text,
                         x, y,
-                        angleDegrees = angleDeg,
+                        angleDegrees = Math.Round(angleRad * 180.0 / Math.PI, 2),
                         textType = textType.Name,
                         viewId = viewIdVal
                     });

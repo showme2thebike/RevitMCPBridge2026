@@ -27,19 +27,23 @@ namespace RevitMCPBridge
 
                 // 1. Get project lat/lon — explicit params override project site location
                 double latDeg, lonDeg;
-                double? latOverride = parameters?["latitude"]?.ToObject<double?>();
-                double? lonOverride = parameters?["longitude"]?.ToObject<double?>();
+                // Accept latitude/longitude or lat/lon abbreviations
+                double? latOverride = parameters?["latitude"]?.ToObject<double?>() ?? parameters?["lat"]?.ToObject<double?>();
+                double? lonOverride = parameters?["longitude"]?.ToObject<double?>() ?? parameters?["lon"]?.ToObject<double?>();
 
+                string coordinateSource;
                 if (latOverride.HasValue && lonOverride.HasValue)
                 {
                     latDeg = latOverride.Value;
                     lonDeg = lonOverride.Value;
+                    coordinateSource = "parameters";
                 }
                 else
                 {
                     var siteLocation = doc.SiteLocation;
                     latDeg = siteLocation.Latitude * (180.0 / Math.PI);
                     lonDeg = siteLocation.Longitude * (180.0 / Math.PI);
+                    coordinateSource = "projectSiteLocation";
 
                     if (latDeg == 0 && lonDeg == 0)
                         return JsonConvert.SerializeObject(new
@@ -226,9 +230,21 @@ namespace RevitMCPBridge
                     // midpoint = centroid of all collected points for this street name
                     double mx = allPts.Average(p => p.X);
                     double my = allPts.Average(p => p.Y);
-                    // angle: fit a direction from first to last point of the point set
-                    var first = allPts.First();
-                    var last = allPts.Last();
+                    // Dominant-axis direction: use min→max along whichever axis has the larger range.
+                    // First/last-point approach fails when ways are accumulated in mixed order (same start/end point → atan2(0,0)=0).
+                    double xRange = allPts.Max(p => p.X) - allPts.Min(p => p.X);
+                    double yRange = allPts.Max(p => p.Y) - allPts.Min(p => p.Y);
+                    XYZ first, last;
+                    if (yRange > xRange)
+                    {
+                        first = allPts.OrderBy(p => p.Y).First();
+                        last  = allPts.OrderBy(p => p.Y).Last();
+                    }
+                    else
+                    {
+                        first = allPts.OrderBy(p => p.X).First();
+                        last  = allPts.OrderBy(p => p.X).Last();
+                    }
                     double dx = last.X - first.X;
                     double dy = last.Y - first.Y;
                     double angleDeg = Math.Atan2(dy, dx) * 180.0 / Math.PI;
@@ -265,12 +281,13 @@ namespace RevitMCPBridge
                     viewName = draftView.Name,
                     latitude = latDeg,
                     longitude = lonDeg,
+                    coordinateSource,
                     radiusFt,
                     osmWaysFound = ways.Count,
                     linesDrawn,
                     suggestedScaleDenominator = suggestedScale,
                     namedStreets,
-                    message = $"Vicinity map drawn in '{draftView.Name}'. Use namedStreets[] to place labels — each entry has name, x, y (in feet, same coordinate space as the drawn lines), angleRad, and direction (horizontal/vertical/diagonal). Set viewport scale to 1:{suggestedScale}."
+                    message = $"Vicinity map drawn in '{draftView.Name}' using coordinates from {coordinateSource}. Use namedStreets[] to place labels — each entry has name, x, y (in feet, same coordinate space as the drawn lines), angleRad, and direction (horizontal/vertical/diagonal). Set viewport scale to 1:{suggestedScale}."
                 });
             }
             catch (Exception ex)
