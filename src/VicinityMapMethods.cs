@@ -18,7 +18,7 @@ namespace RevitMCPBridge
         private const double FeetPerDegLat = 364000.0;
 
         [MCPMethod("createVicinityMap", Category = "Site",
-            Description = "Create a vicinity map drafting view from OpenStreetMap data. Reads the project's lat/lon from site location (or use latitude/longitude params to override), queries the Overpass API for nearby roads and building outlines within a given radius, then draws them as detail lines in a new or existing drafting view. Parameters: radiusFt (default 500), latitude (optional, overrides project site location), longitude (optional, overrides project site location), viewName (default 'Vicinity Map'), lineStyleRoads (default 'Thin Lines'), lineStyleBuildings (default 'Thin Lines'), draftingViewId (optional, use existing view instead of creating new one). Response includes suggestedScaleDenominator so callers know what scale to set on the viewport.")]
+            Description = "Create a vicinity map drafting view from OpenStreetMap data. Reads the project's lat/lon from site location (or use latitude/longitude params to override), queries the Overpass API for nearby roads and building outlines within a given radius, then draws them as detail lines in a new or existing drafting view. Parameters: radiusFt (default 500), latitude (optional, overrides project site location), longitude (optional, overrides project site location), viewName (default 'Vicinity Map'), lineStyleName (optional, applies one style to all lines — use this for simplicity), lineStyleRoads (default 'Thin Lines', used when lineStyleName is not set), lineStyleBuildings (default 'Thin Lines', used when lineStyleName is not set), draftingViewId (optional, use existing view instead of creating new one). Response includes suggestedScaleDenominator so callers know what scale to set on the viewport.")]
         public static string CreateVicinityMap(UIApplication uiApp, JObject parameters)
         {
             try
@@ -51,8 +51,9 @@ namespace RevitMCPBridge
 
                 double radiusFt = parameters?["radiusFt"]?.ToObject<double>() ?? 500.0;
                 var viewName = parameters?["viewName"]?.ToString() ?? "Vicinity Map";
-                var lineStyleRoads = parameters?["lineStyleRoads"]?.ToString() ?? "Thin Lines";
-                var lineStyleBuildings = parameters?["lineStyleBuildings"]?.ToString() ?? "Thin Lines";
+                var lineStyleName = parameters?["lineStyleName"]?.ToString();
+                var lineStyleRoads = lineStyleName ?? parameters?["lineStyleRoads"]?.ToString() ?? "Thin Lines";
+                var lineStyleBuildings = lineStyleName ?? parameters?["lineStyleBuildings"]?.ToString() ?? "Thin Lines";
                 int? existingViewId = parameters?["draftingViewId"]?.ToObject<int?>();
 
                 // 2. Compute bounding box in degrees
