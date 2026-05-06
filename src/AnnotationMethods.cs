@@ -2656,8 +2656,11 @@ namespace RevitMCPBridge2026
                     });
                 }
 
-                // Area tags
-                foreach (AreaTag areaTag in new FilteredElementCollector(doc, viewId).OfClass(typeof(AreaTag)))
+                // Area tags — OfClass(typeof(AreaTag)) throws type mismatch in Revit 2026; use category filter
+                foreach (AreaTag areaTag in new FilteredElementCollector(doc, viewId)
+                    .OfCategory(BuiltInCategory.OST_AreaTags)
+                    .WhereElementIsNotElementType()
+                    .Where(e => e is AreaTag))
                 {
                     annotations.Add(new
                     {

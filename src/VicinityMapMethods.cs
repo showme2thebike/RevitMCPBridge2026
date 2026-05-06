@@ -18,7 +18,7 @@ namespace RevitMCPBridge
         private const double FeetPerDegLat = 364000.0;
 
         [MCPMethod("createVicinityMap", Category = "Site",
-            Description = "Create a vicinity map drafting view from OpenStreetMap data. Reads the project's lat/lon from site location (or use latitude/longitude params to override), queries the Overpass API for nearby roads and building outlines within a given radius, then draws them as detail lines in a new or existing drafting view. Parameters: radiusFt (default 500), latitude (optional, overrides project site location), longitude (optional, overrides project site location), viewName (default 'Vicinity Map'), style ('schematic' = street centerlines only — all highway ways except footway/path/service/cycleway/steps; 'full' = all OSM geometry, default), lineStyleName (optional, applies one style to all lines), lineStyleRoads (default 'Thin Lines', used when lineStyleName is not set), lineStyleBuildings (default 'Thin Lines', used when lineStyleName is not set), draftingViewId (optional, use existing view instead of creating new one). Response includes suggestedScaleDenominator so callers know what scale to set on the viewport.")]
+            Description = "Create a vicinity map drafting view from OpenStreetMap data. Reads the project's lat/lon from site location (or use latitude/longitude params to override), queries the Overpass API for nearby roads and building outlines within a given radius, then draws them as detail lines in a new or existing drafting view. Parameters: radiusFt (default 500), latitude (optional, overrides project site location), longitude (optional, overrides project site location), viewName (default 'Vicinity Map'), style ('major' = arterials only — primary/secondary/tertiary/trunk highways, clean grid appearance matching typical vicinity map drawings, RECOMMENDED for CD sets; 'schematic' = all driveable roads except footways/paths/service/cycleways; 'full' = all OSM geometry including buildings, default), lineStyleName (optional, applies one style to all lines), lineStyleRoads (default 'Thin Lines', used when lineStyleName is not set), lineStyleBuildings (default 'Thin Lines', used when lineStyleName is not set), draftingViewId (optional, use existing view instead of creating new one). Response includes suggestedScaleDenominator so callers know what scale to set on the viewport.")]
         public static string CreateVicinityMap(UIApplication uiApp, JObject parameters)
         {
             try
@@ -56,10 +56,14 @@ namespace RevitMCPBridge
                 var lineStyleBuildings = lineStyleName ?? parameters?["lineStyleBuildings"]?.ToString() ?? "Thin Lines";
                 var mapStyle = parameters?["style"]?.ToString() ?? "full";
                 bool schematic = mapStyle.Equals("schematic", StringComparison.OrdinalIgnoreCase);
-                // Exclusion list: drop pedestrian/service ways; include everything else (residential,
-                // unclassified, road, trunk, primary, etc.) so partial OSM tagging doesn't leave gaps.
+                bool majorOnly = mapStyle.Equals("major", StringComparison.OrdinalIgnoreCase);
+                // Exclusion list for schematic mode: drop pedestrian/service ways
                 var schematicExclude = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
                     { "footway", "path", "service", "cycleway", "steps", "pedestrian", "track", "construction" };
+                // Allowlist for major mode: only arterial roads — gives clean grid matching typical CD set vicinity maps
+                var majorInclude = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                    { "motorway", "trunk", "primary", "secondary", "tertiary", "residential",
+                      "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link" };
                 int? existingViewId = parameters?["draftingViewId"]?.ToObject<int?>();
 
                 // 2. Compute bounding box in degrees
@@ -69,9 +73,10 @@ namespace RevitMCPBridge
                 double east = lonDeg + radiusDeg;
                 double west = lonDeg - radiusDeg;
 
-                // 3. Query OSM via Railway proxy (avoids Revit process firewall issues)
+                // 3. Query OSM via Railway proxy — pass filter so server-side Overpass query fetches less data
                 var bimMonkeyApiKey = ReadBimMonkeyApiKey();
-                var osmData = QueryOSMViaRailway(south, west, north, east, bimMonkeyApiKey);
+                string osmFilter = majorOnly ? "major" : (schematic ? "schematic" : "full");
+                var osmData = QueryOSMViaRailway(south, west, north, east, bimMonkeyApiKey, osmFilter);
                 if (osmData == null)
                     return JsonConvert.SerializeObject(new { success = false, error = "OSM proxy request failed. Ensure your BIM Monkey API key is set in Banana Chat settings." });
 
@@ -139,7 +144,13 @@ namespace RevitMCPBridge
                         bool isBuilding = tags?["building"] != null;
                         if (!isRoad && !isBuilding) continue;
 
-                        if (schematic)
+                        if (majorOnly)
+                        {
+                            if (!isRoad) continue;
+                            var hwType = tags["highway"]?.ToString() ?? "";
+                            if (!majorInclude.Contains(hwType)) continue;
+                        }
+                        else if (schematic)
                         {
                             if (!isRoad) continue;
                             var hwType = tags["highway"]?.ToString() ?? "";
@@ -181,7 +192,7 @@ namespace RevitMCPBridge
                 // Suggest a scale so the full radius fits in ~5 inches on a sheet.
                 // Rounds up to the nearest standard architectural scale denominator.
                 int rawDenom = (int)Math.Ceiling(radiusFt * 2.0 / 5.0 * 12.0);
-                int[] stdScales = { 12, 24, 48, 96, 120, 192, 240, 360, 480, 600, 960, 1200, 1440, 1920, 2400 };
+                int[] stdScales = { 12, 24, 48, 96, 120, 192, 240, 360, 480, 600, 960, 1200, 1440, 1920, 2400, 2880, 3600, 4800, 6000 };
                 int suggestedScale = stdScales.FirstOrDefault(s => s >= rawDenom);
                 if (suggestedScale == 0) suggestedScale = rawDenom;
 
@@ -219,12 +230,12 @@ namespace RevitMCPBridge
             catch { return null; }
         }
 
-        private static JObject QueryOSMViaRailway(double south, double west, double north, double east, string bimMonkeyApiKey)
+        private static JObject QueryOSMViaRailway(double south, double west, double north, double east, string bimMonkeyApiKey, string filter = "full")
         {
             try
             {
-                var url = $"{OsmProxyUrl}?south={south}&west={west}&north={north}&east={east}";
-                using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) })
+                var url = $"{OsmProxyUrl}?south={south}&west={west}&north={north}&east={east}&filter={filter}";
+                using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(55) })
                 {
                     if (!string.IsNullOrEmpty(bimMonkeyApiKey))
                         client.DefaultRequestHeaders.Add("Authorization", $"Bearer {bimMonkeyApiKey}");

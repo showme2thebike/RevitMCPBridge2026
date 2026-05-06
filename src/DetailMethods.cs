@@ -514,9 +514,14 @@ namespace RevitMCPBridge2026
                     });
                 }
 
-                // Get all DetailCurve elements in the view
-                FilteredElementCollector collector = new FilteredElementCollector(doc, viewId)
-                    .OfClass(typeof(DetailCurve));
+                // CurveElement is the correct base class for FilteredElementCollector in Revit 2026
+                // (OfClass(typeof(DetailCurve)) throws a type mismatch at runtime)
+                var collector = new FilteredElementCollector(doc, viewId)
+                    .OfClass(typeof(CurveElement))
+                    .Cast<CurveElement>()
+                    .Where(c => c is DetailCurve)
+                    .Cast<DetailCurve>()
+                    .ToList();
 
                 var detailLines = new List<object>();
 

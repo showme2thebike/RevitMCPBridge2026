@@ -51,9 +51,11 @@ namespace RevitMCPBridge
                     ElementId textTypeId;
                     string selectedReason = "default";
 
-                    if (parameters["textTypeId"] != null)
+                    // Accept both "textTypeId" and "typeId" as aliases — "typeId" was silently ignored before
+                    var textTypeIdParam = parameters["textTypeId"] ?? parameters["typeId"];
+                    if (textTypeIdParam != null)
                     {
-                        var requestedId = new ElementId(int.Parse(parameters["textTypeId"].ToString()));
+                        var requestedId = new ElementId(int.Parse(textTypeIdParam.ToString()));
                         var validatedType = doc.GetElement(requestedId) as TextNoteType;
                         if (validatedType == null)
                         {
