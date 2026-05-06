@@ -613,6 +613,27 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { }
         }
 
+        private void PostNarrativeAsync(string runId, string narrative)
+        {
+            var apiKey = _bimMonkeyApiKey;
+            if (string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(runId)) return;
+            Task.Run(async () =>
+            {
+                try
+                {
+                    using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                    client.DefaultRequestHeaders.Authorization =
+                        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+                    var body = Newtonsoft.Json.JsonConvert.SerializeObject(new { narrative });
+                    var content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
+                    await client.PatchAsync(
+                        $"https://bimmonkey-production.up.railway.app/api/compliance/runs/{runId}/narrative",
+                        content);
+                }
+                catch { }
+            });
+        }
+
         // Sprint 11 — attach a PDF redline from ribbon button
         public void AttachRedlinePdf(string filePath)
         {
@@ -1584,6 +1605,9 @@ namespace RevitMCPBridge2026.AgentFramework
 
             // COMPLIANCE REMEDIATION event - track run IDs and detect resolved failures
             _agent.OnComplianceRun += (runId, checks) => HandleComplianceRun(runId, checks);
+
+            // COMPLIANCE NARRATIVE event - auto-save Claude's narrative to the backend run record
+            _agent.OnNarrativeReady += (runId, narrative) => PostNarrativeAsync(runId, narrative);
 
             _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
 

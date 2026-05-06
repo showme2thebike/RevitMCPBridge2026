@@ -76,6 +76,10 @@ namespace RevitMCPBridge2026.AgentFramework
         public event Action<int, int, int, int> OnUsage; // cumulative (inputTokens, outputTokens, cacheRead, cacheCreation) after each API call
         public event Action<string> OnChunk;  // streaming text delta — fires per SSE chunk
         public event Action<string, JArray> OnComplianceRun; // runId, checks — fires when generateCodeReport succeeds
+        public event Action<string, string> OnNarrativeReady; // runId, narrativeText — fires after compliance narrative is complete
+
+        private string _pendingNarrativeRunId;
+        private System.Text.StringBuilder _narrativeBuilder;
 
         private string _bimMonkeyApiKey;
 
@@ -502,6 +506,8 @@ namespace RevitMCPBridge2026.AgentFramework
                             _currentStage = "responding";
                             OnResponse?.Invoke(block.Text);
                             assistantContent.Add(block);
+                            if (_pendingNarrativeRunId != null)
+                                _narrativeBuilder?.Append(block.Text);
                         }
                         else if (block.Type == "tool_use")
                         {
@@ -533,7 +539,11 @@ namespace RevitMCPBridge2026.AgentFramework
                                             var runId  = parsed["runId"]?.ToString();
                                             var checks = parsed["checks"] as JArray;
                                             if (!string.IsNullOrEmpty(runId) && checks != null)
+                                            {
                                                 OnComplianceRun?.Invoke(runId, checks);
+                                                _pendingNarrativeRunId = runId;
+                                                _narrativeBuilder = new System.Text.StringBuilder();
+                                            }
                                         }
 
                                         var verification = await _resultVerifier.VerifyAsync(
@@ -623,6 +633,12 @@ namespace RevitMCPBridge2026.AgentFramework
                         model = _model,
                         durationMs
                     }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
+                }
+                if (!string.IsNullOrEmpty(_pendingNarrativeRunId) && _narrativeBuilder?.Length > 100)
+                {
+                    OnNarrativeReady?.Invoke(_pendingNarrativeRunId, _narrativeBuilder.ToString());
+                    _pendingNarrativeRunId = null;
+                    _narrativeBuilder = null;
                 }
                 OnComplete?.Invoke();
             }
