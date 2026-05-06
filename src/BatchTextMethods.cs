@@ -1231,19 +1231,20 @@ namespace RevitMCPBridge2026
                     tx.Start();
                     var tn = TextNote.Create(doc, view.Id, new XYZ(x, y, 0), text, opts);
 
-                    // Apply rotation via RotateElement — the only reliable method in Revit 2026
-                    if (Math.Abs(angleRad) > 0.001)
-                    {
-                        var rotAxis = Line.CreateUnbound(new XYZ(x, y, 0), XYZ.BasisZ);
-                        ElementTransformUtils.RotateElement(doc, tn.Id, rotAxis, angleRad);
-                    }
-
-                    // Disable "Keep Readable" so Revit doesn't auto-flip rotated text back to horizontal
+                    // Disable "Keep Readable" BEFORE rotating — if it fires after RotateElement,
+                    // Revit auto-flips the text back to horizontal inside the same transaction.
                     if (!keepReadable)
                     {
                         var krParam = tn.LookupParameter("Keep Readable");
                         if (krParam != null && !krParam.IsReadOnly)
                             krParam.Set(0);
+                    }
+
+                    // Apply rotation via RotateElement — the only reliable method in Revit 2026
+                    if (Math.Abs(angleRad) > 0.001)
+                    {
+                        var rotAxis = Line.CreateUnbound(new XYZ(x, y, 0), XYZ.BasisZ);
+                        ElementTransformUtils.RotateElement(doc, tn.Id, rotAxis, angleRad);
                     }
 
                     tx.Commit();
