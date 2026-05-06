@@ -18,7 +18,7 @@ namespace RevitMCPBridge
         private const double FeetPerDegLat = 364000.0;
 
         [MCPMethod("createVicinityMap", Category = "Site",
-            Description = "Create a vicinity map drafting view from OpenStreetMap data. Reads the project's lat/lon from site location (or use latitude/longitude params to override), queries the Overpass API for nearby roads and building outlines within a given radius, then draws them as detail lines in a new or existing drafting view. Parameters: radiusFt (default 500), latitude (optional, overrides project site location), longitude (optional, overrides project site location), viewName (default 'Vicinity Map'), style ('schematic' = street centerlines only, clean grid like hand-drafted vicinity maps; 'full' = all OSM geometry, default), lineStyleName (optional, applies one style to all lines), lineStyleRoads (default 'Thin Lines', used when lineStyleName is not set), lineStyleBuildings (default 'Thin Lines', used when lineStyleName is not set), draftingViewId (optional, use existing view instead of creating new one). Response includes suggestedScaleDenominator so callers know what scale to set on the viewport.")]
+            Description = "Create a vicinity map drafting view from OpenStreetMap data. Reads the project's lat/lon from site location (or use latitude/longitude params to override), queries the Overpass API for nearby roads and building outlines within a given radius, then draws them as detail lines in a new or existing drafting view. Parameters: radiusFt (default 500), latitude (optional, overrides project site location), longitude (optional, overrides project site location), viewName (default 'Vicinity Map'), style ('schematic' = street centerlines only — all highway ways except footway/path/service/cycleway/steps; 'full' = all OSM geometry, default), lineStyleName (optional, applies one style to all lines), lineStyleRoads (default 'Thin Lines', used when lineStyleName is not set), lineStyleBuildings (default 'Thin Lines', used when lineStyleName is not set), draftingViewId (optional, use existing view instead of creating new one). Response includes suggestedScaleDenominator so callers know what scale to set on the viewport.")]
         public static string CreateVicinityMap(UIApplication uiApp, JObject parameters)
         {
             try
@@ -56,8 +56,10 @@ namespace RevitMCPBridge
                 var lineStyleBuildings = lineStyleName ?? parameters?["lineStyleBuildings"]?.ToString() ?? "Thin Lines";
                 var mapStyle = parameters?["style"]?.ToString() ?? "full";
                 bool schematic = mapStyle.Equals("schematic", StringComparison.OrdinalIgnoreCase);
-                var schematicHighways = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                    { "motorway", "trunk", "primary", "secondary", "tertiary", "residential", "unclassified", "living_street" };
+                // Exclusion list: drop pedestrian/service ways; include everything else (residential,
+                // unclassified, road, trunk, primary, etc.) so partial OSM tagging doesn't leave gaps.
+                var schematicExclude = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                    { "footway", "path", "service", "cycleway", "steps", "pedestrian", "track", "construction" };
                 int? existingViewId = parameters?["draftingViewId"]?.ToObject<int?>();
 
                 // 2. Compute bounding box in degrees
@@ -141,7 +143,7 @@ namespace RevitMCPBridge
                         {
                             if (!isRoad) continue;
                             var hwType = tags["highway"]?.ToString() ?? "";
-                            if (!schematicHighways.Contains(hwType)) continue;
+                            if (schematicExclude.Contains(hwType)) continue;
                         }
 
                         var style = isBuilding ? buildingStyle : roadStyle;

@@ -1169,5 +1169,78 @@ namespace RevitMCPBridge2026
         }
 
         #endregion
+
+        #region Text Note Creation
+
+        [MCPMethod("createTextNote", Category = "Annotation",
+            Description = "Place a text note in any view at an exact position with optional rotation. Parameters: viewId (required), x (required, feet in view-local space), y (required), text (required), angleDegrees (optional, 0=horizontal, 90=vertical reading bottom-to-top for N-S street labels), textTypeName (optional, partial match), horizontalAlignment ('left', 'center', 'right', default 'center').")]
+        public static string CreateTextNote(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                int viewIdVal = parameters?["viewId"]?.ToObject<int>()
+                    ?? throw new ArgumentException("viewId is required.");
+                var view = doc.GetElement(new ElementId(viewIdVal)) as View;
+                if (view == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = $"No view found with id {viewIdVal}." });
+
+                double x = parameters?["x"]?.ToObject<double>() ?? throw new ArgumentException("x is required.");
+                double y = parameters?["y"]?.ToObject<double>() ?? throw new ArgumentException("y is required.");
+                string text = parameters?["text"]?.ToString() ?? throw new ArgumentException("text is required.");
+                double angleDeg = parameters?["angleDegrees"]?.ToObject<double>() ?? 0.0;
+                string textTypeName = parameters?["textTypeName"]?.ToString();
+                string alignStr = parameters?["horizontalAlignment"]?.ToString() ?? "center";
+
+                var alignment = alignStr.Equals("left", StringComparison.OrdinalIgnoreCase)
+                    ? HorizontalTextAlignment.Left
+                    : alignStr.Equals("right", StringComparison.OrdinalIgnoreCase)
+                        ? HorizontalTextAlignment.Right
+                        : HorizontalTextAlignment.Center;
+
+                var allTypes = new FilteredElementCollector(doc)
+                    .OfClass(typeof(TextNoteType))
+                    .Cast<TextNoteType>()
+                    .ToList();
+
+                TextNoteType textType = null;
+                if (!string.IsNullOrEmpty(textTypeName))
+                    textType = allTypes.FirstOrDefault(t => t.Name.IndexOf(textTypeName, StringComparison.OrdinalIgnoreCase) >= 0);
+                textType ??= allTypes.FirstOrDefault();
+
+                if (textType == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = "No text types found in document." });
+
+                var opts = new TextNoteOptions(textType.Id)
+                {
+                    Rotation = angleDeg * Math.PI / 180.0,
+                    HorizontalAlignment = alignment,
+                };
+
+                using (var tx = new Transaction(doc, "Create Text Note"))
+                {
+                    tx.Start();
+                    var tn = TextNote.Create(doc, view.Id, new XYZ(x, y, 0), text, opts);
+                    tx.Commit();
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        id = (int)tn.Id.Value,
+                        text,
+                        x, y,
+                        angleDegrees = angleDeg,
+                        textType = textType.Name,
+                        viewId = viewIdVal
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        #endregion
     }
 }
