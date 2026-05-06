@@ -293,6 +293,16 @@ namespace RevitMCPBridge
             standardsButton.Image      = CreateButtonIcon("standards", 16);
 
 
+            // ── Compliance ────────────────────────────────────────────────
+            var compliancePanel = application.CreateRibbonPanel(_tabName, "Compliance");
+
+            var codeCheckButtonData = new PushButtonData("CodeCheck", "Code\nCheck", asm,
+                "RevitMCPBridge2026.AgentFramework.LaunchComplianceCommand")
+                { ToolTip = "Run an IBC code compliance check — opens Banana Chat pre-loaded with a compliance prompt covering egress, occupancy loads, fire ratings, and more" };
+            var codeCheckButton = compliancePanel.AddItem(codeCheckButtonData) as PushButton;
+            codeCheckButton.LargeImage = CreateButtonIcon("compliance", 32);
+            codeCheckButton.Image      = CreateButtonIcon("compliance", 16);
+
             // ── Redline Review ─────────────────────────────────────────────
             var redlinePanel = application.CreateRibbonPanel(_tabName, "Redline Review");
 
@@ -345,6 +355,7 @@ namespace RevitMCPBridge
                 { "MCPServerStatus",   "3" },
                 { "ModelCheck",        "M" },
                 { "Standards",         "A" },
+                { "CodeCheck",         "C" },
                 { "RedlineLoad",       "L" },
                 { "RedlineCancel",     "N" },
                 { "RedlineClear",      "D" },
@@ -646,6 +657,9 @@ namespace RevitMCPBridge
                             break;
                         case "modelcheck":
                             DrawModelCheckIcon(dc, size);
+                            break;
+                        case "compliance":
+                            DrawComplianceIcon(dc, size);
                             break;
                         case "quickmode":
                             DrawQuickModeIcon(dc, size);
@@ -1474,6 +1488,51 @@ namespace RevitMCPBridge
             // Checkmark (bottom-right)
             dc.DrawLine(checkPen, new Point(17*s, 24*s), new Point(20*s, 27*s));
             dc.DrawLine(checkPen, new Point(20*s, 27*s), new Point(26*s, 19*s));
+        }
+
+        private void DrawComplianceIcon(DrawingContext dc, int size)
+        {
+            // Flat white checklist page with a bold check badge — BIM Monkey logo style
+            double s = size / 32.0;
+            var fill    = new SolidColorBrush(Colors.White);
+            var pen     = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5*s));
+            var linePen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.7, 1.1*s));
+
+            // Page body (left 2/3 of icon — leaves room for badge)
+            double dm = 3*s, dw = 17*s, dh = 26*s, fold = 5*s;
+            var pagePath = new StreamGeometry();
+            using (var ctx = pagePath.Open())
+            {
+                ctx.BeginFigure(new Point(dm, dm), true, true);
+                ctx.LineTo(new Point(dm+dw-fold, dm), true, false);
+                ctx.LineTo(new Point(dm+dw, dm+fold), true, false);
+                ctx.LineTo(new Point(dm+dw, dm+dh), true, false);
+                ctx.LineTo(new Point(dm, dm+dh), true, false);
+            }
+            dc.DrawGeometry(fill, pen, pagePath);
+
+            // Fold crease
+            var foldPath = new StreamGeometry();
+            using (var ctx = foldPath.Open())
+            {
+                ctx.BeginFigure(new Point(dm+dw-fold, dm), false, false);
+                ctx.LineTo(new Point(dm+dw-fold, dm+fold), true, false);
+                ctx.LineTo(new Point(dm+dw, dm+fold), true, false);
+            }
+            dc.DrawGeometry(null, pen, foldPath);
+
+            // Three short text lines
+            dc.DrawLine(linePen, new Point(6*s, 10*s), new Point(15*s, 10*s));
+            dc.DrawLine(linePen, new Point(6*s, 14*s), new Point(15*s, 14*s));
+            dc.DrawLine(linePen, new Point(6*s, 18*s), new Point(12*s, 18*s));
+
+            // Bold check badge — circle with checkmark, bottom-right of icon
+            double bx = 23*s, by = 23*s, br = 7*s;
+            dc.DrawEllipse(fill, pen, new Point(bx, by), br, br);
+            var checkPen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1.5, 2.5*s))
+                { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+            dc.DrawLine(checkPen, new Point(19*s, 23*s), new Point(22*s, 26*s));
+            dc.DrawLine(checkPen, new Point(22*s, 26*s), new Point(27*s, 19.5*s));
         }
 
         private void DrawQuickModeIcon(DrawingContext dc, int size)

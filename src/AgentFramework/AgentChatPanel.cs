@@ -541,6 +541,25 @@ namespace RevitMCPBridge2026.AgentFramework
             }
         }
 
+        // Compliance ribbon button — pre-loads the input box with a code-check prompt
+        public void PreloadCompliancePrompt()
+        {
+            try
+            {
+                const string prompt =
+                    "Run a code compliance check on the active model. " +
+                    "Use generateCodeReport to analyze occupancy loads, egress, stair separation, fire ratings, plumbing, accessibility, and masonry. " +
+                    "Report occupancy group, construction type, and sprinkler status, then list any fails or warnings with the IBC section reference.";
+                Dispatcher.Invoke(() =>
+                {
+                    if (_inputTextBox != null)
+                        _inputTextBox.Text = prompt;
+                });
+                Activate();
+            }
+            catch { }
+        }
+
         // Sprint 11 — attach a PDF redline from ribbon button
         public void AttachRedlinePdf(string filePath)
         {
