@@ -173,7 +173,73 @@ Step 4: Place viewports; always append ` *` to sheet names
 Step 5: Audit for stacked viewports; fix label offsets
 ```
 
-### 5. Intelligence Layer
+### 5. Compliance Data Pipeline (Sprint 12 — May 2026)
+
+Banana Chat can run IBC 2021 code compliance checks on the active model and automatically POST the results to the BIM Monkey backend. This feeds a platform-level compliance analytics page and a long-term remediation dataset.
+
+#### Plugin side — `src/ComplianceMethods.cs`
+
+`generateCodeReport` is an MCP method that analyzes: occupancy group, construction type, sprinkler status, occupant load, egress width, stair separation, fire rating, plumbing fixture counts, accessibility, and masonry. Each check returns `pass / warn / fail / verify`.
+
+When the tool returns `success: true`, it fire-and-forgets a POST to the backend:
+
+```
+POST https://bimmonkey-production.up.railway.app/api/compliance/runs
+Authorization: Bearer <bm_...>   (read from ~/.claude/settings.json)
+Body: { runId, projectName, revitFile, occupancyGroup, constructionType, sprinklered, checks[], pluginVersion }
+```
+
+The backend insert is idempotent (`ON CONFLICT (run_id) DO NOTHING`) so plugin retries never duplicate rows.
+
+#### Ribbon — Code Check button
+
+`RevitMCPBridgeApp.cs` creates a "Compliance" panel between Documentation and Redline Review. The **Code Check** button (`LaunchComplianceCommand`) opens Banana Chat pre-loaded with a standard compliance prompt (occupancy, egress, stair separation, fire rating, plumbing, accessibility, masonry).
+
+#### AgentCore event — `OnComplianceRun`
+
+```csharp
+// AgentCore.cs
+public event Action<string, JArray> OnComplianceRun;
+```
+
+Fires after `generateCodeReport` returns success, passing `(runId, checks)`.
+
+#### Remediation loop — `AgentChatPanel.HandleComplianceRun`
+
+`AgentChatPanel` subscribes to `OnComplianceRun`. It stores the prior run's ID and checks in `_activeComplianceRunId` / `_activeComplianceChecks`. When a second compliance run fires in the same session it diffs the two `checks` arrays to find checks that went from `fail/warn` → `pass`. If any resolved checks exist, it fires:
+
+```
+POST /api/telemetry
+eventType: "compliance_remediation"
+metadata: { priorRunId, currentRunId, resolvedChecks, resolvedCount, sessionDurationMs }
+```
+
+#### Backend correlation — `api/index.js`
+
+The `compliance_runs` table has a `model_changes JSONB` column (added via `ALTER TABLE … ADD COLUMN IF NOT EXISTS`). When the telemetry handler receives `compliance_remediation`, it:
+
+1. Looks up `run_at` timestamps for both run IDs in `compliance_runs`
+2. Queries `plugin_events` for all `tool_call` events between those timestamps (for the same firm)
+3. Updates the current run's `model_changes` column with the list of tools, success flags, and timestamps
+
+This correlation is the data moat: it maps which Revit operations actually fixed specific IBC check failures, across all firms, over time.
+
+#### Web platform — `/compliance` route
+
+`frontend/src/pages/Compliance.jsx` — top-level nav item (Standards → Library → **Compliance** → Metrics). Shows:
+- **Project status grid**: last run date, pass/warn/fail counts, stale badge (>30 days)
+- **Run history per project**: click to expand
+- **Run detail**: full check list, IBC section references, result pills — Export PDF button uses `window.print()` scoped to `#compliance-print-area`
+
+API endpoints:
+```
+GET  /api/compliance/runs?project=&limit=   firm-scoped list
+GET  /api/compliance/runs/:id               full run with checks JSONB
+POST /api/compliance/runs                   plugin fire-and-forget ingestion
+GET  /api/admin/compliance                  90-day aggregate + per-check fail rates (admin only)
+```
+
+### 7. Intelligence Layer
 
 Five levels of autonomy:
 
