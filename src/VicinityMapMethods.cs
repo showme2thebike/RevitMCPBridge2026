@@ -113,6 +113,7 @@ namespace RevitMCPBridge
                 int linesDrawn = 0;
                 double feetPerDegLon = FeetPerDegLat * Math.Cos(latDeg * Math.PI / 180.0);
                 ViewDrafting draftView = null;
+                var streetPoints = new Dictionary<string, List<XYZ>>(StringComparer.OrdinalIgnoreCase);
 
                 using (var trans = new Transaction(doc, "Create Vicinity Map"))
                 {
@@ -158,6 +159,7 @@ namespace RevitMCPBridge
                         }
 
                         var style = isBuilding ? buildingStyle : roadStyle;
+                        var streetName = tags?["name"]?.ToString();
 
                         // Convert node list to Revit XY points
                         var pts = new List<XYZ>();
@@ -169,6 +171,14 @@ namespace RevitMCPBridge
                             double x = (nodeLon - lonDeg) * feetPerDegLon;
                             double y = (nodeLat - latDeg) * FeetPerDegLat;
                             pts.Add(new XYZ(x, y, 0));
+                        }
+
+                        // Accumulate points for named streets so we can compute label position later
+                        if (!string.IsNullOrEmpty(streetName) && isRoad && pts.Count > 0)
+                        {
+                            if (!streetPoints.ContainsKey(streetName))
+                                streetPoints[streetName] = new List<XYZ>();
+                            streetPoints[streetName].AddRange(pts);
                         }
 
                         for (int i = 0; i < pts.Count - 1; i++)
@@ -189,6 +199,37 @@ namespace RevitMCPBridge
                     trans.Commit();
                 }
 
+                // Build namedStreets: midpoint + angle for each unique named street
+                var namedStreets = new List<object>();
+                foreach (var kv in streetPoints)
+                {
+                    var allPts = kv.Value;
+                    // midpoint = centroid of all collected points for this street name
+                    double mx = allPts.Average(p => p.X);
+                    double my = allPts.Average(p => p.Y);
+                    // angle: fit a direction from first to last point of the point set
+                    var first = allPts.First();
+                    var last = allPts.Last();
+                    double dx = last.X - first.X;
+                    double dy = last.Y - first.Y;
+                    double angleDeg = Math.Atan2(dy, dx) * 180.0 / Math.PI;
+                    // Normalise to 0–180 (label reads the same both directions)
+                    if (angleDeg < 0) angleDeg += 180.0;
+                    double angleRad = angleDeg * Math.PI / 180.0;
+                    string direction = (angleDeg > 45 && angleDeg < 135) ? "vertical" : "horizontal";
+                    if (angleDeg > 20 && angleDeg < 70) direction = "diagonal";
+
+                    namedStreets.Add(new
+                    {
+                        name = kv.Key,
+                        x = Math.Round(mx, 1),
+                        y = Math.Round(my, 1),
+                        angleDeg = Math.Round(angleDeg, 1),
+                        angleRad = Math.Round(angleRad, 4),
+                        direction
+                    });
+                }
+
                 // Suggest a scale so the full radius fits in ~5 inches on a sheet.
                 // Rounds up to the nearest standard architectural scale denominator.
                 int rawDenom = (int)Math.Ceiling(radiusFt * 2.0 / 5.0 * 12.0);
@@ -207,7 +248,8 @@ namespace RevitMCPBridge
                     osmWaysFound = ways.Count,
                     linesDrawn,
                     suggestedScaleDenominator = suggestedScale,
-                    message = $"Vicinity map drawn in '{draftView.Name}'. Set viewport scale to 1:{suggestedScale} to see the full {radiusFt}ft radius. Place on a sheet with placeViewOnSheet."
+                    namedStreets,
+                    message = $"Vicinity map drawn in '{draftView.Name}'. Use namedStreets[] to place labels — each entry has name, x, y (in feet, same coordinate space as the drawn lines), angleRad, and direction (horizontal/vertical/diagonal). Set viewport scale to 1:{suggestedScale}."
                 });
             }
             catch (Exception ex)
