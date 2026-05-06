@@ -916,14 +916,14 @@ namespace RevitMCPBridge
         /// IBC 2021 structured code compliance report — occupancy-driven, shareable
         /// </summary>
         [MCPMethod("generateCodeReport", Category = "Compliance",
-            Description = "Run IBC 2021 code compliance checks against the active Revit model. Returns a structured report with pass/warn/fail/verify per item and IBC section citations. Parameters: occupancyGroup (required, e.g. 'B', 'R-2', 'A-2', 'M', 'S-2'), constructionType (optional, e.g. 'V-B'), sprinklered (optional, default true), jurisdiction (optional, e.g. 'Seattle'). Checks: occupant load, exit count, stair separation, fire door ratings, plumbing fixtures, accessible units for R-2, model data completeness (fromRoom/toRoom, orphan levels, dept params).")]
+            Description = "Run IBC 2021 code compliance checks against the active Revit model. Returns a structured report with pass/warn/fail/verify per item and IBC section citations. Parameters: occupancyGroup (optional — auto-detected from room names if omitted; e.g. 'B', 'R-2', 'R-3', 'A-2', 'M', 'S-2'), constructionType (optional, e.g. 'V-B'), sprinklered (optional, default true), jurisdiction (optional, e.g. 'Seattle'). Checks: occupant load, exit count, stair separation, fire door ratings, plumbing fixtures, accessible units for R-2, model data completeness.")]
         public static string GenerateCodeReport(UIApplication uiApp, JObject parameters)
         {
             try
             {
                 var doc = uiApp.ActiveUIDocument.Document;
                 var occupancyGroup = parameters?["occupancyGroup"]?.ToString()
-                    ?? throw new ArgumentException("occupancyGroup is required (e.g. 'B', 'R-2', 'A-2').");
+                    ?? DetectOccupancyGroup(doc);
                 var constructionType = parameters?["constructionType"]?.ToString() ?? "unknown";
                 bool sprinklered = parameters?["sprinklered"]?.ToObject<bool>() ?? true;
                 var jurisdiction = parameters?["jurisdiction"]?.ToString() ?? "IBC 2021";
@@ -1047,6 +1047,33 @@ namespace RevitMCPBridge
                 return cfg["bim_monkey_api_key"]?.ToString();
             }
             catch { return null; }
+        }
+
+        // ── Occupancy auto-detection ──────────────────────────────────────────────
+        private static string DetectOccupancyGroup(Document doc)
+        {
+            // Count rooms by name keywords to infer occupancy
+            var rooms = new FilteredElementCollector(doc)
+                .OfCategory(BuiltInCategory.OST_Rooms)
+                .WhereElementIsNotElementType()
+                .Cast<Room>()
+                .Where(r => r.Area > 0)
+                .Select(r => r.Name.ToUpperInvariant())
+                .ToList();
+
+            bool hasBedrooms  = rooms.Any(n => n.Contains("BEDROOM") || n.Contains("MASTER") || n.Contains("PRIMARY"));
+            bool hasKitchen   = rooms.Any(n => n.Contains("KITCHEN"));
+            bool hasUnits     = rooms.Any(n => n.Contains("UNIT") || n.Contains("APT") || n.Contains("SUITE"));
+            bool hasOffice    = rooms.Any(n => n.Contains("OFFICE") || n.Contains("CONF") || n.Contains("CONFERENCE") || n.Contains("LOBBY"));
+            bool hasRetail    = rooms.Any(n => n.Contains("RETAIL") || n.Contains("STORE") || n.Contains("SALES"));
+            bool hasAssembly  = rooms.Any(n => n.Contains("ASSEMBLY") || n.Contains("BANQUET") || n.Contains("DINING") || n.Contains("AUDITORIUM"));
+
+            if (hasBedrooms && hasKitchen && !hasUnits) return "R-3";
+            if (hasBedrooms && hasUnits)                return "R-2";
+            if (hasAssembly)                            return "A-2";
+            if (hasRetail)                              return "M";
+            if (hasOffice)                              return "B";
+            return "R-3"; // default for residential
         }
 
         // ── IBC check helpers ─────────────────────────────────────────────────────
