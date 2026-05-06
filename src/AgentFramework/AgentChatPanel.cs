@@ -549,8 +549,22 @@ namespace RevitMCPBridge2026.AgentFramework
                 const string prompt =
                     "Step 1: Call generateCodeReport right now — no other tool calls first. " +
                     "The occupancyGroup parameter is optional; omit it and the tool will auto-detect from the room names. " +
-                    "Step 2: After generateCodeReport returns, review its structured results and supplement with any additional observations from the model. " +
-                    "Step 3: Present a final summary with occupancy group, construction type, sprinkler status, and a list of all fails and warnings with IBC section references.";
+                    "Step 2: After generateCodeReport returns, perform the following deeper analysis on its output: " +
+                    "(a) OL factors — for every room in the occupant load table, verify the IBC Table 1004.5 factor matches the room's actual use. " +
+                    "Flag any room using an assembly, mercantile, or business factor when it should use a residential factor, and restate the corrected OL. " +
+                    "(b) FAILs and WARNs — for each one, determine whether it is a genuine code deficiency or a model data gap (null parameter, naming mismatch, unmodeled element). " +
+                    "State the distinction explicitly and give the specific remediation step. " +
+                    "(c) VERIFYs — for each item that could not be auto-resolved, explain why and what manual confirmation is needed. " +
+                    "Note any R-3 exemptions that apply (e.g. accessible units, certain plumbing minimums for single-family). " +
+                    "(d) Construction type — if unknown, flag this as a permit blocker and state the most likely type given the project. " +
+                    "Step 3: Present the final report in this exact structure: " +
+                    "Project Baseline table (occupancy group, construction type, sprinkler status, stories, total OL, exits found) | " +
+                    "Results Summary table (pass / warn / fail / verify counts) | " +
+                    "FAIL section with IBC reference + finding + fix for each | " +
+                    "WARN section with same detail | " +
+                    "VERIFY section with what needs manual confirmation | " +
+                    "PASS table | " +
+                    "Top 3 Action Items Before Permit Submission ordered by permit impact.";
                 Dispatcher.Invoke(() =>
                 {
                     if (_inputTextBox != null)
