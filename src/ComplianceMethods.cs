@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
+using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Architecture;
 using Autodesk.Revit.UI;
@@ -950,10 +953,20 @@ namespace RevitMCPBridge
                 checks.AddRange(IbcCheckModelCompleteness(doc));
 
                 var pi = doc.ProjectInformation;
+                var runId = Guid.NewGuid().ToString("N");
+                var projectName = pi?.Name ?? doc.Title;
+                var revitFile   = doc.PathName;
+
+                // Fire-and-forget: persist run to backend for platform analytics
+                Task.Run(() => PostComplianceRunAsync(
+                    runId, projectName, revitFile,
+                    occupancyGroup, constructionType, sprinklered, checks));
+
                 return JsonConvert.SerializeObject(new
                 {
                     success = true,
-                    project = pi?.Name ?? doc.Title,
+                    runId,
+                    project = projectName,
                     address = pi?.Address ?? "",
                     generatedDate = DateTime.Today.ToString("yyyy-MM-dd"),
                     occupancyGroup, constructionType, sprinklered, jurisdiction,
@@ -972,6 +985,68 @@ namespace RevitMCPBridge
             {
                 return ResponseBuilder.FromException(ex).Build();
             }
+        }
+
+        // ── Backend telemetry — fire-and-forget, never throws ────────────────────
+        private const string BackendUrl = "https://bimmonkey-production.up.railway.app/api/compliance/runs";
+
+        private static void PostComplianceRunAsync(
+            string runId, string projectName, string revitFile,
+            string occupancyGroup, string constructionType, bool sprinklered,
+            List<IbcCheck> checks)
+        {
+            try
+            {
+                var apiKey = ReadBimMonkeyApiKey();
+                if (string.IsNullOrEmpty(apiKey)) return;
+
+                var payload = JsonConvert.SerializeObject(new
+                {
+                    runId,
+                    projectName,
+                    revitFile,
+                    occupancyGroup,
+                    constructionType,
+                    sprinklered,
+                    checks = checks.Select(c => new
+                    {
+                        id          = c.id,
+                        category    = c.category,
+                        ibcSection  = c.ibcSection,
+                        description = c.description,
+                        result      = c.result,
+                        value       = c.value,
+                        required    = c.required
+                    }),
+                    pluginVersion = System.Reflection.Assembly
+                        .GetExecutingAssembly()
+                        .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+                        .FirstOrDefault()?.InformationalVersion ?? ""
+                });
+
+                using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
+                    var content = new StringContent(payload, Encoding.UTF8, "application/json");
+                    client.PostAsync(BackendUrl, content).GetAwaiter().GetResult();
+                }
+            }
+            catch { /* never propagate — analytics are non-blocking */ }
+        }
+
+        private static string ReadBimMonkeyApiKey()
+        {
+            try
+            {
+                var configPath = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".bimops", "config.json");
+                if (!System.IO.File.Exists(configPath)) return null;
+                var cfg = JObject.Parse(System.IO.File.ReadAllText(configPath));
+                return cfg["bim_monkey_api_key"]?.ToString();
+            }
+            catch { return null; }
         }
 
         // ── IBC check helpers ─────────────────────────────────────────────────────
