@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Architecture;
 using Autodesk.Revit.UI;
@@ -908,6 +909,379 @@ namespace RevitMCPBridge
             }
         }
 
+        /// <summary>
+        /// IBC 2021 structured code compliance report — occupancy-driven, shareable
+        /// </summary>
+        [MCPMethod("generateCodeReport", Category = "Compliance",
+            Description = "Run IBC 2021 code compliance checks against the active Revit model. Returns a structured report with pass/warn/fail/verify per item and IBC section citations. Parameters: occupancyGroup (required, e.g. 'B', 'R-2', 'A-2', 'M', 'S-2'), constructionType (optional, e.g. 'V-B'), sprinklered (optional, default true), jurisdiction (optional, e.g. 'Seattle'). Checks: occupant load, exit count, stair separation, fire door ratings, plumbing fixtures, accessible units for R-2, model data completeness (fromRoom/toRoom, orphan levels, dept params).")]
+        public static string GenerateCodeReport(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var occupancyGroup = parameters?["occupancyGroup"]?.ToString()
+                    ?? throw new ArgumentException("occupancyGroup is required (e.g. 'B', 'R-2', 'A-2').");
+                var constructionType = parameters?["constructionType"]?.ToString() ?? "unknown";
+                bool sprinklered = parameters?["sprinklered"]?.ToObject<bool>() ?? true;
+                var jurisdiction = parameters?["jurisdiction"]?.ToString() ?? "IBC 2021";
+
+                var checks = new List<IbcCheck>();
+
+                // 1. Occupant Load
+                checks.Add(IbcCheckOccupantLoad(doc, occupancyGroup, out int totalOL));
+
+                // 2. Exit Count
+                checks.Add(IbcCheckExitCount(doc, totalOL));
+
+                // 3. Stair Separation
+                checks.Add(IbcCheckStairSeparation(doc, sprinklered));
+
+                // 4. Fire Door Ratings
+                checks.Add(IbcCheckFireDoorRatings(doc));
+
+                // 5. Plumbing Fixtures
+                checks.Add(IbcCheckPlumbing(doc, totalOL, occupancyGroup));
+
+                // 6. Accessible Units (R-2 only)
+                if (occupancyGroup.StartsWith("R", StringComparison.OrdinalIgnoreCase))
+                    checks.Add(IbcCheckAccessibleUnits(doc));
+
+                // 7. Model Data Completeness
+                checks.AddRange(IbcCheckModelCompleteness(doc));
+
+                var pi = doc.ProjectInformation;
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    project = pi?.Name ?? doc.Title,
+                    address = pi?.Address ?? "",
+                    generatedDate = DateTime.Today.ToString("yyyy-MM-dd"),
+                    occupancyGroup, constructionType, sprinklered, jurisdiction,
+                    summary = new
+                    {
+                        pass   = checks.Count(c => c.result == "pass"),
+                        warn   = checks.Count(c => c.result == "warn"),
+                        fail   = checks.Count(c => c.result == "fail"),
+                        verify = checks.Count(c => c.result == "verify"),
+                        total  = checks.Count
+                    },
+                    checks
+                }, Formatting.Indented);
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        // ── IBC check helpers ─────────────────────────────────────────────────────
+
+        private static IbcCheck IbcCheckOccupantLoad(Document doc, string occupancyGroup, out int totalOL)
+        {
+            var rooms = new FilteredElementCollector(doc)
+                .OfClass(typeof(SpatialElement)).OfType<Room>()
+                .Where(r => r.Area > 0.1).ToList();
+
+            totalOL = 0;
+            bool anyAssumed = false;
+            var detail = new List<object>();
+
+            foreach (var r in rooms)
+            {
+                double areaSF = r.Area;
+                double factor = IbcOLFactor(r.Name ?? "", occupancyGroup, out string basis, out bool assumed);
+                if (assumed) anyAssumed = true;
+                if (factor >= 99000) continue; // circulation / excluded
+                int ol = (int)Math.Ceiling(areaSF / factor);
+                totalOL += ol;
+                detail.Add(new { name = r.Name, areaSF = Math.Round(areaSF, 1), factor, ol, basis });
+            }
+
+            return new IbcCheck
+            {
+                id = "OL-001", category = "Occupant Load", ibcSection = "IBC Table 1004.5",
+                description = "Calculate total building occupant load from room areas.",
+                result = anyAssumed ? "verify" : "pass",
+                value = $"{totalOL} persons",
+                required = "Project-specific",
+                details = anyAssumed
+                    ? $"Total OL: {totalOL}. Some rooms used default factor — verify space types match IBC Table 1004.5."
+                    : $"Total OL: {totalOL} persons across {rooms.Count} placed rooms.",
+                data = detail
+            };
+        }
+
+        private static IbcCheck IbcCheckExitCount(Document doc, int totalOL)
+        {
+            int required = totalOL >= 501 ? 4 : totalOL >= 50 ? 2 : 1;
+            var exitDoors = new FilteredElementCollector(doc)
+                .OfClass(typeof(FamilyInstance)).OfCategory(BuiltInCategory.OST_Doors)
+                .Cast<FamilyInstance>()
+                .Where(d =>
+                {
+                    string n = (d.Name ?? "") + " " + (d.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.AsString() ?? "");
+                    bool nameHit = Regex.IsMatch(n, @"exit|egress|entry|exterior|ext\b", RegexOptions.IgnoreCase);
+                    bool wallExterior = (d.Host as Wall)?.WallType?
+                        .get_Parameter(BuiltInParameter.FUNCTION_PARAM)?.AsInteger() == (int)WallFunction.Exterior;
+                    return nameHit || wallExterior;
+                }).ToList();
+
+            int provided = exitDoors.Count;
+            return new IbcCheck
+            {
+                id = "EG-001", category = "Means of Egress", ibcSection = "IBC Table 1006.2.1",
+                description = $"Minimum exits required for OL={totalOL}.",
+                result = provided >= required ? "pass" : "fail",
+                value = $"{provided} exit(s) found",
+                required = $"{required} exit(s)",
+                details = provided >= required
+                    ? $"{provided} exit door(s) identified — meets requirement of {required} for OL={totalOL}."
+                    : $"Only {provided} exit door(s) found — {required} required. Verify exterior door count manually.",
+                data = exitDoors.Select(d => new
+                {
+                    id = (int)d.Id.Value,
+                    mark = d.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.AsString() ?? "",
+                    type = d.Name
+                }).ToList<object>()
+            };
+        }
+
+        private static IbcCheck IbcCheckStairSeparation(Document doc, bool sprinklered)
+        {
+            var stairRooms = new FilteredElementCollector(doc)
+                .OfClass(typeof(SpatialElement)).OfType<Room>()
+                .Where(r => r.Area > 0.1 && Regex.IsMatch(r.Name ?? "", @"\bstair\b", RegexOptions.IgnoreCase))
+                .ToList();
+
+            if (stairRooms.Count < 2)
+                return new IbcCheck
+                {
+                    id = "EG-002", category = "Stair Separation", ibcSection = "IBC 1007.1.1",
+                    description = "Minimum separation between exit stairs.",
+                    result = "verify", value = $"{stairRooms.Count} stair room(s)", required = "≥ 2 stairs",
+                    details = $"Found {stairRooms.Count} stair room(s). Verify exit stair count and separation manually."
+                };
+
+            double maxDiag = new FilteredElementCollector(doc).OfClass(typeof(Floor)).Cast<Floor>()
+                .Select(fl => { var bb = fl.get_BoundingBox(null); if (bb == null) return 0.0;
+                    double dx = bb.Max.X - bb.Min.X, dy = bb.Max.Y - bb.Min.Y;
+                    return Math.Sqrt(dx * dx + dy * dy); }).DefaultIfEmpty(0).Max();
+
+            if (maxDiag < 1)
+                return new IbcCheck
+                {
+                    id = "EG-002", category = "Stair Separation", ibcSection = "IBC 1007.1.1",
+                    description = "Minimum separation between exit stairs.", result = "verify",
+                    value = "Floor plate not found", required = "—",
+                    details = "Could not determine floor plate diagonal. Verify stair separation manually."
+                };
+
+            var p0 = (stairRooms[0].Location as LocationPoint)?.Point;
+            var p1 = (stairRooms[1].Location as LocationPoint)?.Point;
+            if (p0 == null || p1 == null)
+                return new IbcCheck
+                {
+                    id = "EG-002", category = "Stair Separation", ibcSection = "IBC 1007.1.1",
+                    description = "Minimum separation between exit stairs.", result = "verify",
+                    value = "Location unavailable", required = "—",
+                    details = "Stair room locations unavailable. Verify manually."
+                };
+
+            double sep = p0.DistanceTo(p1);
+            double fraction = sprinklered ? 1.0 / 3.0 : 0.5;
+            double reqSep = maxDiag * fraction;
+            bool pass = sep >= reqSep;
+
+            return new IbcCheck
+            {
+                id = "EG-002", category = "Stair Separation", ibcSection = "IBC 1007.1.1",
+                description = "Minimum separation between exit stairs (⅓ diagonal if sprinklered, ½ if not).",
+                result = pass ? "pass" : "fail",
+                value = $"{sep:F1} ft",
+                required = $"{reqSep:F1} ft ({(sprinklered ? "⅓" : "½")} × {maxDiag:F1} ft diagonal)",
+                details = pass
+                    ? $"Stair separation {sep:F1} ft meets IBC requirement of {reqSep:F1} ft."
+                    : $"Stair separation {sep:F1} ft is less than required {reqSep:F1} ft. If a fire wall divides the floor plate, measure each compartment separately.",
+                data = new List<object>
+                {
+                    new { stair = stairRooms[0].Name, x = Math.Round(p0.X,1), y = Math.Round(p0.Y,1) },
+                    new { stair = stairRooms[1].Name, x = Math.Round(p1.X,1), y = Math.Round(p1.Y,1) }
+                }
+            };
+        }
+
+        private static IbcCheck IbcCheckFireDoorRatings(Document doc)
+        {
+            var ratedWall = new Regex(@"1HR|2HR|90\s*MIN|45\s*MIN|20\s*MIN|FIRE|RATED|WFW|SHAFT", RegexOptions.IgnoreCase);
+            var ratedDoor = new Regex(@"(90|45|20)\s*MIN|1\s*HR|1\.5\s*HR|2\s*HR", RegexOptions.IgnoreCase);
+            var issues = new List<object>();
+            int checked_ = 0;
+
+            foreach (var d in new FilteredElementCollector(doc).OfClass(typeof(FamilyInstance))
+                .OfCategory(BuiltInCategory.OST_Doors).Cast<FamilyInstance>())
+            {
+                string wallType = (d.Host as Wall)?.WallType?.Name ?? "";
+                if (!ratedWall.IsMatch(wallType)) continue;
+                checked_++;
+                string doorTypeName = d.Symbol?.Name ?? d.Name ?? "";
+                string doorRating = d.get_Parameter(BuiltInParameter.DOOR_FIRE_RATING)?.AsString() ?? "";
+                if (!ratedDoor.IsMatch(doorTypeName) && !ratedDoor.IsMatch(doorRating))
+                    issues.Add(new { id = (int)d.Id.Value,
+                        mark = d.get_Parameter(BuiltInParameter.ALL_MODEL_MARK)?.AsString() ?? "",
+                        doorType = doorTypeName, hostWall = wallType });
+            }
+
+            return new IbcCheck
+            {
+                id = "FR-001", category = "Fire Door Ratings", ibcSection = "IBC Table 716.1",
+                description = "Doors in rated walls must have matching fire-rating designations.",
+                result = issues.Count == 0 ? "pass" : issues.Count <= 3 ? "warn" : "fail",
+                value = $"{checked_ - issues.Count}/{checked_} rated",
+                required = "All doors in rated walls must be fire-rated",
+                details = issues.Count == 0
+                    ? $"All {checked_} doors in rated walls have fire-rating designations."
+                    : $"{issues.Count} door(s) in rated walls lack a fire-rating in type name or Fire Rating parameter.",
+                data = issues.Count > 0 ? issues : null
+            };
+        }
+
+        private static IbcCheck IbcCheckPlumbing(Document doc, int totalOL, string occupancyGroup)
+        {
+            int halfOL = (int)Math.Ceiling(totalOL / 2.0);
+            int reqWC = occupancyGroup.StartsWith("B", StringComparison.OrdinalIgnoreCase)
+                ? (int)Math.Ceiling(halfOL / 25.0) * 2 : (int)Math.Ceiling(totalOL / 50.0) * 2;
+
+            var rr = new FilteredElementCollector(doc).OfClass(typeof(SpatialElement)).OfType<Room>()
+                .Where(r => r.Area > 0.1 && Regex.IsMatch(r.Name ?? "",
+                    @"\bwc\b|restroom|bathroom|toilet|lavator|rr\b", RegexOptions.IgnoreCase)).ToList();
+
+            return new IbcCheck
+            {
+                id = "PL-001", category = "Plumbing Fixtures", ibcSection = "IBC Table 2902.1",
+                description = "Minimum restroom count based on occupant load.",
+                result = rr.Count >= reqWC / 2 ? "verify" : "warn",
+                value = $"{rr.Count} restroom room(s) found",
+                required = $"≥ {reqWC / 2} restrooms (M+F) for OL={totalOL}",
+                details = $"Found {rr.Count} restroom room(s). Verify actual fixture count and M/F split. Also confirm 1 drinking fountain per 100 occupants (IBC 2902.1).",
+                data = rr.Select(r => new { id = (int)r.Id.Value, name = r.Name, areaSF = Math.Round(r.Area, 1) }).ToList<object>()
+            };
+        }
+
+        private static IbcCheck IbcCheckAccessibleUnits(Document doc)
+        {
+            var units = new FilteredElementCollector(doc).OfClass(typeof(SpatialElement)).OfType<Room>()
+                .Where(r => r.Area > 0.1 && Regex.IsMatch(r.Name ?? "",
+                    @"\bunit\b|\bsuite\b|\bapt\b|\bapartment\b|\bdwelling\b", RegexOptions.IgnoreCase)).ToList();
+
+            if (units.Count == 0)
+                return new IbcCheck
+                {
+                    id = "AC-001", category = "Accessible Units", ibcSection = "IBC 1107.6.2",
+                    description = "Type A and Type B accessible unit requirements for R-2.",
+                    result = "verify", value = "No unit rooms found",
+                    required = "2% Type A; all elevator-served = Type B",
+                    details = "No rooms matching residential unit patterns. Verify accessible unit count manually."
+                };
+
+            int reqTypeA = (int)Math.Ceiling(units.Count * 0.02);
+            return new IbcCheck
+            {
+                id = "AC-001", category = "Accessible Units", ibcSection = "IBC 1107.6.2",
+                description = "Type A (2%) and Type B (all elevator-served) accessible unit requirements.",
+                result = "verify", value = $"{units.Count} unit(s) found",
+                required = $"{reqTypeA} Type A; all elevator-served = Type B",
+                details = $"{units.Count} residential unit(s) estimated. Requires {reqTypeA} Type A unit(s). All elevator-served units must meet Type B (Fair Housing). Verify Type A designation in room parameters."
+            };
+        }
+
+        private static List<IbcCheck> IbcCheckModelCompleteness(Document doc)
+        {
+            var checks = new List<IbcCheck>();
+            var doors = new FilteredElementCollector(doc).OfClass(typeof(FamilyInstance))
+                .OfCategory(BuiltInCategory.OST_Doors).Cast<FamilyInstance>().ToList();
+
+            var lastPhase = doc.Phases.Cast<Phase>().LastOrDefault();
+            int withRooms = lastPhase == null ? 0 :
+                doors.Count(d => d.get_FromRoom(lastPhase) != null || d.get_ToRoom(lastPhase) != null);
+            double pct = doors.Count > 0 ? withRooms * 100.0 / doors.Count : 100;
+
+            checks.Add(new IbcCheck
+            {
+                id = "MQ-001", category = "Model Data", ibcSection = "—",
+                description = "fromRoom/toRoom populated on doors (enables automated egress analysis).",
+                result = pct >= 80 ? "pass" : pct >= 50 ? "warn" : "fail",
+                value = $"{withRooms}/{doors.Count} doors ({pct:F0}%)",
+                required = "100% for full automation",
+                details = pct >= 80
+                    ? $"{pct:F0}% of doors have room associations."
+                    : $"Only {pct:F0}% of doors have fromRoom/toRoom. Run Room Calculation Point placement on all doors."
+            });
+
+            var orphanPat = new Regex(@"delete|temp|copy|unused|to\s*del", RegexOptions.IgnoreCase);
+            var orphans = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>()
+                .Where(l => orphanPat.IsMatch(l.Name ?? ""))
+                .Select(l => new { id = (int)l.Id.Value, name = l.Name }).ToList<object>();
+
+            checks.Add(new IbcCheck
+            {
+                id = "MQ-002", category = "Model Data", ibcSection = "—",
+                description = "Orphan/temp levels create noise in compliance queries.",
+                result = orphans.Count == 0 ? "pass" : "warn",
+                value = orphans.Count.ToString(), required = "0",
+                details = orphans.Count == 0 ? "No orphan levels found."
+                    : $"{orphans.Count} temp/orphan level(s): {string.Join(", ", orphans.Cast<dynamic>().Select(l => (string)l.name))}",
+                data = orphans.Count > 0 ? orphans : null
+            });
+
+            int totalRooms = new FilteredElementCollector(doc).OfClass(typeof(SpatialElement))
+                .OfType<Room>().Count(r => r.Area > 0.1);
+            int noDept = new FilteredElementCollector(doc).OfClass(typeof(SpatialElement)).OfType<Room>()
+                .Count(r => r.Area > 0.1 && string.IsNullOrWhiteSpace(
+                    r.get_Parameter(BuiltInParameter.ROOM_DEPARTMENT)?.AsString()));
+
+            checks.Add(new IbcCheck
+            {
+                id = "MQ-003", category = "Model Data", ibcSection = "—",
+                description = "Department parameter on rooms enables occupancy-group zone filtering.",
+                result = noDept == 0 ? "pass" : noDept < totalRooms / 2 ? "warn" : "fail",
+                value = $"{totalRooms - noDept}/{totalRooms} rooms have department",
+                required = "All rooms",
+                details = noDept == 0 ? "All rooms have Department set."
+                    : $"{noDept}/{totalRooms} rooms have blank Department. Add zone values (Residential, Amenity, Service, Parking) for occupancy-based filtering."
+            });
+
+            return checks;
+        }
+
+        private static double IbcOLFactor(string roomName, string occupancyGroup, out string basis, out bool assumed)
+        {
+            assumed = false;
+            string n = roomName.ToLower();
+            if (Regex.IsMatch(n, @"office|work|admin|exec"))          { basis = "Business @ 150 SF/person (IBC 1004.5)"; return 150; }
+            if (Regex.IsMatch(n, @"conference|meeting|board"))         { basis = "Assembly unconcent. @ 15 SF/person";    return 15; }
+            if (Regex.IsMatch(n, @"lobby|waiting|lounge|reception"))   { basis = "Business @ 150 SF/person";              return 150; }
+            if (Regex.IsMatch(n, @"gym|exercise|fitness|work.?out"))   { basis = "Assembly unconcent. @ 15 SF/person";    return 15; }
+            if (Regex.IsMatch(n, @"dining|restaurant|caf"))            { basis = "Assembly unconcent. @ 15 SF/person";    return 15; }
+            if (Regex.IsMatch(n, @"kitchen|break.?room|pantry"))       { basis = "Kitchen @ 200 SF/person";               return 200; }
+            if (Regex.IsMatch(n, @"\bunit\b|\bapt\b|\bdwelling\b"))    { basis = "Residential @ 200 SF/person";           return 200; }
+            if (Regex.IsMatch(n, @"retail|shop|sales|merch"))          { basis = "Mercantile @ 60 SF/person";             return 60; }
+            if (Regex.IsMatch(n, @"storage|mech|elec|janit|util|equip|trash|mail")) { basis = "Service @ 300 SF/person"; return 300; }
+            if (Regex.IsMatch(n, @"park|garage"))                      { basis = "Parking @ 200 SF/person";               return 200; }
+            if (Regex.IsMatch(n, @"stair|elev|corridor|hall"))         { basis = "Circulation — excluded (IBC 1004.1.2)"; return 99999; }
+            if (Regex.IsMatch(n, @"restroom|wc\b|bathroom|toilet|lavat")) { basis = "Restroom — excluded";               return 99999; }
+
+            assumed = true;
+            switch (occupancyGroup.ToUpper().Split('-')[0].Trim())
+            {
+                case "B": basis = $"Default B @ 150 SF/person (assumed for '{roomName}')"; return 150;
+                case "R": basis = $"Default R @ 200 SF/person (assumed for '{roomName}')"; return 200;
+                case "M": basis = $"Default M @ 60 SF/person (assumed for '{roomName}')";  return 60;
+                case "A": basis = $"Default A @ 15 SF/person (assumed for '{roomName}')";  return 15;
+                case "S": basis = $"Default S @ 300 SF/person (assumed for '{roomName}')"; return 300;
+                default:  basis = $"Default @ 100 SF/person (assumed for '{roomName}')";   return 100;
+            }
+        }
+
         #endregion
 
         #region Helper Methods
@@ -1111,6 +1485,19 @@ namespace RevitMCPBridge
         #endregion
 
         #region Result Classes
+
+        private class IbcCheck
+        {
+            public string id { get; set; }
+            public string category { get; set; }
+            public string ibcSection { get; set; }
+            public string description { get; set; }
+            public string result { get; set; }   // pass | warn | fail | verify
+            public string value { get; set; }
+            public string required { get; set; }
+            public string details { get; set; }
+            public object data { get; set; }
+        }
 
         private class ComplianceResult
         {
