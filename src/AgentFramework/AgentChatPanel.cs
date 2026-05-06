@@ -547,9 +547,10 @@ namespace RevitMCPBridge2026.AgentFramework
             try
             {
                 const string prompt =
-                    "Run a code compliance check on the active model. " +
-                    "Use generateCodeReport to analyze occupancy loads, egress, stair separation, fire ratings, plumbing, accessibility, and masonry. " +
-                    "Report occupancy group, construction type, and sprinkler status, then list any fails or warnings with the IBC section reference.";
+                    "Step 1: Call generateCodeReport right now — no other tool calls first. " +
+                    "The occupancyGroup parameter is optional; omit it and the tool will auto-detect from the room names. " +
+                    "Step 2: After generateCodeReport returns, review its structured results and supplement with any additional observations from the model. " +
+                    "Step 3: Present a final summary with occupancy group, construction type, sprinkler status, and a list of all fails and warnings with IBC section references.";
                 Dispatcher.Invoke(() =>
                 {
                     if (_inputTextBox != null)
