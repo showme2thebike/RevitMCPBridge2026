@@ -560,6 +560,58 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { }
         }
 
+        private void HandleComplianceRun(string runId, JArray checks)
+        {
+            try
+            {
+                var priorRunId    = _activeComplianceRunId;
+                var priorChecks   = _activeComplianceChecks;
+                var sessionStart  = _complianceRunStartTime;
+
+                // Update active state to the new run
+                _activeComplianceRunId    = runId;
+                _activeComplianceChecks   = checks;
+                _complianceRunStartTime   = DateTime.UtcNow;
+
+                // Nothing to correlate on first run in a session
+                if (string.IsNullOrEmpty(priorRunId) || priorChecks == null)
+                    return;
+
+                // Detect checks that were failing/warning and are now passing
+                var resolvedChecks = new JArray();
+                foreach (JObject prior in priorChecks)
+                {
+                    var priorResult = prior["result"]?.ToString();
+                    if (priorResult != "fail" && priorResult != "warn") continue;
+                    var id = prior["id"]?.ToString();
+                    var current = checks.FirstOrDefault(c => c["id"]?.ToString() == id) as JObject;
+                    if (current != null && current["result"]?.ToString() == "pass")
+                        resolvedChecks.Add(new JObject {
+                            ["id"]          = id,
+                            ["category"]    = prior["category"],
+                            ["ibcSection"]  = prior["ibcSection"],
+                            ["description"] = prior["description"],
+                            ["priorResult"] = priorResult,
+                        });
+                }
+
+                if (resolvedChecks.Count == 0) return;
+
+                var durationMs = (long)(DateTime.UtcNow - sessionStart).TotalMilliseconds;
+                var apiKey     = _bimMonkeyApiKey;
+                if (string.IsNullOrEmpty(apiKey)) return;
+
+                TelemetryService.Track(apiKey, "compliance_remediation", metadata: new {
+                    priorRunId,
+                    currentRunId      = runId,
+                    resolvedChecks    = resolvedChecks.ToString(Newtonsoft.Json.Formatting.None),
+                    resolvedCount     = resolvedChecks.Count,
+                    sessionDurationMs = durationMs,
+                });
+            }
+            catch { }
+        }
+
         // Sprint 11 — attach a PDF redline from ribbon button
         public void AttachRedlinePdf(string filePath)
         {
@@ -628,6 +680,11 @@ namespace RevitMCPBridge2026.AgentFramework
         // Session data for persistence
         private List<ChatMessage> _sessionMessages = new List<ChatMessage>();
         private string _sessionProjectName;
+
+        // Compliance remediation tracking
+        private string _activeComplianceRunId;
+        private JArray _activeComplianceChecks;
+        private DateTime _complianceRunStartTime;
 
         private void LoadConfig()
         {
@@ -1523,6 +1580,9 @@ namespace RevitMCPBridge2026.AgentFramework
                     }
                 }
             });
+
+            // COMPLIANCE REMEDIATION event - track run IDs and detect resolved failures
+            _agent.OnComplianceRun += (runId, checks) => HandleComplianceRun(runId, checks);
 
             _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
 

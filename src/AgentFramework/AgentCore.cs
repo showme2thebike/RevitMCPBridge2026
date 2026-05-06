@@ -75,6 +75,7 @@ namespace RevitMCPBridge2026.AgentFramework
         public event Action<VerificationResult> OnVerification;
         public event Action<int, int, int, int> OnUsage; // cumulative (inputTokens, outputTokens, cacheRead, cacheCreation) after each API call
         public event Action<string> OnChunk;  // streaming text delta — fires per SSE chunk
+        public event Action<string, JArray> OnComplianceRun; // runId, checks — fires when generateCodeReport succeeds
 
         private string _bimMonkeyApiKey;
 
@@ -526,6 +527,15 @@ namespace RevitMCPBridge2026.AgentFramework
                                     var parsed = JObject.Parse(result);
                                     if (parsed["success"]?.ToObject<bool>() == true)
                                     {
+                                        // Compliance remediation tracking
+                                        if (block.Name == "generateCodeReport")
+                                        {
+                                            var runId  = parsed["runId"]?.ToString();
+                                            var checks = parsed["checks"] as JArray;
+                                            if (!string.IsNullOrEmpty(runId) && checks != null)
+                                                OnComplianceRun?.Invoke(runId, checks);
+                                        }
+
                                         var verification = await _resultVerifier.VerifyAsync(
                                             block.Name,
                                             block.Input,
