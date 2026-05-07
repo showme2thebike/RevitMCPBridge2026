@@ -8,44 +8,39 @@ marker, minimal circle+crosshair north arrow.
 
 ---
 
-## How to generate
-
-Run the generator script from a terminal (Claude Code or PowerShell):
-
-```bash
-python "C:\Users\<user>\Documents\BIM Monkey\wrapper\generate_vicinity_map.py" \
-    "9714 14th Ave NW, Seattle WA" \
-    "C:\Users\<user>\Documents\BIM Monkey\vicinity_map.png"
-```
-
-Or with a custom radius (default is 900 m — about a half-mile):
-```bash
-python "...\generate_vicinity_map.py" "ADDRESS" "OUTPUT.png" --dist 1200
-```
-
-**Address format**: full street address including city and state. The geocoder
-(Nominatim / OSM) handles most US addresses correctly. If geocoding fails,
-try adding zip code or being more specific.
-
-**Output**: PNG at 150 DPI, ~1425 × 1620 px (portrait), pure black on white.
-
----
-
-## Banana Chat workflow
+## Banana Chat workflow (use runScript — do NOT tell the user to run commands manually)
 
 When the user asks to create a vicinity map:
 
-1. **Get the address** — from project notes, CLAUDE.md, or ask the user
-2. **Set output path** — `C:\Users\<user>\Documents\BIM Monkey\vicinity_map.png`
-3. **Run the script** — takes 10–30 seconds (downloads OSM data on first run)
-4. **Import into Revit** — use `importImage` MCP method or place as a
-   raster image in a drafting view
+1. **Get the address** — from project notes or ask the user. Include city and state.
+2. **Call runScript** with the parameters below — do not ask the user to open a terminal.
+3. **Check the result** — stdout will say "Saved → ..." when done. The PNG lands in the user's `Documents\BIM Monkey\` folder.
+4. **Import into Revit** — use `importImage` with the output path returned in `outputDir`.
 
-### Example Banana Chat invocation
+### MCP call to generate the map
+
+```json
+{
+  "method": "runScript",
+  "parameters": {
+    "scriptName": "generate_vicinity_map.py",
+    "args": "\"FULL ADDRESS HERE\" \"vicinity_map.png\"",
+    "timeoutSeconds": 120
+  }
+}
 ```
-Run this command and wait for it to finish:
-python "C:\Users\echra\Documents\BIM Monkey\wrapper\generate_vicinity_map.py" "9714 14th Ave NW, Seattle WA 98117" "C:\Users\echra\Documents\BIM Monkey\vicinity_map.png"
+
+Replace `FULL ADDRESS HERE` with the project address (e.g. `9714 14th Ave NW, Seattle WA 98117`).
+
+The output file is always written to `Documents\BIM Monkey\vicinity_map.png` (the `outputDir` field in the response confirms the exact path for the current user).
+
+### Optional: custom radius
+
+```json
+"args": "\"ADDRESS\" \"vicinity_map.png\" --dist 1200"
 ```
+
+Default radius is 900 m. Use 1200 for a wider area.
 
 ---
 
@@ -75,9 +70,25 @@ so casing never bleeds through the interior fill.
 
 ---
 
+## Script location (installer-managed — do not hardcode paths)
+
+The installer places `generate_vicinity_map.py` at:
+
+```
+%USERPROFILE%\Documents\BIM Monkey\wrapper\generate_vicinity_map.py
+```
+
+The `runScript` method resolves this path automatically for whichever user is running Revit.
+Output goes to `%USERPROFILE%\Documents\BIM Monkey\vicinity_map.png`.
+
+Never hardcode `C:\Users\<anyone>\...` in commands. Always use `runScript` so the bridge
+resolves paths from the current user's environment.
+
+---
+
 ## Dependencies
 
-Auto-installed on first run if missing:
+Auto-installed by the script on first run if missing:
 - `osmnx` — OSM data fetching and network graph
 - `geopandas` — spatial dataframes
 - `matplotlib` — rendering
@@ -92,11 +103,12 @@ same area are fast.
 
 | Problem | Fix |
 |---------|-----|
+| `success: false` + script not found | Reinstall BIM Monkey; the wrapper folder must exist at `Documents\BIM Monkey\wrapper\` |
 | Geocoding failed | Add city + state + zip; try alternate address format |
 | No streets render | Increase `--dist`; check address is correct |
 | Street label missing | OSM name tag absent — normal for some minor streets |
-| Script not found | Check installer ran; file at `Documents\BIM Monkey\wrapper\` |
-| osmnx install fails | Run `pip install osmnx` manually in an admin terminal |
+| osmnx install fails | User runs `pip install osmnx` manually in an admin terminal |
+| `python` not found | Python is not on the system PATH; user installs Python 3.x |
 
 ---
 
@@ -109,5 +121,4 @@ The style is calibrated to match the example map (Seattle area, ~900m radius):
 - Irregular streets in park/natural areas rendered as thin single lines
 - No building footprints, no color, no fills — pure line drawing
 
-*Reference: generate_vicinity_map.py in Documents\BIM Monkey\wrapper\*
 *OSM data © OpenStreetMap contributors — accurate for most US addresses*
