@@ -1234,26 +1234,6 @@ namespace RevitMCPBridge
                 if (viewport == null)
                     return ResponseBuilder.Error("Viewport not found", "ELEMENT_NOT_FOUND").Build();
 
-                // viewport.GetBoxCenter() returns a CACHED value when the viewport is off the printable
-                // area — it reports the last valid on-sheet position, not the actual current position.
-                // get_BoundingBox(null) reads live geometry and works whether on-sheet or off.
-                doc.Regenerate(); // flush any pending state before reading position
-                XYZ currentCenter = ViewportActualCenter(viewport);
-
-                if (dryRun)
-                {
-                    return ResponseBuilder.Success()
-                        .With("dryRun", true)
-                        .With("viewportId", (int)viewportId.Value)
-                        .With("currentCenter", new[] { currentCenter.X, currentCenter.Y, currentCenter.Z })
-                        .With("proposedCenter", new[] { locX, locY, 0.0 })
-                        .With("delta", new[] { locX - currentCenter.X, locY - currentCenter.Y, 0.0 })
-                        .With("message", "DRY RUN — no changes made. Call again with dryRun:false to execute.")
-                        .Build();
-                }
-                var targetPoint = new XYZ(locX, locY, 0);
-                var delta       = targetPoint - currentCenter;
-
                 string methodUsed = "";
                 bool moved = false;
 
@@ -1263,6 +1243,28 @@ namespace RevitMCPBridge
                     var failureOptions = trans.GetFailureHandlingOptions();
                     failureOptions.SetFailuresPreprocessor(new WarningSwallower());
                     trans.SetFailureHandlingOptions(failureOptions);
+
+                    // viewport.GetBoxCenter() returns a CACHED value when the viewport is off the printable
+                    // area — it reports the last valid on-sheet position, not the actual current position.
+                    // Regenerate inside the transaction so we read live geometry without conflicting with
+                    // the transaction start. get_BoundingBox(null) is used by ViewportActualCenter.
+                    doc.Regenerate();
+                    XYZ currentCenter = ViewportActualCenter(viewport);
+
+                    if (dryRun)
+                    {
+                        trans.RollBack();
+                        return ResponseBuilder.Success()
+                            .With("dryRun", true)
+                            .With("viewportId", (int)viewportId.Value)
+                            .With("currentCenter", new[] { currentCenter.X, currentCenter.Y, currentCenter.Z })
+                            .With("proposedCenter", new[] { locX, locY, 0.0 })
+                            .With("delta", new[] { locX - currentCenter.X, locY - currentCenter.Y, 0.0 })
+                            .With("message", "DRY RUN — no changes made. Call again with dryRun:false to execute.")
+                            .Build();
+                    }
+                    var targetPoint = new XYZ(locX, locY, 0);
+                    var delta       = targetPoint - currentCenter;
 
                     // CRITICAL: Clear "Saved Position" parameter first — locks viewport to a cached position
                     try

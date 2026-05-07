@@ -244,7 +244,7 @@ namespace RevitMCPBridge
         /// <summary>
         /// Create an elevation view
         /// </summary>
-        [MCPMethod("createElevation", Category = "View", Description = "Create an elevation view. direction:[dx,dy,0] controls which way the camera faces (e.g. [0,1,0]=North, [1,0,0]=East). markerIndex: which of the 4 marker arrows to activate (default 0). scale: marker scale in document units (default 50).")]
+        [MCPMethod("createElevation", Category = "View", Description = "Create an elevation view. direction:[dx,dy,0] controls which way the camera faces (e.g. [0,1,0]=North, [1,0,0]=East). markerIndex: which of the 4 marker arrows to activate (default 0). scale: marker scale in document units (default 48 = 1/4\"=1'-0\").")]
         public static string CreateElevation(UIApplication uiApp, JObject parameters)
         {
             try
@@ -252,9 +252,9 @@ namespace RevitMCPBridge
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 var location  = parameters["location"].ToObject<double[]>();
-                var viewName  = parameters["viewName"]?.ToString();
+                var viewName  = parameters["viewName"]?.ToString() ?? parameters["name"]?.ToString();
                 int markerIdx = parameters["markerIndex"]?.ToObject<int>() ?? 0;
-                int scale     = parameters["scale"]?.ToObject<int>() ?? 50;
+                int scale     = parameters["scale"]?.ToObject<int>() ?? 48;
 
                 var loc = new XYZ(location[0], location[1], location[2]);
 
@@ -317,8 +317,22 @@ namespace RevitMCPBridge
 
                     trans.Commit();
 
+                    // Revit sometimes resets the view name after commit — rename in a second transaction.
+                    string finalName = elevationView.Name;
+                    string wantedName = (!string.IsNullOrEmpty(viewName) ? viewName : elevationView.Name);
+                    if (!wantedName.EndsWith(" *")) wantedName += " *";
+                    if (finalName != wantedName)
+                    {
+                        using (var renameTrans = new Transaction(doc, "Rename Elevation"))
+                        {
+                            renameTrans.Start();
+                            try { elevationView.Name = wantedName; renameTrans.Commit(); finalName = wantedName; }
+                            catch { renameTrans.RollBack(); }
+                        }
+                    }
+
                     return ResponseBuilder.Success()
-                        .WithView((int)elevationView.Id.Value, elevationView.Name, "Elevation")
+                        .WithView((int)elevationView.Id.Value, finalName, "Elevation")
                         .With("markerId", (int)marker.Id.Value)
                         .With("markerIndex", markerIdx)
                         .With("appliedRotationDeg", appliedRotationDeg)
