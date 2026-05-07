@@ -430,7 +430,7 @@ namespace RevitMCPBridge
         /// - slope: (optional) default slope in degrees (default 30)
         /// - overhang: (optional) roof overhang in feet (default 1)
         /// </summary>
-        [MCPMethod("createRoofByFootprint", "createFootprintRoof", Category = "FloorCeilingRoof", Description = "Create a roof by footprint from boundary points")]
+        [MCPMethod("createRoofByFootprint", "createFootprintRoof", "createRoof", Category = "FloorCeilingRoof", Description = "Create a roof by footprint from boundary points")]
         public static string CreateRoofByFootprint(UIApplication uiApp, JObject parameters)
         {
             try

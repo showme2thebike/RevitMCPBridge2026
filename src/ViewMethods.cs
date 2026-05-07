@@ -244,21 +244,26 @@ namespace RevitMCPBridge
         /// <summary>
         /// Create an elevation view
         /// </summary>
-        [MCPMethod("createElevation", Category = "View", Description = "Create an elevation view")]
+        [MCPMethod("createElevation", Category = "View", Description = "Create an elevation view. direction:[dx,dy,0] controls which way the camera faces (e.g. [0,1,0]=North, [1,0,0]=East). markerIndex: which of the 4 marker arrows to activate (default 0). scale: marker scale in document units (default 50).")]
         public static string CreateElevation(UIApplication uiApp, JObject parameters)
         {
             try
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                var location = parameters["location"].ToObject<double[]>();
-                var direction = parameters["direction"].ToObject<double[]>();
-                var viewName = parameters["viewName"]?.ToString();
+                var location  = parameters["location"].ToObject<double[]>();
+                var viewName  = parameters["viewName"]?.ToString();
+                int markerIdx = parameters["markerIndex"]?.ToObject<int>() ?? 0;
+                int scale     = parameters["scale"]?.ToObject<int>() ?? 50;
 
                 var loc = new XYZ(location[0], location[1], location[2]);
-                var dir = new XYZ(direction[0], direction[1], direction[2]).Normalize();
 
-                // Get elevation marker type
+                // direction is optional — when omitted the marker faces its default orientation
+                double[]  dirArr  = parameters["direction"]?.ToObject<double[]>();
+                XYZ       dir     = (dirArr != null && (Math.Abs(dirArr[0]) > 0.001 || Math.Abs(dirArr[1]) > 0.001))
+                                    ? new XYZ(dirArr[0], dirArr[1], dirArr.Length > 2 ? dirArr[2] : 0).Normalize()
+                                    : null;
+
                 var elevationMarkerTypeId = new FilteredElementCollector(doc)
                     .OfClass(typeof(ViewFamilyType))
                     .Cast<ViewFamilyType>()
@@ -266,9 +271,9 @@ namespace RevitMCPBridge
                     ?.Id;
 
                 if (elevationMarkerTypeId == null)
-                {
                     return ResponseBuilder.Error("Elevation view type not found", "TYPE_NOT_FOUND").Build();
-                }
+
+                double appliedRotationDeg = 0;
 
                 using (var trans = new Transaction(doc, "Create Elevation"))
                 {
@@ -277,24 +282,49 @@ namespace RevitMCPBridge
                     failureOptions.SetFailuresPreprocessor(new WarningSwallower());
                     trans.SetFailureHandlingOptions(failureOptions);
 
-                    // Create elevation marker
-                    var marker = ElevationMarker.CreateElevationMarker(doc, elevationMarkerTypeId, loc, 50);
+                    var marker = ElevationMarker.CreateElevationMarker(doc, elevationMarkerTypeId, loc, scale);
 
-                    // Create elevation view in specified direction
-                    // Determine which index to use based on direction
-                    var elevationView = marker.CreateElevation(doc, doc.ActiveView.Id, 0);
+                    // Revit must regenerate before the marker element is fully initialised —
+                    // rotating before this throws "Object reference not set".
+                    doc.Regenerate();
+
+                    if (dir != null)
+                    {
+                        // Marker index 0 default facing: East (+X), angle = 0.
+                        // Rotate the whole marker so index 0 ends up facing the requested direction.
+                        double targetAngle  = Math.Atan2(dir.Y, dir.X);
+                        double defaultAngle = 0.0; // index 0 = East
+                        double rotNeeded    = targetAngle - defaultAngle;
+                        // Normalise to (-π, π]
+                        while (rotNeeded >  Math.PI) rotNeeded -= 2 * Math.PI;
+                        while (rotNeeded < -Math.PI) rotNeeded += 2 * Math.PI;
+
+                        if (Math.Abs(rotNeeded) > 0.001)
+                        {
+                            var rotAxis = Line.CreateUnbound(loc, XYZ.BasisZ);
+                            ElementTransformUtils.RotateElement(doc, marker.Id, rotAxis, rotNeeded);
+                            doc.Regenerate(); // flush rotation before creating the view
+                        }
+                        appliedRotationDeg = Math.Round(rotNeeded * 180.0 / Math.PI, 2);
+                    }
+
+                    var elevationView = marker.CreateElevation(doc, doc.ActiveView.Id, markerIdx);
 
                     if (!string.IsNullOrEmpty(viewName))
-                    {
                         elevationView.Name = viewName;
-                    }
-                    if (!elevationView.Name.EndsWith(" *")) elevationView.Name = elevationView.Name + " *";
+                    if (!elevationView.Name.EndsWith(" *"))
+                        elevationView.Name = elevationView.Name + " *";
 
                     trans.Commit();
 
                     return ResponseBuilder.Success()
                         .WithView((int)elevationView.Id.Value, elevationView.Name, "Elevation")
                         .With("markerId", (int)marker.Id.Value)
+                        .With("markerIndex", markerIdx)
+                        .With("appliedRotationDeg", appliedRotationDeg)
+                        .With("note", dir != null
+                            ? "Marker rotated so index-0 faces the requested direction. Default assumption: index-0 = East (+X). If the result is 90° off, subtract or add 90 from your direction angle."
+                            : "No direction specified — marker left at default orientation.")
                         .Build();
                 }
             }
@@ -754,11 +784,12 @@ namespace RevitMCPBridge
                     failureOptions.SetFailuresPreprocessor(new WarningSwallower());
                     trans.SetFailureHandlingOptions(failureOptions);
 
-                    // Enable crop view
+                    // Enable crop view — always force active when a cropBox is being set,
+                    // otherwise the assignment has no visible effect.
                     if (parameters["enableCrop"] != null)
-                    {
                         view.CropBoxActive = bool.Parse(parameters["enableCrop"].ToString());
-                    }
+                    else if (parameters["cropBox"] != null)
+                        view.CropBoxActive = true;
 
                     // Check if view has a view template that might control crop
                     var viewTemplateId = view.ViewTemplateId;
@@ -941,6 +972,11 @@ namespace RevitMCPBridge
                         templateOverridingCrop = !view.CropBoxActive;
                     }
 
+                    // Return the view's local coordinate system so callers know how to interpret
+                    // crop box min/max coordinates. For elevation views the BasisY = world Z (height)
+                    // and BasisX is the horizontal axis of the elevation — NOT world X/Y.
+                    var xform = finalCropBox.Transform;
+
                     var builder = ResponseBuilder.Success()
                         .With("viewId", (int)viewId.Value)
                         .With("cropBoxActive", view.CropBoxActive)
@@ -953,6 +989,13 @@ namespace RevitMCPBridge
                         {
                             min = new { x = finalCropBox.Min.X, y = finalCropBox.Min.Y, z = finalCropBox.Min.Z },
                             max = new { x = finalCropBox.Max.X, y = finalCropBox.Max.Y, z = finalCropBox.Max.Z }
+                        })
+                        .With("viewLocalCoordinateSystem", new
+                        {
+                            note = "cropBox min/max are in view-local space defined by this transform. For plan views BasisX=world X, BasisY=world Y. For elevations BasisX=horizontal axis, BasisY=world Z (height).",
+                            origin = new { x = xform.Origin.X, y = xform.Origin.Y, z = xform.Origin.Z },
+                            basisX = new { x = xform.BasisX.X, y = xform.BasisX.Y, z = xform.BasisX.Z },
+                            basisY = new { x = xform.BasisY.X, y = xform.BasisY.Y, z = xform.BasisY.Z }
                         });
 
                     if (templateOverridingCrop)

@@ -1055,7 +1055,7 @@ namespace RevitMCPBridge
                         if (viewport != null)
                         {
                             var view = doc.GetElement(viewport.ViewId) as View;
-                            var location = viewport.GetBoxCenter();
+                            var location = ViewportActualCenter(viewport);
 
                             viewports.Add(new
                             {
@@ -1174,6 +1174,21 @@ namespace RevitMCPBridge
             }
         }
 
+        /// Returns the viewport's actual center from live geometry.
+        /// viewport.GetBoxCenter() returns a cached (stale) value when the viewport is off the
+        /// printable area; get_BoundingBox(null) always reads the current geometry.
+        private static XYZ ViewportActualCenter(Viewport viewport)
+        {
+            try
+            {
+                var bb = viewport.get_BoundingBox(null);
+                if (bb != null)
+                    return new XYZ((bb.Min.X + bb.Max.X) / 2.0, (bb.Min.Y + bb.Max.Y) / 2.0, 0);
+            }
+            catch { }
+            return viewport.GetBoxCenter(); // fallback
+        }
+
         /// <summary>
         /// Move viewport on sheet - tries multiple approaches for reliable positioning
         /// </summary>
@@ -1217,12 +1232,13 @@ namespace RevitMCPBridge
 
                 var viewport = doc.GetElement(viewportId) as Viewport;
                 if (viewport == null)
-                {
                     return ResponseBuilder.Error("Viewport not found", "ELEMENT_NOT_FOUND").Build();
-                }
 
-                // Get current center
-                var currentCenter = viewport.GetBoxCenter();
+                // viewport.GetBoxCenter() returns a CACHED value when the viewport is off the printable
+                // area — it reports the last valid on-sheet position, not the actual current position.
+                // get_BoundingBox(null) reads live geometry and works whether on-sheet or off.
+                doc.Regenerate(); // flush any pending state before reading position
+                XYZ currentCenter = ViewportActualCenter(viewport);
 
                 if (dryRun)
                 {
@@ -1235,10 +1251,8 @@ namespace RevitMCPBridge
                         .With("message", "DRY RUN — no changes made. Call again with dryRun:false to execute.")
                         .Build();
                 }
-                var targetPoint = new XYZ(locX, locY, 0);  // Z should always be 0 for sheet
-
-                // Calculate the movement delta
-                var delta = targetPoint - currentCenter;
+                var targetPoint = new XYZ(locX, locY, 0);
+                var delta       = targetPoint - currentCenter;
 
                 string methodUsed = "";
                 bool moved = false;
@@ -1250,43 +1264,61 @@ namespace RevitMCPBridge
                     failureOptions.SetFailuresPreprocessor(new WarningSwallower());
                     trans.SetFailureHandlingOptions(failureOptions);
 
-                    // CRITICAL: Clear "Saved Position" parameter first - this unlocks viewport movement
+                    // CRITICAL: Clear "Saved Position" parameter first — locks viewport to a cached position
                     try
                     {
                         var savedPosParam = viewport.LookupParameter("Saved Position");
                         if (savedPosParam != null && !savedPosParam.IsReadOnly)
-                        {
                             savedPosParam.Set(ElementId.InvalidElementId);
-                        }
                     }
                     catch { }
 
-                    // Method 1: Try SetBoxCenter (the documented approach)
+                    // Method 1: ElementTransformUtils — most reliable for off-sheet viewports
+                    // because it applies a raw geometry delta rather than going through the cached position API.
                     try
                     {
-                        viewport.SetBoxCenter(targetPoint);
+                        ElementTransformUtils.MoveElement(doc, viewportId, delta);
                         doc.Regenerate();
-                        var checkCenter = viewport.GetBoxCenter();
-                        if (Math.Abs(checkCenter.X - targetPoint.X) < 0.01 && Math.Abs(checkCenter.Y - targetPoint.Y) < 0.01)
+                        var check = ViewportActualCenter(viewport);
+                        if (Math.Abs(check.X - targetPoint.X) < 0.01 && Math.Abs(check.Y - targetPoint.Y) < 0.01)
                         {
                             moved = true;
-                            methodUsed = "SetBoxCenter";
+                            methodUsed = "ElementTransformUtils";
                         }
                     }
                     catch { }
 
-                    // Method 2: Try Location.Move if SetBoxCenter didn't work
+                    // Method 2: SetBoxCenter fallback
                     if (!moved)
                     {
                         try
                         {
-                            var location = viewport.Location;
-                            if (location != null)
+                            viewport.SetBoxCenter(targetPoint);
+                            doc.Regenerate();
+                            var check = ViewportActualCenter(viewport);
+                            if (Math.Abs(check.X - targetPoint.X) < 0.01 && Math.Abs(check.Y - targetPoint.Y) < 0.01)
                             {
-                                location.Move(delta);
+                                moved = true;
+                                methodUsed = "SetBoxCenter";
+                            }
+                        }
+                        catch { }
+                    }
+
+                    // Method 3: Location.Move fallback
+                    if (!moved)
+                    {
+                        try
+                        {
+                            var loc = viewport.Location;
+                            if (loc != null)
+                            {
+                                // Recalculate delta from current actual position to avoid compounding errors
+                                var freshDelta = targetPoint - ViewportActualCenter(viewport);
+                                loc.Move(freshDelta);
                                 doc.Regenerate();
-                                var checkCenter = viewport.GetBoxCenter();
-                                if (Math.Abs(checkCenter.X - targetPoint.X) < 0.01 && Math.Abs(checkCenter.Y - targetPoint.Y) < 0.01)
+                                var check = ViewportActualCenter(viewport);
+                                if (Math.Abs(check.X - targetPoint.X) < 0.01 && Math.Abs(check.Y - targetPoint.Y) < 0.01)
                                 {
                                     moved = true;
                                     methodUsed = "Location.Move";
@@ -1296,30 +1328,10 @@ namespace RevitMCPBridge
                         catch { }
                     }
 
-                    // Method 3: Try ElementTransformUtils
-                    if (!moved)
-                    {
-                        try
-                        {
-                            // Recalculate delta based on current position
-                            var newCurrentCenter = viewport.GetBoxCenter();
-                            var newDelta = targetPoint - newCurrentCenter;
-                            ElementTransformUtils.MoveElement(doc, viewportId, newDelta);
-                            doc.Regenerate();
-                            var checkCenter = viewport.GetBoxCenter();
-                            if (Math.Abs(checkCenter.X - targetPoint.X) < 0.01 && Math.Abs(checkCenter.Y - targetPoint.Y) < 0.01)
-                            {
-                                moved = true;
-                                methodUsed = "ElementTransformUtils";
-                            }
-                        }
-                        catch { }
-                    }
-
                     trans.Commit();
 
-                    // Verify the final position
-                    var actualCenter = viewport.GetBoxCenter();
+                    // Verify the final position with live geometry (not cached GetBoxCenter)
+                    var actualCenter = ViewportActualCenter(viewport);
 
                     return ResponseBuilder.Success()
                         .With("viewportId", (int)viewportId.Value)

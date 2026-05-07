@@ -16,6 +16,37 @@ namespace RevitMCPBridge2026
     /// </summary>
     public static class FamilyMethods
     {
+        /// <summary>
+        /// Resolves which Document to operate on.
+        /// If documentTitle is provided, finds the matching open document (project or family).
+        /// Falls back to the active document so existing callers are unaffected.
+        /// </summary>
+        private static Document ResolveDocument(UIApplication uiApp, JObject parameters)
+        {
+            string title = parameters?["documentTitle"]?.ToString();
+            if (!string.IsNullOrEmpty(title))
+            {
+                foreach (Document d in uiApp.Application.Documents)
+                {
+                    if (d.Title.Equals(title, StringComparison.OrdinalIgnoreCase) ||
+                        d.Title.StartsWith(title, StringComparison.OrdinalIgnoreCase))
+                        return d;
+                }
+            }
+            return uiApp.ActiveUIDocument?.Document;
+        }
+
+        /// Returns a human-readable list of all open family documents — used in error messages.
+        private static string ListOpenFamilyDocuments(UIApplication uiApp)
+        {
+            var titles = uiApp.Application.Documents
+                .Cast<Document>()
+                .Where(d => d.IsFamilyDocument)
+                .Select(d => $"'{d.Title}'");
+            var list = string.Join(", ", titles);
+            return string.IsNullOrEmpty(list) ? "none" : list;
+        }
+
         #region Family Loading
 
         /// <summary>
@@ -2472,27 +2503,19 @@ namespace RevitMCPBridge2026
         {
             try
             {
-                // Note: This method operates on the active document
-                // If a family document was opened, it should be the active document
-                var doc = uiApp.ActiveUIDocument?.Document;
+                var doc = ResolveDocument(uiApp, parameters);
 
                 if (doc == null)
-                {
-                    return JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "No active document"
-                    });
-                }
+                    return JsonConvert.SerializeObject(new { success = false, error = "No active document" });
 
                 if (!doc.IsFamilyDocument)
-                {
                     return JsonConvert.SerializeObject(new
                     {
                         success = false,
-                        error = "Active document is not a family document"
+                        error = $"Resolved document '{doc.Title}' is not a family document. " +
+                                $"Pass documentTitle to target a specific open family. " +
+                                $"Open family documents: {ListOpenFamilyDocuments(uiApp)}"
                     });
-                }
 
                 // SaveAs option
                 if (parameters["saveAsPath"] != null)
@@ -2551,25 +2574,19 @@ namespace RevitMCPBridge2026
         {
             try
             {
-                var doc = uiApp.ActiveUIDocument?.Document;
+                var doc = ResolveDocument(uiApp, parameters);
 
                 if (doc == null)
-                {
-                    return JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "No active document"
-                    });
-                }
+                    return JsonConvert.SerializeObject(new { success = false, error = "No active document" });
 
                 if (!doc.IsFamilyDocument)
-                {
                     return JsonConvert.SerializeObject(new
                     {
                         success = false,
-                        error = "Active document is not a family document"
+                        error = $"Resolved document '{doc.Title}' is not a family document. " +
+                                $"Pass documentTitle to target a specific open family. " +
+                                $"Open family documents: {ListOpenFamilyDocuments(uiApp)}"
                     });
-                }
 
                 bool save = parameters["save"]?.ToObject<bool>() ?? false;
 
@@ -3551,25 +3568,19 @@ namespace RevitMCPBridge2026
         {
             try
             {
-                var doc = uiApp.ActiveUIDocument?.Document;
+                var doc = ResolveDocument(uiApp, parameters);
 
                 if (doc == null)
-                {
-                    return JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "No active document"
-                    });
-                }
+                    return JsonConvert.SerializeObject(new { success = false, error = "No active document" });
 
                 if (!doc.IsFamilyDocument)
-                {
                     return JsonConvert.SerializeObject(new
                     {
                         success = false,
-                        error = "Active document is not a family document. Use OpenFamilyDocument first."
+                        error = $"Resolved document '{doc.Title}' is not a family document. " +
+                                $"Pass documentTitle to target a specific open family. " +
+                                $"Open family documents: {ListOpenFamilyDocuments(uiApp)}"
                     });
-                }
 
                 var labels = new List<object>();
 
@@ -3663,25 +3674,19 @@ namespace RevitMCPBridge2026
         {
             try
             {
-                var doc = uiApp.ActiveUIDocument?.Document;
+                var doc = ResolveDocument(uiApp, parameters);
 
                 if (doc == null)
-                {
-                    return JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "No active document"
-                    });
-                }
+                    return JsonConvert.SerializeObject(new { success = false, error = "No active document" });
 
                 if (!doc.IsFamilyDocument)
-                {
                     return JsonConvert.SerializeObject(new
                     {
                         success = false,
-                        error = "Active document is not a family document. Use OpenFamilyDocument first."
+                        error = $"Resolved document '{doc.Title}' is not a family document. " +
+                                $"Pass documentTitle to target a specific open family. " +
+                                $"Open family documents: {ListOpenFamilyDocuments(uiApp)}"
                     });
-                }
 
                 // Require either labelId or labelText to identify the label
                 if (parameters["labelId"] == null && parameters["searchText"] == null)
@@ -3786,25 +3791,19 @@ namespace RevitMCPBridge2026
         {
             try
             {
-                var doc = uiApp.ActiveUIDocument?.Document;
+                var doc = ResolveDocument(uiApp, parameters);
 
                 if (doc == null)
-                {
-                    return JsonConvert.SerializeObject(new
-                    {
-                        success = false,
-                        error = "No active document"
-                    });
-                }
+                    return JsonConvert.SerializeObject(new { success = false, error = "No active document" });
 
                 if (!doc.IsFamilyDocument)
-                {
                     return JsonConvert.SerializeObject(new
                     {
                         success = false,
-                        error = "Active document is not a family document. Use OpenFamilyDocument first."
+                        error = $"Resolved document '{doc.Title}' is not a family document. " +
+                                $"Pass documentTitle to target a specific open family. " +
+                                $"Open family documents: {ListOpenFamilyDocuments(uiApp)}"
                     });
-                }
 
                 if (parameters["parameterName"] == null)
                 {
