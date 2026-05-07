@@ -1701,13 +1701,33 @@ namespace RevitMCPBridge
                 }
 
                 var labelOffset = viewport.LabelOffset;
-                var boxCenter = viewport.GetBoxCenter();
+                var outline     = viewport.GetBoxOutline();
+                var minPt       = outline.MinimumPoint;
+                var maxPt       = outline.MaximumPoint;
+                // LabelOffset origin = center-bottom of the viewport content box
+                double refX = (minPt.X + maxPt.X) / 2.0;
+                double refY = minPt.Y;
+                // Absolute sheet position of the label
+                double labelX = refX + labelOffset.X;
+                double labelY = refY + labelOffset.Y;
 
                 return ResponseBuilder.Success()
                     .With("viewportId", (int)viewportId.Value)
                     .With("labelOffset", new[] { labelOffset.X, labelOffset.Y, labelOffset.Z })
-                    .With("boxCenter", new[] { boxCenter.X, boxCenter.Y, boxCenter.Z })
-                    .With("note", "labelOffset is relative to viewport box center. Positive Y moves title up.")
+                    .With("contentBox", new
+                    {
+                        min = new { x = minPt.X, y = minPt.Y },
+                        max = new { x = maxPt.X, y = maxPt.Y },
+                        width  = maxPt.X - minPt.X,
+                        height = maxPt.Y - minPt.Y,
+                        centerBottomX = refX,
+                        centerBottomY = refY
+                    })
+                    .With("labelAbsolutePosition", new { x = labelX, y = labelY })
+                    .With("note", "LabelOffset is measured from center-bottom of the content box. " +
+                          "offsetX=0 centers the label; negative X moves left, positive right. " +
+                          "offsetY=0 is at box bottom; negative Y moves down. " +
+                          "Use placeAt:{x,y} on setViewportLabelOffset to position by absolute sheet coords.")
                     .Build();
             }
             catch (Exception ex)
@@ -1719,7 +1739,12 @@ namespace RevitMCPBridge
         /// <summary>
         /// Set viewport label offset (move view title position)
         /// </summary>
-        [MCPMethod("setViewportLabelOffset", Category = "Sheet", Description = "Set the label offset position for a viewport on a sheet")]
+        [MCPMethod("setViewportLabelOffset", Category = "Sheet", Description = "Set the label offset position for a viewport on a sheet. " +
+            "Modes: (1) auto:true — geometry-driven, places label left-aligned just below content box. " +
+            "gap (feet, default 0.05) controls Y distance below box; inset (feet, default 0) is X inset from left edge. " +
+            "(2) placeAt:{x,y} — absolute sheet coordinates; back-calculates the required offset automatically. " +
+            "(3) offset:[x,y,z] or offsetX/Y/Z — raw LabelOffset values (measured from center-bottom of content box). " +
+            "LabelOffset origin = center-bottom of content box, NOT viewport center.")]
         public static string SetViewportLabelOffset(UIApplication uiApp, JObject parameters)
         {
             try
@@ -1731,40 +1756,71 @@ namespace RevitMCPBridge
                 pvs.ThrowIfInvalid();
 
                 var viewportIdInt = pvs.GetRequired<int>("viewportId");
-                var viewportId = new ElementId(viewportIdInt);
-                var viewport = doc.GetElement(viewportId) as Viewport;
+                var viewportId    = new ElementId(viewportIdInt);
+                var viewport      = doc.GetElement(viewportId) as Viewport;
 
                 if (viewport == null)
-                {
                     return ResponseBuilder.Error("Viewport not found", "ELEMENT_NOT_FOUND").Build();
-                }
 
-                // auto:true — compute offset from viewport bounding box so label sits just below bottom edge
-                var autoMode = parameters["auto"]?.ToObject<bool>() ?? false;
+                // Content box geometry — used by both auto and placeAt modes.
+                // GetBoxOutline() returns the viewport content frame (no title bar).
+                // LabelOffset is measured from center-bottom of this box:
+                //   refX = (minX + maxX) / 2,  refY = minY
+                var outline = viewport.GetBoxOutline();
+                var minPt   = outline.MinimumPoint;
+                var maxPt   = outline.MaximumPoint;
+                double refX = (minPt.X + maxPt.X) / 2.0;
+                double refY = minPt.Y;
+                double boxW = maxPt.X - minPt.X;
+
                 double offsetX = 0, offsetY = 0, offsetZ = 0;
+                string modeUsed;
 
-                if (autoMode)
+                var autoMode  = parameters["auto"]?.ToObject<bool>() ?? false;
+                var placeAtTk = parameters["placeAt"];
+
+                if (placeAtTk != null)
                 {
-                    // LabelOffset is relative to the label's DEFAULT position (already at bottom of viewport),
-                    // NOT relative to viewport box center. Using -(vpHeight/2) is wrong and produces extreme
-                    // offsets like -0.549 for large viewports, pushing labels off-screen.
-                    // Use a small fixed tight offset from the default label position instead.
-                    var inset = parameters["inset"]?.ToObject<double>() ?? 0.0;
-                    offsetX = inset;
-                    offsetY = -0.060; // ~3/4" below default position — tight and consistent
+                    // placeAt mode — caller specifies exact sheet-coordinate position of the label.
+                    // We back-calculate the LabelOffset needed to put the label there.
+                    double desiredX = placeAtTk["x"]?.ToObject<double>()
+                                   ?? placeAtTk.ToObject<double[]>()?[0] ?? refX;
+                    double desiredY = placeAtTk["y"]?.ToObject<double>()
+                                   ?? placeAtTk.ToObject<double[]>()?[1] ?? refY;
+                    offsetX  = desiredX - refX;
+                    offsetY  = desiredY - refY;
+                    modeUsed = $"placeAt ({desiredX:F4}, {desiredY:F4}) → offset ({offsetX:F4}, {offsetY:F4})";
+                }
+                else if (autoMode)
+                {
+                    // Geometry-driven auto mode. Places the label left-aligned just below the content box.
+                    // All values computed from actual content box dimensions — no magic numbers.
+                    double gap   = parameters["gap"]?.ToObject<double>() ?? 0.05;   // feet below box bottom
+                    double inset = parameters["inset"]?.ToObject<double>() ?? 0.0;  // feet from left edge
+
+                    // Desired label position: (left edge + inset, box bottom - gap)
+                    double desiredX = minPt.X + inset;
+                    double desiredY = minPt.Y - gap;
+
+                    // LabelOffset = desired position - reference (center-bottom)
+                    offsetX  = desiredX - refX;   // negative = left of center; typically -(boxW/2) + inset
+                    offsetY  = desiredY - refY;   // negative = below box bottom; typically -gap
+                    modeUsed = $"auto (gap={gap:F4}, inset={inset:F4}) → offset ({offsetX:F4}, {offsetY:F4})";
                 }
                 else if (parameters["offset"] != null)
                 {
-                    var offsetArray = parameters["offset"].ToObject<double[]>();
-                    offsetX = offsetArray.Length > 0 ? offsetArray[0] : 0;
-                    offsetY = offsetArray.Length > 1 ? offsetArray[1] : 0;
-                    offsetZ = offsetArray.Length > 2 ? offsetArray[2] : 0;
+                    var arr  = parameters["offset"].ToObject<double[]>();
+                    offsetX  = arr.Length > 0 ? arr[0] : 0;
+                    offsetY  = arr.Length > 1 ? arr[1] : 0;
+                    offsetZ  = arr.Length > 2 ? arr[2] : 0;
+                    modeUsed = "explicit offset array";
                 }
                 else
                 {
-                    offsetX = parameters["offsetX"]?.ToObject<double>() ?? 0;
-                    offsetY = parameters["offsetY"]?.ToObject<double>() ?? 0;
-                    offsetZ = parameters["offsetZ"]?.ToObject<double>() ?? 0;
+                    offsetX  = parameters["offsetX"]?.ToObject<double>() ?? 0;
+                    offsetY  = parameters["offsetY"]?.ToObject<double>() ?? 0;
+                    offsetZ  = parameters["offsetZ"]?.ToObject<double>() ?? 0;
+                    modeUsed = "explicit offsetX/Y/Z";
                 }
 
                 var oldOffset = viewport.LabelOffset;
@@ -1781,12 +1837,22 @@ namespace RevitMCPBridge
                     trans.Commit();
 
                     var newOffset = viewport.LabelOffset;
+                    // Resulting absolute label position on the sheet
+                    double labelX = refX + newOffset.X;
+                    double labelY = refY + newOffset.Y;
 
                     return ResponseBuilder.Success()
                         .With("viewportId", (int)viewportId.Value)
+                        .With("modeUsed", modeUsed)
                         .With("previousOffset", new[] { oldOffset.X, oldOffset.Y, oldOffset.Z })
                         .With("newOffset", new[] { newOffset.X, newOffset.Y, newOffset.Z })
-                        .WithMessage("Label offset updated. Positive Y moves title up, negative moves down.")
+                        .With("labelAbsolutePosition", new { x = labelX, y = labelY })
+                        .With("contentBox", new
+                        {
+                            min = new { x = minPt.X, y = minPt.Y },
+                            max = new { x = maxPt.X, y = maxPt.Y },
+                            centerBottomX = refX, centerBottomY = refY
+                        })
                         .Build();
                 }
             }
