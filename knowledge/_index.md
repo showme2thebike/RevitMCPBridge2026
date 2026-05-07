@@ -108,7 +108,7 @@
 
 ---
 
-## Building Codes & Standards (15 files) ⭐ COMPREHENSIVE
+## Building Codes & Standards (62 files) ⭐ COMPREHENSIVE — ALL 50 STATES + DC
 
 **Comprehensive building code reference for AI-assisted design. Pre-computed knowledge enables even Haiku model to make code-compliant recommendations.**
 
@@ -131,12 +131,60 @@
 | [florida-existing-building-code.md](florida-existing-building-code.md) | Renovations, alterations, change of occupancy, SI/SD |
 | [florida-fire-prevention-code.md](florida-fire-prevention-code.md) | Fire systems, inspections, hot work, hazmat, assembly |
 
-### State-Specific Amendments
+### State Building Codes — All 50 States + DC
 | File | Description |
 |------|-------------|
-| [new-york-building-code.md](new-york-building-code.md) | NYC amendments, high-rise (80'), Local Laws, DOB |
-| [california-building-code.md](california-building-code.md) | CBC, Title 24, seismic, CALGreen, WUI, accessibility |
-| [chicago-building-code.md](chicago-building-code.md) | Chicago amendments, high-rise (80'), fire, DOB |
+| [alabama-building-code.md](alabama-building-code.md) | IBC 2018; CZ 2A/3A; termite mandatory; Dixie Alley tornado; hurricane coast |
+| [alaska-building-code.md](alaska-building-code.md) | IBC 2018; CZ 7-8; SDC C-E (highest US); permafrost; extreme snow; tsunami |
+| [arizona-building-code.md](arizona-building-code.md) | IBC 2018; CZ 2B/3B/5B; SHGC critical; haboobs; wildfire north AZ |
+| [arkansas-building-code.md](arkansas-building-code.md) | Local IBC 2018; CZ 3A/4A; Dixie Alley tornado; New Madrid east AR; no statewide res code |
+| [california-building-code.md](california-building-code.md) | CBC/Title 24; seismic SDC C-E; CALGreen mandatory; WUI; Coastal Commission |
+| [chicago-building-code.md](chicago-building-code.md) | Chicago-specific; high-rise (80'); fire; historic; DOB — separate from IL statewide |
+| [colorado-building-code.md](colorado-building-code.md) | IBC 2021 locally; CZ 5B/6B/7; radon Zone 1; wildfire WUI; Wasatch proximity |
+| [connecticut-building-code.md](connecticut-building-code.md) | IBC 2018; CZ 5A; IECC 2021 energy; hurricane coast; post-Sandy; radon Zone 1-2 |
+| [delaware-building-code.md](delaware-building-code.md) | IBC 2018; CZ 3A/4A; coastal; post-Sandy; DNREC; radon Zone 2 |
+| [georgia-building-code.md](georgia-building-code.md) | IBC 2018; CZ 2A/3A; hurricane coast; termite; Atlanta local amendments |
+| [hawaii-building-code.md](hawaii-building-code.md) | IBC 2018; CZ 1A; tsunami mandatory; lava zones 1-9; county-by-county adoption |
+| [idaho-building-code.md](idaho-building-code.md) | IBC 2018; CZ 5B/6B; radon Zone 1; wildfire; Boise growth |
+| [illinois-building-code.md](illinois-building-code.md) | Local IBC 2018; CZ 4A/5A; New Madrid south IL; Chicago has own code (see above) |
+| [indiana-building-code.md](indiana-building-code.md) | IBC 2014 (behind); CZ 4A/5A; radon Zone 1; Wabash Valley seismic SW IN |
+| [iowa-building-code.md](iowa-building-code.md) | IBC 2018; CZ 4A/5A; radon Zone 1 statewide (very high); tornado alley |
+| [kansas-building-code.md](kansas-building-code.md) | IBC 2018; CZ 3A/4A/5A; tornado alley; radon Zone 1 NW; induced seismicity south-central |
+| [kentucky-building-code.md](kentucky-building-code.md) | IBC 2018; CZ 3A/4A; New Madrid west KY SDC C; radon Zone 1 east; mine subsidence |
+| [louisiana-building-code.md](louisiana-building-code.md) | LSUCC/IBC 2015; post-Katrina wind/flood; Formosan termite mandatory; CZ 2A |
+| [maine-building-code.md](maine-building-code.md) | IBC 2015; IECC 2021 energy; CZ 6A/7; heavy snow 50-100 psf; radon Zone 1 |
+| [maryland-building-code.md](maryland-building-code.md) | IBC 2018; CZ 3A/4A; Montgomery Co. sprinklers required; Chesapeake Bay Critical Area |
+| [massachusetts-building-code.md](massachusetts-building-code.md) | 780 CMR/IBC 2015; CZ 5A; MAAB accessibility mandatory; Stretch Code; coastal |
+| [michigan-building-code.md](michigan-building-code.md) | MBC/IBC 2015; CZ 5A/6A; UP lake-effect snow 100-200 psf; radon Zone 1 |
+| [minnesota-building-code.md](minnesota-building-code.md) | MSBC/IBC 2018; CZ 6A/7; radon MANDATORY; extreme cold -30°F; lake-effect |
+| [mississippi-building-code.md](mississippi-building-code.md) | IBC 2018; CZ 2A/3A; termite mandatory; hurricane coast 140-150 mph post-Katrina |
+| [missouri-building-code.md](missouri-building-code.md) | Local IBC 2018; NO statewide res code; New Madrid Bootheel SDC C-D; Joplin tornado |
+| [montana-building-code.md](montana-building-code.md) | IBC 2021; CZ 6B/7; radon Zone 1; wildfire; extreme temperature range |
+| [nebraska-building-code.md](nebraska-building-code.md) | IBC 2018; CZ 4A/5A/5B; radon Zone 1 statewide; tornado; extreme wind Exposure C |
+| [nevada-building-code.md](nevada-building-code.md) | Local IBC 2018; CZ 3B/5B; Reno SDC C; Las Vegas extreme heat; wildfire north NV |
+| [new-hampshire-building-code.md](new-hampshire-building-code.md) | IBC 2018; CZ 6A/7; White Mountain snow 80-100 psf; radon Zone 1; SDC B south |
+| [new-jersey-building-code.md](new-jersey-building-code.md) | NJ UCC/IBC 2015; CZ 4A/5A; **sprinklers REQUIRED** statewide; post-Sandy; CAFRA |
+| [new-mexico-building-code.md](new-mexico-building-code.md) | IBC 2018; CZ 2B/3B/4B; radon Zone 1 north; wildfire north NM; adobe provisions |
+| [new-york-building-code.md](new-york-building-code.md) | NYC amendments; high-rise (80'); Local Laws; DOB; energy LL97 |
+| [north-carolina-building-code.md](north-carolina-building-code.md) | IBC 2018; CZ 3A/4A; CAMA coastal; hurricane; mountain snow west NC |
+| [north-dakota-building-code.md](north-dakota-building-code.md) | IBC 2018; CZ 6A/7; radon Zone 1; frost 48-60"; heavy snow 35-50 psf; extreme cold |
+| [ohio-building-code.md](ohio-building-code.md) | OBC/IBC 2017; CZ 4A/5A; lake-effect snow NE OH; radon Zone 1; New Madrid SW |
+| [oklahoma-building-code.md](oklahoma-building-code.md) | IBC 2018; CZ 3A/4A; highest tornado risk US; safe rooms Moore/Newcastle required |
+| [oregon-building-code.md](oregon-building-code.md) | OSSC/IBC 2021; CZ 4C/5B/6B; Cascadia subduction SDC D-E; wildfire east OR |
+| [pennsylvania-building-code.md](pennsylvania-building-code.md) | UCC/IBC 2018; CZ 4A/5A; **sprinklers REQUIRED** statewide; radon Zone 1 |
+| [rhode-island-building-code.md](rhode-island-building-code.md) | IBC 2018; IECC 2021; CZ 5A; hurricane coast; 1938 Hurricane; CRMC permits |
+| [south-carolina-building-code.md](south-carolina-building-code.md) | IBC 2018; CZ 2A/3A; Charleston SDC C-D + hurricane dual hazard; termite |
+| [south-dakota-building-code.md](south-dakota-building-code.md) | IBC 2018; CZ 5B/6A; radon Zone 1; Black Hills snow 80+ psf; extreme temp range |
+| [tennessee-building-code.md](tennessee-building-code.md) | IBC 2018; CZ 4A; New Madrid Memphis SDC C-D; tornado; Appalachian radon east TN |
+| [texas-building-code.md](texas-building-code.md) | **No statewide code** — local only; CZ 2A/3A/3B; TAS accessibility mandatory; hurricane coast |
+| [utah-building-code.md](utah-building-code.md) | IBC 2021; CZ 3B/5B/6B; Wasatch Fault SDC C-D; radon Zone 1; wildfire |
+| [vermont-building-code.md](vermont-building-code.md) | IBC 2018; VT RBES energy; CZ 6A/7; snow 50-100 psf; radon Zone 1; Act 250 |
+| [virginia-building-code.md](virginia-building-code.md) | USBC/IBC 2018; CZ 3A/4A/5A; Hampton Roads sea level rise; hurricane coast |
+| [washington-building-code.md](washington-building-code.md) | WSBC/IBC 2021; CZ 4C/5B/6B; Cascadia SDC D-E; Puget Sound; volcano; wildfire |
+| [washington-dc-building-code.md](washington-dc-building-code.md) | DC 2020/IBC 2018; CZ 4A; 130' height limit; Green Building Act mandatory; historic |
+| [west-virginia-building-code.md](west-virginia-building-code.md) | IBC 2018; CZ 4A/5A; coal mine subsidence; radon Zone 1; mountain snow |
+| [wisconsin-building-code.md](wisconsin-building-code.md) | IBC 2015 + WI UDC (not IRC); CZ 5A/6A; radon Zone 1; lake-effect snow north |
+| [wyoming-building-code.md](wyoming-building-code.md) | Local IBC 2018; CZ 5B/6B/7; extreme wind 100-115 mph; radon Zone 1; heavy snow |
 
 ### National Standards
 | File | Description |
@@ -257,10 +305,13 @@
 - [florida-existing-building-code.md](florida-existing-building-code.md) for renovations
 - [florida-fire-prevention-code.md](florida-fire-prevention-code.md) for fire systems, inspections
 
-**State-Specific**:
-- [new-york-building-code.md](new-york-building-code.md) for NYC projects
-- [california-building-code.md](california-building-code.md) for California projects
-- [chicago-building-code.md](chicago-building-code.md) for Chicago projects
+**State-Specific (all 50 states + DC)**:
+- Search the "State Building Codes" table above by state name
+- Each file covers: code edition, energy code, climate zones, key hazards (seismic/wind/snow/tornado/hurricane/wildfire), and residential quick checklist
+- **States with mandatory sprinklers**: New Jersey (NFPA 13D), Pennsylvania (all new construction)
+- **States with mandatory radon**: Minnesota (passive system required by law)
+- **No statewide residential code**: Missouri, Texas (commercial local only)
+- Chicago: see [chicago-building-code.md](chicago-building-code.md) — separate from Illinois statewide
 
 ### "How do I detail..."
 - [detail-library.md](detail-library.md) for standard details
