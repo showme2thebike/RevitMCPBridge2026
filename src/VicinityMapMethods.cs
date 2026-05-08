@@ -28,10 +28,9 @@ namespace RevitMCPBridge
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
-                var jsonPath   = parameters["jsonPath"]?.ToString()
-                                 ?? Path.Combine(OutputDir, "vicinity_map.json");
-                var viewName   = parameters["viewName"]?.ToString();
-                var scaleDenom = parameters["scale"]?.Value<int>() ?? 1200;
+                var jsonPath = parameters["jsonPath"]?.ToString()
+                              ?? Path.Combine(OutputDir, "vicinity_map.json");
+                var viewName = parameters["viewName"]?.ToString();
 
                 if (!File.Exists(jsonPath))
                     return ResponseBuilder.Error(
@@ -46,6 +45,16 @@ namespace RevitMCPBridge
                     viewName = string.IsNullOrEmpty(address)
                         ? "VICINITY MAP *"
                         : $"VICINITY MAP - {address.ToUpper()} *";
+
+                // Auto-scale: map coordinates are in geographic feet.
+                // Compute scale so the map fills ~8 inches wide on paper.
+                // scale = mapWidthFeet / targetPaperWidthFeet
+                double radiusFeet     = data["radiusFeet"]?.Value<double>() ?? (900 * 3.28084);
+                double mapWidthFeet   = radiusFeet * 2.0;
+                double targetWidthFt  = (parameters["targetPaperWidthInches"]?.Value<double>() ?? 8.0) / 12.0;
+                int    autoScale      = (int)(Math.Round(mapWidthFeet / targetWidthFt / 100.0) * 100);
+                autoScale             = Math.Max(1200, Math.Min(autoScale, 24000));
+                int    scaleDenom     = parameters["scale"]?.Value<int>() ?? autoScale;
 
                 // Smallest available text note type
                 var textType = new FilteredElementCollector(doc)
@@ -70,8 +79,16 @@ namespace RevitMCPBridge
                     if (viewFamilyType == null)
                         return ResponseBuilder.Error("No drafting view family type found").Build();
 
-                    var view   = ViewDrafting.Create(doc, viewFamilyType.Id);
-                    view.Name  = viewName;
+                    var view = ViewDrafting.Create(doc, viewFamilyType.Id);
+                    // Append timestamp suffix to guarantee unique name
+                    string safeName = viewName;
+                    try { view.Name = safeName; }
+                    catch
+                    {
+                        safeName = $"{viewName} {DateTime.Now:HHmmss}";
+                        view.Name = safeName;
+                    }
+                    viewName   = safeName;
                     view.Scale = scaleDenom;
                     viewId     = view.Id;
 
@@ -124,12 +141,13 @@ namespace RevitMCPBridge
                 }
 
                 return ResponseBuilder.Success()
-                    .With("viewId",     (int)viewId.Value)
-                    .With("viewName",   viewName)
-                    .With("scale",      scaleDenom)
-                    .With("lineCount",  lineCount)
-                    .With("labelCount", labelCount)
-                    .WithMessage($"Vicinity map created: {lineCount} lines, {labelCount} labels — all elements are editable in Revit.")
+                    .With("viewId",       (int)viewId.Value)
+                    .With("viewName",     viewName)
+                    .With("scale",        scaleDenom)
+                    .With("mapWidthFeet", Math.Round(mapWidthFeet))
+                    .With("lineCount",    lineCount)
+                    .With("labelCount",   labelCount)
+                    .WithMessage($"Vicinity map created: {lineCount} lines, {labelCount} labels at scale 1:{scaleDenom}. All elements are editable.")
                     .Build();
             }
             catch (Exception ex)
