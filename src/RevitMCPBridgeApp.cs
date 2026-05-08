@@ -293,8 +293,15 @@ namespace RevitMCPBridge
             standardsButton.Image      = CreateButtonIcon("standards", 16);
 
 
-            // ── Compliance ────────────────────────────────────────────────
-            var compliancePanel = application.CreateRibbonPanel(_tabName, "Compliance");
+            // ── Site & Code ───────────────────────────────────────────────
+            var compliancePanel = application.CreateRibbonPanel(_tabName, "Site & Code");
+
+            var vicinityMapButtonData = new PushButtonData("VicinityMap", "Vicinity\nMap", asm,
+                "RevitMCPBridge2026.AgentFramework.LaunchVicinityMapCommand")
+                { ToolTip = "Generate a vicinity map from live OpenStreetMap data — creates editable street lines and labels in a drafting view, ready to place on your VM sheet" };
+            var vicinityMapButton = compliancePanel.AddItem(vicinityMapButtonData) as PushButton;
+            vicinityMapButton.LargeImage = CreateButtonIcon("vicinitymap", 32);
+            vicinityMapButton.Image      = CreateButtonIcon("vicinitymap", 16);
 
             var codeCheckButtonData = new PushButtonData("CodeCheck", "Code\nCheck", asm,
                 "RevitMCPBridge2026.AgentFramework.LaunchComplianceCommand")
@@ -657,6 +664,9 @@ namespace RevitMCPBridge
                             break;
                         case "modelcheck":
                             DrawModelCheckIcon(dc, size);
+                            break;
+                        case "vicinitymap":
+                            DrawVicinityMapIcon(dc, size);
                             break;
                         case "compliance":
                             DrawComplianceIcon(dc, size);
@@ -1490,6 +1500,37 @@ namespace RevitMCPBridge
             dc.DrawLine(checkPen, new Point(20*s, 27*s), new Point(26*s, 19*s));
         }
 
+        private void DrawVicinityMapIcon(DrawingContext dc, int size)
+        {
+            // Street grid with site crosshair — flat white fill + dark outline, BIM Monkey style
+            double s    = size / 32.0;
+            var fill    = new SolidColorBrush(Colors.White);
+            var pen     = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5 * s));
+            var gridPen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.7, 1.0 * s));
+            var sitePen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 2.0 * s))
+                { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+
+            // Map bounding box
+            dc.DrawRectangle(fill, pen, new Rect(2 * s, 2 * s, 28 * s, 28 * s));
+
+            // Horizontal streets
+            dc.DrawLine(gridPen, new Point(2 * s,  9 * s), new Point(30 * s,  9 * s));
+            dc.DrawLine(gridPen, new Point(2 * s, 16 * s), new Point(30 * s, 16 * s));
+            dc.DrawLine(gridPen, new Point(2 * s, 23 * s), new Point(30 * s, 23 * s));
+
+            // Vertical streets
+            dc.DrawLine(gridPen, new Point( 9 * s, 2 * s), new Point( 9 * s, 30 * s));
+            dc.DrawLine(gridPen, new Point(16 * s, 2 * s), new Point(16 * s, 30 * s));
+            dc.DrawLine(gridPen, new Point(23 * s, 2 * s), new Point(23 * s, 30 * s));
+
+            // Site crosshair at grid center (16,16)
+            double arm = 3.5 * s, gap = 0.8 * s;
+            dc.DrawLine(sitePen, new Point((16 - arm) * s, 16 * s), new Point((16 - gap) * s, 16 * s));
+            dc.DrawLine(sitePen, new Point((16 + gap) * s, 16 * s), new Point((16 + arm) * s, 16 * s));
+            dc.DrawLine(sitePen, new Point(16 * s, (16 - arm) * s), new Point(16 * s, (16 - gap) * s));
+            dc.DrawLine(sitePen, new Point(16 * s, (16 + gap) * s), new Point(16 * s, (16 + arm) * s));
+        }
+
         private void DrawComplianceIcon(DrawingContext dc, int size)
         {
             // Flat white checklist page with a bold check badge — BIM Monkey logo style
@@ -1672,7 +1713,16 @@ namespace RevitMCPBridge
                     record.Message = "Unknown dialog type";
                     Log.Information($"Generic dialog shown: {e.DialogId}");
 
-                    if (_autoHandleDialogs)
+                    // DocWarnDialog appears during transaction commits with overlap/join warnings.
+                    // Always override with OK (1) so the commit can proceed instead of rolling back.
+                    if (e.DialogId == "Dialog_Revit_DocWarnDialog")
+                    {
+                        e.OverrideResult(1);
+                        record.ResultClicked = 1;
+                        record.ResultName = "OK (auto)";
+                        Log.Information("Auto-dismissed Dialog_Revit_DocWarnDialog with OK to allow commit");
+                    }
+                    else if (_autoHandleDialogs)
                     {
                         e.OverrideResult(_defaultDialogResult);
                         record.ResultClicked = _defaultDialogResult;

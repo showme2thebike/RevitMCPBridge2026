@@ -575,6 +575,30 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { }
         }
 
+        // Vicinity Map ribbon button — pre-loads the input box with a vicinity map prompt
+        public void PreloadVicinityMapPrompt()
+        {
+            try
+            {
+                const string prompt =
+                    "Generate a vicinity map for this project. " +
+                    "Step 1: Call getModelInfo to get the project address. " +
+                    "Step 2: Call runScript with the generate_vicinity_map.py script and the address as the argument — " +
+                    "the script path is in Documents\\BIM Monkey\\wrapper\\generate_vicinity_map.py and the output path is " +
+                    "Documents\\BIM Monkey\\vicinity_map.png. " +
+                    "Step 3: Call createVicinityMapLines (no parameters needed — it reads the JSON written alongside the PNG). " +
+                    "Step 4: Check if sheet VM.1 exists via getSheets. If it does, place the view on it. " +
+                    "If not, create it first with createSheet (sheetNumber=VM.1, sheetName=VICINITY MAP), then place the view centered on it.";
+                Dispatcher.Invoke(() =>
+                {
+                    if (_inputTextBox != null)
+                        _inputTextBox.Text = prompt;
+                });
+                Activate();
+            }
+            catch { }
+        }
+
         private void HandleComplianceRun(string runId, JArray checks)
         {
             try

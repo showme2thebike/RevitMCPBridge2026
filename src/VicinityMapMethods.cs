@@ -6,6 +6,7 @@ using Autodesk.Revit.UI;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using RevitMCPBridge.Helpers;
+using Serilog;
 
 namespace RevitMCPBridge
 {
@@ -15,6 +16,32 @@ namespace RevitMCPBridge
     /// </summary>
     public static class VicinityMapMethods
     {
+        private class DismissAllFailures : IFailuresPreprocessor
+        {
+            public FailureProcessingResult PreprocessFailures(FailuresAccessor a)
+            {
+                var msgs = a.GetFailureMessages();
+                Log.Warning("VicinityMap PreprocessFailures called: {Count} messages", msgs.Count);
+                foreach (var f in msgs)
+                {
+                    var sev = f.GetSeverity();
+                    Log.Warning("VicinityMap failure: sev={Sev}, desc={Desc}", sev, f.GetDescriptionText());
+                    if (sev == FailureSeverity.Warning)
+                    {
+                        a.DeleteWarning(f);
+                    }
+                    else if (f.HasResolutionOfType(FailureResolutionType.DetachElements))
+                    {
+                        // "Can't keep elements joined" — detach (unjoin) without deleting
+                        f.SetCurrentResolutionType(FailureResolutionType.DetachElements);
+                        a.ResolveFailure(f);
+                    }
+                    // Intentionally NOT using DeleteElements — that would remove the lines we just created
+                }
+                return FailureProcessingResult.ProceedWithCommit;
+            }
+        }
+
         private static string OutputDir =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
                          "BIM Monkey");
@@ -27,19 +54,28 @@ namespace RevitMCPBridge
             try
             {
                 var doc = uiApp.ActiveUIDocument.Document;
+                Log.Information("createVicinityMapLines: start, doc={Doc}", doc?.Title ?? "null");
 
                 var jsonPath = parameters["jsonPath"]?.ToString()
                               ?? Path.Combine(OutputDir, "vicinity_map.json");
                 var viewName = parameters["viewName"]?.ToString();
 
+                Log.Information("createVicinityMapLines: jsonPath={Path}", jsonPath);
+
                 if (!File.Exists(jsonPath))
+                {
+                    Log.Warning("createVicinityMapLines: JSON not found at {Path}", jsonPath);
                     return ResponseBuilder.Error(
                         $"JSON not found: {jsonPath}. Run generate_vicinity_map.py via runScript first.").Build();
+                }
 
                 var data    = JObject.Parse(File.ReadAllText(jsonPath));
                 var lines   = (JArray)(data["lines"]  ?? new JArray());
                 var labels  = (JArray)(data["labels"] ?? new JArray());
                 var address = data["address"]?.ToString() ?? "";
+
+                Log.Information("createVicinityMapLines: JSON loaded — {Lines} lines, {Labels} labels, address={Address}",
+                    lines.Count, labels.Count, address);
 
                 if (string.IsNullOrEmpty(viewName))
                     viewName = string.IsNullOrEmpty(address)
@@ -57,6 +93,8 @@ namespace RevitMCPBridge
                 int autoScale = standardScales.OrderBy(s => Math.Abs(s - rawScale)).First();
                 int scaleDenom = parameters["scale"]?.Value<int>() ?? autoScale;
 
+                Log.Information("createVicinityMapLines: rawScale={Raw:F0}, snapped to {Scale}", rawScale, scaleDenom);
+
                 // Smallest available text note type
                 var textType = new FilteredElementCollector(doc)
                     .OfClass(typeof(TextNoteType))
@@ -65,14 +103,33 @@ namespace RevitMCPBridge
                     .FirstOrDefault();
                 var textTypeId = textType?.Id ?? ElementId.InvalidElementId;
 
+                Log.Information("createVicinityMapLines: textTypeId={Id}", textTypeId?.Value.ToString() ?? "null");
+
                 int lineCount = 0, labelCount = 0;
                 ElementId viewId;
+                ViewDrafting persistedView;
 
-                using (var trans = new Transaction(doc, "Create Vicinity Map Lines"))
+                // If caller supplies an existing view ID, skip creation and target that view directly.
+                // This lets us test whether the rollback is specific to newly-created views.
+                int targetViewIdRaw = parameters["targetViewId"]?.Value<int>() ?? 0;
+                if (targetViewIdRaw != 0)
                 {
-                    var txStatus = trans.Start();
+                    viewId = new ElementId(targetViewIdRaw);
+                    persistedView = doc.GetElement(viewId) as ViewDrafting;
+                    Log.Information("createVicinityMapLines: using existing viewId={Id}, found={Found}", targetViewIdRaw, persistedView != null);
+                    if (persistedView == null)
+                        return ResponseBuilder.Error($"No ViewDrafting found with id {targetViewIdRaw}").Build();
+                    viewName = persistedView.Name;
+                }
+                else
+                {
+                // Transaction 1: create and name the view, commit before adding elements.
+                using (var trans1 = new Transaction(doc, "Create Vicinity Map View"))
+                {
+                    var txStatus = trans1.Start();
+                    Log.Information("createVicinityMapLines: tx1 status={Status}", txStatus);
                     if (txStatus != TransactionStatus.Started)
-                        return ResponseBuilder.Error($"Transaction failed to start: {txStatus}").Build();
+                        return ResponseBuilder.Error($"Transaction 1 failed to start: {txStatus}").Build();
 
                     var viewFamilyType = new FilteredElementCollector(doc)
                         .OfClass(typeof(ViewFamilyType))
@@ -81,71 +138,121 @@ namespace RevitMCPBridge
 
                     if (viewFamilyType == null)
                     {
-                        trans.RollBack();
+                        trans1.RollBack();
                         return ResponseBuilder.Error("No drafting view family type found").Build();
                     }
 
                     var view = ViewDrafting.Create(doc, viewFamilyType.Id);
+                    Log.Information("createVicinityMapLines: ViewDrafting.Create id={Id}", view?.Id?.Value.ToString() ?? "null");
 
-                    // Unique name
                     string safeName = viewName;
                     try { view.Name = safeName; }
-                    catch { safeName = $"{viewName} {DateTime.Now:HHmmss}"; view.Name = safeName; }
+                    catch
+                    {
+                        safeName = $"{viewName} {DateTime.Now:HHmmss}";
+                        view.Name = safeName;
+                    }
                     viewName = safeName;
 
-                    // Set scale — if value rejected by Revit, fall back to 9600
                     try { view.Scale = scaleDenom; }
                     catch { scaleDenom = 9600; view.Scale = scaleDenom; }
+                    Log.Information("createVicinityMapLines: view '{Name}' scale={Scale}", viewName, scaleDenom);
 
                     viewId = view.Id;
-
-                    // Street lines
-                    foreach (var seg in lines)
+                    var c1 = trans1.Commit();
+                    Log.Information("createVicinityMapLines: tx1.Commit()={Status}", c1);
+                    if (c1 != TransactionStatus.Committed)
                     {
-                        try
+                        Log.Error("createVicinityMapLines: view creation rolled back");
+                        return ResponseBuilder.Error("Failed to create drafting view (tx1 rolled back)").Build();
+                    }
+                    persistedView = doc.GetElement(viewId) as ViewDrafting;
+                    Log.Information("createVicinityMapLines: persistedView={Status}", persistedView != null ? "OK" : "NULL");
+                    if (persistedView == null)
+                        return ResponseBuilder.Error("Failed to retrieve drafting view after tx1").Build();
+                }
+                } // end else (new view)
+
+                // Single content transaction: lines + labels together.
+                // No preprocessor (triggers 666 loop regardless of failure count).
+                // Commit may return Pending if Revit shows a join/overlap dialog after
+                // Execute() returns — treat Pending as soft success since elements ARE
+                // created and will persist when the user dismisses the dialog.
+                using (var txContent = new Transaction(doc, "Vicinity Map Content"))
+                {
+                    txContent.Start();
+                    Log.Information("createVicinityMapLines: content tx started");
+
+                    try
+                    {
+                        foreach (var seg in lines)
                         {
                             double x1 = seg["x1"]?.Value<double>() ?? 0;
                             double y1 = seg["y1"]?.Value<double>() ?? 0;
                             double x2 = seg["x2"]?.Value<double>() ?? 0;
                             double y2 = seg["y2"]?.Value<double>() ?? 0;
-                            if (Math.Abs(x2 - x1) < 0.001 && Math.Abs(y2 - y1) < 0.001) continue;
-                            doc.Create.NewDetailCurve(view, Line.CreateBound(new XYZ(x1, y1, 0), new XYZ(x2, y2, 0)));
+                            var p1 = new XYZ(x1, y1, 0);
+                            var p2 = new XYZ(x2, y2, 0);
+                            if (p1.DistanceTo(p2) < 1e-6) continue;
+                            doc.Create.NewDetailCurve(persistedView, Line.CreateBound(p1, p2));
                             lineCount++;
+                            if (lineCount % 500 == 0)
+                                Log.Information("createVicinityMapLines: {N} curves so far", lineCount);
                         }
-                        catch { }
-                    }
 
-                    // Street labels
-                    if (textTypeId != ElementId.InvalidElementId)
-                    {
+                        // Site marker: four lines with gap at center to avoid join warning
+                        double arm = scaleDenom * (0.05 / 12.0);
+                        double gap = arm * 0.05;
+                        doc.Create.NewDetailCurve(persistedView, Line.CreateBound(new XYZ(-arm, 0, 0), new XYZ(-gap, 0, 0)));
+                        doc.Create.NewDetailCurve(persistedView, Line.CreateBound(new XYZ(gap, 0, 0),  new XYZ(arm, 0, 0)));
+                        doc.Create.NewDetailCurve(persistedView, Line.CreateBound(new XYZ(0, -arm, 0), new XYZ(0, -gap, 0)));
+                        doc.Create.NewDetailCurve(persistedView, Line.CreateBound(new XYZ(0, gap, 0),  new XYZ(0, arm, 0)));
+
                         foreach (var label in labels)
                         {
-                            try
+                            double x      = label["x"]?.Value<double>() ?? 0;
+                            double y      = label["y"]?.Value<double>() ?? 0;
+                            string text   = label["text"]?.ToString() ?? "";
+                            double rotDeg = label["rotation"]?.Value<double>() ?? 0;
+                            double rotRad = rotDeg * Math.PI / 180.0;
+                            if (string.IsNullOrEmpty(text) || textTypeId == ElementId.InvalidElementId) continue;
+                            var opts = new TextNoteOptions
                             {
-                                double lx  = label["x"]?.Value<double>() ?? 0;
-                                double ly  = label["y"]?.Value<double>() ?? 0;
-                                string txt = label["text"]?.ToString() ?? "";
-                                if (string.IsNullOrEmpty(txt)) continue;
-                                var opts = new TextNoteOptions(textTypeId)
-                                    { HorizontalAlignment = HorizontalTextAlignment.Center };
-                                TextNote.Create(doc, view.Id, new XYZ(lx, ly, 0), txt, opts);
-                                labelCount++;
-                            }
-                            catch { }
+                                TypeId = textTypeId,
+                                HorizontalAlignment = HorizontalTextAlignment.Center,
+                                Rotation = rotRad
+                            };
+                            TextNote.Create(doc, persistedView.Id, new XYZ(x, y, 0), text, opts);
+                            labelCount++;
                         }
-
-                        // Site marker at origin
-                        try
-                        {
-                            var opts = new TextNoteOptions(textTypeId)
-                                { HorizontalAlignment = HorizontalTextAlignment.Center };
-                            TextNote.Create(doc, view.Id, XYZ.Zero, "*", opts);
-                        }
-                        catch { }
+                        Log.Information("createVicinityMapLines: {Lines} lines + {Labels} labels created, committing", lineCount, labelCount);
+                    }
+                    catch (Exception exContent)
+                    {
+                        Log.Error(exContent, "createVicinityMapLines: exception in content tx");
                     }
 
-                    trans.Commit();
+                    TransactionStatus cContent;
+                    try { cContent = txContent.Commit(); }
+                    catch (Exception exC) { Log.Error(exC, "createVicinityMapLines: content Commit() threw"); cContent = TransactionStatus.RolledBack; }
+                    Log.Information("createVicinityMapLines: content tx={Status}", cContent);
+
+                    if (cContent == TransactionStatus.RolledBack)
+                    {
+                        lineCount  = 0;
+                        labelCount = 0;
+                        Log.Error("createVicinityMapLines: content tx rolled back — no elements created");
+                    }
+                    else if (cContent == TransactionStatus.Pending)
+                    {
+                        // Revit will show a join/overlap dialog after Execute() returns.
+                        // Elements are created and will commit when user dismisses it.
+                        Log.Warning("createVicinityMapLines: content tx Pending — user will see join dialog; elements will persist");
+                    }
                 }
+
+                Log.Information("createVicinityMapLines: complete — viewId={ViewId}, viewName={Name}, lines={Lines}, labels={Labels}",
+                    viewId?.Value.ToString() ?? "null", viewName, lineCount, labelCount);
 
                 return ResponseBuilder.Success()
                     .With("viewId",       (int)viewId.Value)
@@ -154,13 +261,15 @@ namespace RevitMCPBridge
                     .With("mapWidthFeet", Math.Round(mapWidthFeet))
                     .With("lineCount",    lineCount)
                     .With("labelCount",   labelCount)
-                    .WithMessage($"Vicinity map created: {lineCount} lines, {labelCount} labels at scale 1:{scaleDenom}. All elements are editable.")
+                    .WithMessage($"Vicinity map created: {lineCount} lines, {labelCount} labels at scale 1:{scaleDenom}.")
                     .Build();
             }
             catch (Exception ex)
             {
+                Log.Error(ex, "createVicinityMapLines: unhandled exception");
                 return ResponseBuilder.FromException(ex).Build();
             }
         }
+
     }
 }

@@ -24,4 +24,4 @@ using System.Runtime.InteropServices;
 // BUILD: Auto-increment on each build
 [assembly: AssemblyVersion("2.0.0.0")]
 [assembly: AssemblyFileVersion("2.0.0.0")]
-[assembly: AssemblyInformationalVersion("v0.4.20260507")]
+[assembly: AssemblyInformationalVersion("v0.4.20260508")]
