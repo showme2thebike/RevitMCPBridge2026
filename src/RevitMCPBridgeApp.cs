@@ -296,6 +296,13 @@ namespace RevitMCPBridge
             // ── Site Data ─────────────────────────────────────────────────
             var siteDataPanel = application.CreateRibbonPanel(_tabName, "Site Data");
 
+            var zoningButtonData = new PushButtonData("Zoning", "Zoning", asm,
+                "RevitMCPBridge.Commands.ZoningCommand")
+                { ToolTip = "Look up parcel data for a project address — lot area, zoning, setbacks, FAR, and permit history from county assessor APIs" };
+            var zoningButton = siteDataPanel.AddItem(zoningButtonData) as PushButton;
+            zoningButton.LargeImage = CreateButtonIcon("zoning", 32);
+            zoningButton.Image      = CreateButtonIcon("zoning", 16);
+
             var vicinityMapButtonData = new PushButtonData("VicinityMap", "Vicinity\nMap", asm,
                 "RevitMCPBridge2026.AgentFramework.LaunchVicinityMapCommand")
                 { ToolTip = "Generate a vicinity map from live OpenStreetMap data — creates editable street lines and labels in a drafting view, ready to place on your VM sheet" };
@@ -309,13 +316,6 @@ namespace RevitMCPBridge
             var siteClimateButton = siteDataPanel.AddItem(siteClimateButtonData) as PushButton;
             siteClimateButton.LargeImage = CreateButtonIcon("siteclimate", 32);
             siteClimateButton.Image      = CreateButtonIcon("siteclimate", 16);
-
-            var zoningButtonData = new PushButtonData("Zoning", "Zoning", asm,
-                "RevitMCPBridge.Commands.ZoningCommand")
-                { ToolTip = "Coming soon — pull parcel data, zoning designation, lot area, and setbacks from county assessor and zoning APIs directly into your Revit model parameters" };
-            var zoningButton = siteDataPanel.AddItem(zoningButtonData) as PushButton;
-            zoningButton.LargeImage = CreateButtonIcon("zoning", 32);
-            zoningButton.Image      = CreateButtonIcon("zoning", 16);
 
             // ── Code & Spec ───────────────────────────────────────────────
             var codeSpecPanel = application.CreateRibbonPanel(_tabName, "Code & Spec");
