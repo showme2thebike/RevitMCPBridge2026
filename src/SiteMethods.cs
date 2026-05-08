@@ -1796,5 +1796,113 @@ namespace RevitMCPBridge
                 return FailureProcessingResult.Continue;
             }
         }
+
+        [MCPMethod("lookupParcelData", Category = "Site",
+            Description = "Look up parcel data (lot area, zoning, setbacks, FAR, permit history) for a street address. " +
+                          "Currently covers King County WA (Seattle, Bellevue, Redmond, Kirkland, etc.). " +
+                          "Returns structured data ready to inject into project parameters or a code review.")]
+        public static string LookupParcelData(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var address = parameters["address"]?.ToString();
+                if (string.IsNullOrWhiteSpace(address))
+                    return ResponseBuilder.Error("address parameter required — e.g. \"1234 Main St, Seattle, WA 98101\"").Build();
+
+                // Read API key using same cascade as AgentChatPanel
+                var bmKey = ReadBimMonkeyApiKey();
+                if (string.IsNullOrEmpty(bmKey))
+                    return ResponseBuilder.Error("BIM Monkey API key not found. Open Banana Chat and complete setup.").Build();
+
+                // Synchronous HTTP call (MCP methods run on a background thread already)
+                using (var http = new System.Net.Http.HttpClient())
+                {
+                    http.Timeout = TimeSpan.FromSeconds(20);
+                    var payload = new System.Net.Http.StringContent(
+                        $"{{\"address\":\"{address.Replace("\"", "\\\"")}\"}}",
+                        System.Text.Encoding.UTF8, "application/json");
+                    var request = new System.Net.Http.HttpRequestMessage(
+                        System.Net.Http.HttpMethod.Post,
+                        "https://bimmonkey-production.up.railway.app/api/parcel/lookup");
+                    request.Headers.Add("Authorization", $"Bearer {bmKey}");
+                    request.Content = payload;
+
+                    var resp = http.SendAsync(request).GetAwaiter().GetResult();
+                    var json = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        var err = JObject.Parse(json)["error"]?.ToString() ?? "Lookup failed";
+                        return ResponseBuilder.Error(err).Build();
+                    }
+
+                    var result = JObject.Parse(json);
+                    return ResponseBuilder.Success()
+                        .With("parcel", result)
+                        .With("summary", BuildParcelSummary(result))
+                        .Build();
+                }
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        private static string BuildParcelSummary(JObject r)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"Address:  {r["matchedAddress"] ?? r["address"]}");
+            if (r["parcelId"]   != null) sb.AppendLine($"Parcel:   {r["parcelId"]}");
+            if (r["lotArea"]    != null) sb.AppendLine($"Lot Area: {r["lotArea"]:N0} sq ft  ({r["lotAreaAcres"]} acres)");
+            if (r["zoning"]     != null) sb.AppendLine($"Zoning:   {r["zoning"]}{(r["zoningDescription"] != null ? $" — {r["zoningDescription"]}" : "")}");
+            if (r["setbacks"]   is JObject sb2)
+            {
+                sb.AppendLine($"Setbacks: Front {sb2["front"]}\'  Rear {sb2["rear"]}\'  Side {sb2["sideInterior"]}\' int / {sb2["sideStreet"]}\' street");
+                if (sb2["notes"] != null) sb.AppendLine($"          Note: {sb2["notes"]}");
+            }
+            if (r["far"]        != null) sb.AppendLine($"FAR:      {r["far"]}");
+            if (r["maxHeight"]  != null) sb.AppendLine($"Height:   {r["maxHeight"]}\'");
+            var permits = r["permitHistory"] as JArray;
+            if (permits?.Count > 0)
+            {
+                sb.AppendLine($"Permits ({permits.Count} recent):");
+                foreach (JObject p in permits)
+                    sb.AppendLine($"  {p["applicationDate"]}  {p["type"]}  {p["description"]}  [{p["status"]}]");
+            }
+            sb.AppendLine($"Source: {r["source"]}  Coverage: {r["coverage"]}");
+            return sb.ToString().Trim();
+        }
+
+        private static string ReadBimMonkeyApiKey()
+        {
+            try
+            {
+                var path = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".claude", "settings.json");
+                if (System.IO.File.Exists(path))
+                {
+                    var obj = JObject.Parse(System.IO.File.ReadAllText(path));
+                    var key = obj["env"]?["BIM_MONKEY_API_KEY"]?.ToString();
+                    if (!string.IsNullOrEmpty(key)) return key;
+                }
+            }
+            catch { }
+            var env = Environment.GetEnvironmentVariable("BIM_MONKEY_API_KEY");
+            if (!string.IsNullOrEmpty(env)) return env;
+            try
+            {
+                var md = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                    "BIM Monkey", "CLAUDE.md");
+                if (System.IO.File.Exists(md))
+                    foreach (var line in System.IO.File.ReadAllLines(md))
+                        if (line.StartsWith("BIM_MONKEY_API_KEY="))
+                            return line.Substring("BIM_MONKEY_API_KEY=".Length).Trim();
+            }
+            catch { }
+            return null;
+        }
     }
 }

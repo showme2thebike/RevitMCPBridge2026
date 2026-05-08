@@ -621,6 +621,30 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { }
         }
 
+        // Zoning ribbon button — pre-loads with live parcel data already fetched
+        public void PreloadZoningPrompt(RevitMCPBridge.Commands.ParcelResult parcel)
+        {
+            try
+            {
+                var dataBlock = parcel.FormatForPrompt();
+                var prompt =
+                    $"I just looked up parcel data for {parcel.MatchedAddress ?? parcel.Address}. Here is what the county assessor API returned:\n\n" +
+                    $"{dataBlock}\n\n" +
+                    "Please help me with the following:\n" +
+                    "1. Store the key facts in project memory (zoning, lot area, setbacks) so they're available for future sessions\n" +
+                    "2. If Revit project parameters exist for lot area or zoning, populate them — use getProjectInfo first to see what's already set\n" +
+                    "3. Flag any immediate code implications I should know about (e.g. FAR constraints, height limits vs. my program)\n" +
+                    "4. Let me know what else you'd need from the jurisdiction to complete a full site code review";
+                Dispatcher.Invoke(() =>
+                {
+                    if (_inputTextBox != null)
+                        _inputTextBox.Text = prompt;
+                });
+                Activate();
+            }
+            catch { }
+        }
+
         private void HandleComplianceRun(string runId, JArray checks)
         {
             try

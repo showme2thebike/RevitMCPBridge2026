@@ -24,24 +24,6 @@ namespace RevitMCPBridge.Commands
 
     [Transaction(TransactionMode.ReadOnly)]
     [Regeneration(RegenerationOption.Manual)]
-    public class ZoningCommand : IExternalCommand
-    {
-        public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
-        {
-            TaskDialog.Show("Zoning & Parcel Data — Coming Soon",
-                "Pull parcel and zoning data from county assessor APIs directly into your model:\n\n" +
-                "• Lot area and dimensions\n" +
-                "• Zoning designation and allowed uses\n" +
-                "• Setbacks (front, rear, side)\n" +
-                "• Maximum height and FAR\n" +
-                "• Permit history\n\n" +
-                "Data auto-populated into Revit project parameters with national parcel coverage.");
-            return Result.Succeeded;
-        }
-    }
-
-    [Transaction(TransactionMode.ReadOnly)]
-    [Regeneration(RegenerationOption.Manual)]
     public class ProductDataCommand : IExternalCommand
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
