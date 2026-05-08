@@ -46,15 +46,16 @@ namespace RevitMCPBridge
                         ? "VICINITY MAP *"
                         : $"VICINITY MAP - {address.ToUpper()} *";
 
-                // Auto-scale: map coordinates are in geographic feet.
-                // Compute scale so the map fills ~8 inches wide on paper.
-                // scale = mapWidthFeet / targetPaperWidthFeet
-                double radiusFeet     = data["radiusFeet"]?.Value<double>() ?? (900 * 3.28084);
-                double mapWidthFeet   = radiusFeet * 2.0;
-                double targetWidthFt  = (parameters["targetPaperWidthInches"]?.Value<double>() ?? 8.0) / 12.0;
-                int    autoScale      = (int)(Math.Round(mapWidthFeet / targetWidthFt / 100.0) * 100);
-                autoScale             = Math.Max(1200, Math.Min(autoScale, 24000));
-                int    scaleDenom     = parameters["scale"]?.Value<int>() ?? autoScale;
+                // Auto-scale: snap to nearest standard Revit scale so view.Scale doesn't throw.
+                // Map coordinates are geographic feet; compute scale to fit ~8" wide on paper.
+                double radiusFeet    = data["radiusFeet"]?.Value<double>() ?? (900 * 3.28084);
+                double mapWidthFeet  = radiusFeet * 2.0;
+                double targetWidthFt = (parameters["targetPaperWidthInches"]?.Value<double>() ?? 8.0) / 12.0;
+                double rawScale      = mapWidthFeet / targetWidthFt;
+                // Snap to nearest standard architectural/engineering scale
+                int[] standardScales = { 120, 240, 480, 600, 1200, 2400, 4800, 6000, 9600, 12000, 24000 };
+                int autoScale = standardScales.OrderBy(s => Math.Abs(s - rawScale)).First();
+                int scaleDenom = parameters["scale"]?.Value<int>() ?? autoScale;
 
                 // Smallest available text note type
                 var textType = new FilteredElementCollector(doc)
@@ -69,7 +70,9 @@ namespace RevitMCPBridge
 
                 using (var trans = new Transaction(doc, "Create Vicinity Map Lines"))
                 {
-                    trans.Start();
+                    var txStatus = trans.Start();
+                    if (txStatus != TransactionStatus.Started)
+                        return ResponseBuilder.Error($"Transaction failed to start: {txStatus}").Build();
 
                     var viewFamilyType = new FilteredElementCollector(doc)
                         .OfClass(typeof(ViewFamilyType))
@@ -77,20 +80,24 @@ namespace RevitMCPBridge
                         .FirstOrDefault(t => t.ViewFamily == ViewFamily.Drafting);
 
                     if (viewFamilyType == null)
+                    {
+                        trans.RollBack();
                         return ResponseBuilder.Error("No drafting view family type found").Build();
+                    }
 
                     var view = ViewDrafting.Create(doc, viewFamilyType.Id);
-                    // Append timestamp suffix to guarantee unique name
+
+                    // Unique name
                     string safeName = viewName;
                     try { view.Name = safeName; }
-                    catch
-                    {
-                        safeName = $"{viewName} {DateTime.Now:HHmmss}";
-                        view.Name = safeName;
-                    }
-                    viewName   = safeName;
-                    view.Scale = scaleDenom;
-                    viewId     = view.Id;
+                    catch { safeName = $"{viewName} {DateTime.Now:HHmmss}"; view.Name = safeName; }
+                    viewName = safeName;
+
+                    // Set scale — if value rejected by Revit, fall back to 9600
+                    try { view.Scale = scaleDenom; }
+                    catch { scaleDenom = 9600; view.Scale = scaleDenom; }
+
+                    viewId = view.Id;
 
                     // Street lines
                     foreach (var seg in lines)
