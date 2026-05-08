@@ -3875,9 +3875,11 @@ namespace RevitMCPBridge2026.AgentFramework
             // Inject vicinity map routing instruction into the API message (invisible to user)
             if (IsVicinityMapRequest(message))
             {
-                message = "[MANDATORY ROUTING: For this vicinity map request you MUST call runScript with " +
-                          "scriptName=generate_vicinity_map.py. createVicinityMap does not exist — never use it. " +
-                          "No API key or proxy is needed. Warn the user it takes 60-90 seconds before calling.]\n\n" + message;
+                message = "[MANDATORY ROUTING: For this vicinity map request use this exact two-step workflow: " +
+                          "1) runScript with scriptName=generate_vicinity_map.py to fetch OSM data and write vicinity_map.json + PNG. " +
+                          "2) createVicinityMapLines to import the JSON as editable Revit detail lines and text notes. " +
+                          "createVicinityMap does not exist — never use it. No API key needed. " +
+                          "Warn the user the script takes 60-90 seconds before step 1.]\n\n" + message;
             }
             SetProcessing(true);
             ShowProgress("Thinking...");
