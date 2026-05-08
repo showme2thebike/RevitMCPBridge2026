@@ -3478,6 +3478,20 @@ namespace RevitMCPBridge2026.AgentFramework
             return starters.Any(s => lower.StartsWith(s) || lower.Contains(" " + s));
         }
 
+        private static readonly string[] _vicinityMapTriggers = new[]
+        {
+            "vicinity map", "vicinitymap", "site map", "sitemap",
+            "location map", "area map", "neighborhood map", "street map",
+            "surrounding streets", "map of the area", "generate a map",
+            "create a map", "make a map", "osm map", "proximity map"
+        };
+
+        private bool IsVicinityMapRequest(string msg)
+        {
+            var lower = msg.ToLower();
+            return System.Array.Exists(_vicinityMapTriggers, t => lower.Contains(t));
+        }
+
         private bool IsDoneSignal(string msg)
         {
             var lower = msg.ToLower().Trim();
@@ -3856,7 +3870,15 @@ namespace RevitMCPBridge2026.AgentFramework
             _lastToolCall = null;
 
             _inputTextBox.Text = "";
-            AddUserMessage(message);
+            AddUserMessage(message);  // show original in UI
+
+            // Inject vicinity map routing instruction into the API message (invisible to user)
+            if (IsVicinityMapRequest(message))
+            {
+                message = "[MANDATORY ROUTING: For this vicinity map request you MUST call runScript with " +
+                          "scriptName=generate_vicinity_map.py. createVicinityMap does not exist — never use it. " +
+                          "No API key or proxy is needed. Warn the user it takes 60-90 seconds before calling.]\n\n" + message;
+            }
             SetProcessing(true);
             ShowProgress("Thinking...");
 
