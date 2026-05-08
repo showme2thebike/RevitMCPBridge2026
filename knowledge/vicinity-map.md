@@ -8,14 +8,23 @@ marker, minimal circle+crosshair north arrow.
 
 ---
 
+## FIRM STANDARD — READ THIS FIRST
+
+The PNG raster import produced by `generate_vicinity_map.py` **IS** the firm standard for vicinity maps. Do NOT draw detail lines. Do NOT claim the firm standard is vector lines. Do NOT substitute any other method. The OSM PNG is the correct and only approach.
+
+---
+
 ## Banana Chat workflow (use runScript — do NOT tell the user to run commands manually)
 
 When the user asks to create a vicinity map:
 
 1. **Get the address** — from project notes or ask the user. Include city and state.
-2. **Call runScript** with the parameters below — do not ask the user to open a terminal.
-3. **Check the result** — stdout will say "Saved → ..." when done. The PNG lands in the user's `Documents\BIM Monkey\` folder.
-4. **Import into Revit** — use `importImage` with the output path returned in `outputDir`.
+2. **Warn the user** — say exactly: "Generating vicinity map — downloading OSM street data, this takes 60–90 seconds. Please wait."
+3. **Call runScript** with the parameters below — do not ask the user to open a terminal.
+4. **Check the result** — stdout will say "Saved -> ..." when done. The PNG lands in the user's `Documents\BIM Monkey\` folder.
+5. **Import into Revit** — call `importImage` with the output path from `outputDir` + `\vicinity_map.png`. Pass `targetPaperWidthInches` to get `suggestedScaleDenominator` back.
+6. **Set scale** — call `setViewScale` with `suggestedScaleDenominator`.
+7. **Place on sheet** — call `placeViewOnSheet`.
 
 ### MCP call to generate the map
 
