@@ -3973,7 +3973,7 @@ Any user request containing ""vicinity map"", ""site map"", ""location map"", ""
 2. Call runScript: scriptName=""generate_vicinity_map.py"", args = the quoted address followed by ""vicinity_map.png"" as a quoted filename
 3. On success, import the PNG into a new drafting view using importImage. Pass targetPaperWidthInches to get suggestedScaleDenominator back.
 4. Set view scale using setViewScale with the suggested denominator, then place on sheet.
-NEVER substitute detail lines or any other method for the OSM PNG. NEVER invent createVicinityMap, proxyVicinityMap, or any other method name. NEVER mention API keys or proxies. The PNG raster import IS the firm standard — do not claim otherwise.
+NEVER substitute detail lines or any other method for the OSM PNG. NEVER use createVicinityMap — it does not exist and has never existed. NEVER use proxyVicinityMap or any invented method name. NEVER mention API keys or proxies for OSM data. The PNG raster import via runScript IS the firm standard — do not claim otherwise.
 
 HALLUCINATION PREVENTION — MANDATORY:
 - NEVER invent MCP method names. The 705 methods are fixed and finite. If unsure whether a method exists, call listAllMethods FIRST — do not guess.
