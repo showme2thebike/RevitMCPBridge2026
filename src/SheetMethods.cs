@@ -3989,6 +3989,11 @@ namespace RevitMCPBridge
                 double x = parameters["x"] != null ? double.Parse(parameters["x"].ToString()) : 0.35;
                 double y = parameters["y"] != null ? double.Parse(parameters["y"].ToString()) : 0.85;
 
+                // Optional: target paper width in inches — used to compute suggestedScaleDenominator
+                double? targetPaperWidthInches = parameters["targetPaperWidthInches"] != null
+                    ? double.Parse(parameters["targetPaperWidthInches"].ToString())
+                    : (double?)null;
+
                 using (var trans = new Transaction(doc, "Import Image"))
                 {
                     trans.Start();
@@ -4012,7 +4017,13 @@ namespace RevitMCPBridge
                     double widthFeet = bbox != null ? bbox.Max.X - bbox.Min.X : 0;
                     double heightFeet = bbox != null ? bbox.Max.Y - bbox.Min.Y : 0;
 
-                    return ResponseBuilder.Success()
+                    // suggestedScaleDenominator: how large to set view scale so image fills targetPaperWidthInches
+                    // Formula: scaleDenominator = (widthFeet * 12) / targetPaperWidthInches
+                    int? suggestedScaleDenominator = null;
+                    if (targetPaperWidthInches.HasValue && targetPaperWidthInches.Value > 0 && widthFeet > 0)
+                        suggestedScaleDenominator = (int)Math.Round((widthFeet * 12) / targetPaperWidthInches.Value);
+
+                    var result = ResponseBuilder.Success()
                         .With("imageInstanceId", (int)imageInstance.Id.Value)
                         .With("imageTypeId", (int)imageType.Id.Value)
                         .With("viewId", (int)view.Id.Value)
@@ -4025,9 +4036,12 @@ namespace RevitMCPBridge
                             heightFeet,
                             widthInches = Math.Round(widthFeet * 12, 2),
                             heightInches = Math.Round(heightFeet * 12, 2)
-                        })
-                        .WithMessage("Image imported successfully")
-                        .Build();
+                        });
+
+                    if (suggestedScaleDenominator.HasValue)
+                        result = result.With("suggestedScaleDenominator", suggestedScaleDenominator.Value);
+
+                    return result.WithMessage("Image imported successfully").Build();
                 }
             }
             catch (Exception ex)

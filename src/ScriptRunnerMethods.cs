@@ -80,7 +80,7 @@ namespace RevitMCPBridge
                     RedirectStandardOutput = true,
                     RedirectStandardError  = true,
                     CreateNoWindow         = true,
-                    WorkingDirectory       = WrapperDir,
+                    WorkingDirectory       = OutputDir,  // relative output paths → Documents\BIM Monkey\
                 };
 
                 using (var proc = Process.Start(psi))
