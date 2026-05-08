@@ -293,22 +293,46 @@ namespace RevitMCPBridge
             standardsButton.Image      = CreateButtonIcon("standards", 16);
 
 
-            // ── Site & Code ───────────────────────────────────────────────
-            var compliancePanel = application.CreateRibbonPanel(_tabName, "Site & Code");
+            // ── Site Data ─────────────────────────────────────────────────
+            var siteDataPanel = application.CreateRibbonPanel(_tabName, "Site Data");
 
             var vicinityMapButtonData = new PushButtonData("VicinityMap", "Vicinity\nMap", asm,
                 "RevitMCPBridge2026.AgentFramework.LaunchVicinityMapCommand")
                 { ToolTip = "Generate a vicinity map from live OpenStreetMap data — creates editable street lines and labels in a drafting view, ready to place on your VM sheet" };
-            var vicinityMapButton = compliancePanel.AddItem(vicinityMapButtonData) as PushButton;
+            var vicinityMapButton = siteDataPanel.AddItem(vicinityMapButtonData) as PushButton;
             vicinityMapButton.LargeImage = CreateButtonIcon("vicinitymap", 32);
             vicinityMapButton.Image      = CreateButtonIcon("vicinitymap", 16);
+
+            var siteClimateButtonData = new PushButtonData("SiteClimate", "Site\nClimate", asm,
+                "RevitMCPBridge.Commands.SiteClimateCommand")
+                { ToolTip = "Coming soon — pull historical climate data, wind rose, precipitation, and heating/cooling degree days for any project location" };
+            var siteClimateButton = siteDataPanel.AddItem(siteClimateButtonData) as PushButton;
+            siteClimateButton.LargeImage = CreateButtonIcon("siteclimate", 32);
+            siteClimateButton.Image      = CreateButtonIcon("siteclimate", 16);
+
+            var zoningButtonData = new PushButtonData("Zoning", "Zoning", asm,
+                "RevitMCPBridge.Commands.ZoningCommand")
+                { ToolTip = "Coming soon — pull parcel data, zoning designation, lot area, and setbacks from county assessor and zoning APIs directly into your Revit model parameters" };
+            var zoningButton = siteDataPanel.AddItem(zoningButtonData) as PushButton;
+            zoningButton.LargeImage = CreateButtonIcon("zoning", 32);
+            zoningButton.Image      = CreateButtonIcon("zoning", 16);
+
+            // ── Code & Spec ───────────────────────────────────────────────
+            var codeSpecPanel = application.CreateRibbonPanel(_tabName, "Code & Spec");
 
             var codeCheckButtonData = new PushButtonData("CodeCheck", "Code\nCheck", asm,
                 "RevitMCPBridge2026.AgentFramework.LaunchComplianceCommand")
                 { ToolTip = "Run an IBC code compliance check — opens Banana Chat pre-loaded with a compliance prompt covering egress, occupancy loads, fire ratings, and more" };
-            var codeCheckButton = compliancePanel.AddItem(codeCheckButtonData) as PushButton;
+            var codeCheckButton = codeSpecPanel.AddItem(codeCheckButtonData) as PushButton;
             codeCheckButton.LargeImage = CreateButtonIcon("compliance", 32);
             codeCheckButton.Image      = CreateButtonIcon("compliance", 16);
+
+            var productDataButtonData = new PushButtonData("ProductData", "Product\nData", asm,
+                "RevitMCPBridge.Commands.ProductDataCommand")
+                { ToolTip = "Coming soon — query manufacturer product databases and auto-generate spec sections from model elements" };
+            var productDataButton = codeSpecPanel.AddItem(productDataButtonData) as PushButton;
+            productDataButton.LargeImage = CreateButtonIcon("productdata", 32);
+            productDataButton.Image      = CreateButtonIcon("productdata", 16);
 
             // ── Redline Review ─────────────────────────────────────────────
             var redlinePanel = application.CreateRibbonPanel(_tabName, "Redline Review");
@@ -673,6 +697,15 @@ namespace RevitMCPBridge
                             break;
                         case "quickmode":
                             DrawQuickModeIcon(dc, size);
+                            break;
+                        case "siteclimate":
+                            DrawSiteClimateIcon(dc, size);
+                            break;
+                        case "zoning":
+                            DrawZoningIcon(dc, size);
+                            break;
+                        case "productdata":
+                            DrawProductDataIcon(dc, size);
                             break;
                     }
                 }
@@ -1657,6 +1690,98 @@ namespace RevitMCPBridge
             var fill = new SolidColorBrush(Colors.White);
             var pen  = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, size * 0.04));
             dc.DrawRoundedRectangle(fill, pen, new Rect(m, m, size-2*m, size-2*m), r, r);
+        }
+
+        private void DrawSiteClimateIcon(DrawingContext dc, int size)
+        {
+            // Sun peeking above a cloud — flat white fill + dark outline
+            double s   = size / 32.0;
+            var fill   = new SolidColorBrush(Colors.White);
+            var pen    = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5 * s));
+            var rayPen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.8, 1.1 * s))
+                { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+
+            double cx = 16 * s, cy = 11 * s;
+
+            // Sun disk
+            dc.DrawEllipse(fill, pen, new Point(cx, cy), 4.5 * s, 4.5 * s);
+
+            // Sun rays — top + diagonals + sides
+            dc.DrawLine(rayPen, new Point(cx,          cy - 6.5*s), new Point(cx,          cy - 9*s));
+            dc.DrawLine(rayPen, new Point(cx + 4.6*s,  cy - 4.6*s), new Point(cx + 6.4*s,  cy - 6.4*s));
+            dc.DrawLine(rayPen, new Point(cx - 4.6*s,  cy - 4.6*s), new Point(cx - 6.4*s,  cy - 6.4*s));
+            dc.DrawLine(rayPen, new Point(cx - 6.5*s,  cy),          new Point(cx - 9*s,    cy));
+            dc.DrawLine(rayPen, new Point(cx + 6.5*s,  cy),          new Point(cx + 9*s,    cy));
+
+            // Cloud body — bumpy top, flat bottom, drawn over lower half of sun
+            var cloud = new StreamGeometry();
+            using (var ctx = cloud.Open())
+            {
+                ctx.BeginFigure(new Point(4*s, 26*s), true, true);
+                ctx.LineTo(new Point(28*s, 26*s), true, false);
+                ctx.ArcTo(new Point(25*s, 19*s), new Size(3.5*s, 3.5*s), 0, false, SweepDirection.Counterclockwise, true, false);
+                ctx.ArcTo(new Point(19*s, 17*s), new Size(4*s, 4*s),     0, false, SweepDirection.Counterclockwise, true, false);
+                ctx.ArcTo(new Point(13*s, 18*s), new Size(3.5*s, 3.5*s), 0, false, SweepDirection.Counterclockwise, true, false);
+                ctx.ArcTo(new Point(7*s,  21*s), new Size(4*s, 4*s),     0, false, SweepDirection.Counterclockwise, true, false);
+                ctx.ArcTo(new Point(4*s,  26*s), new Size(3*s, 3*s),     0, false, SweepDirection.Counterclockwise, true, false);
+            }
+            dc.DrawGeometry(fill, pen, cloud);
+        }
+
+        private void DrawZoningIcon(DrawingContext dc, int size)
+        {
+            // Lot boundary rectangle with inset setback rectangle and corner pin
+            double s    = size / 32.0;
+            var fill    = new SolidColorBrush(Colors.White);
+            var pen     = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5 * s));
+            var dashPen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.7, 1.0 * s))
+                { DashStyle = new DashStyle(new double[] { 3, 2 }, 0) };
+
+            // Outer lot boundary
+            dc.DrawRectangle(fill, pen, new Rect(2*s, 2*s, 28*s, 28*s));
+
+            // Inner setback dashed rectangle
+            dc.DrawRectangle(null, dashPen, new Rect(7*s, 7*s, 18*s, 18*s));
+
+            // Building footprint (solid small rect, centered)
+            dc.DrawRectangle(fill, pen, new Rect(11*s, 11*s, 10*s, 10*s));
+
+            // Corner marker — two short tick lines at top-left corner of setback rect
+            dc.DrawLine(pen, new Point(7*s, 4*s), new Point(7*s, 7*s));
+            dc.DrawLine(pen, new Point(4*s, 7*s), new Point(7*s, 7*s));
+        }
+
+        private void DrawProductDataIcon(DrawingContext dc, int size)
+        {
+            // Isometric box with spec label lines on front face — flat white fill + dark outline
+            double s    = size / 32.0;
+            var fill    = new SolidColorBrush(Colors.White);
+            var pen     = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5 * s));
+            var linePen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.7, 1.1 * s));
+
+            // Front face
+            dc.DrawRectangle(fill, pen, new Rect(3*s, 10*s, 19*s, 19*s));
+
+            // Top face
+            var topFace = new PathFigure { StartPoint = new Point(3*s, 10*s) };
+            topFace.Segments.Add(new LineSegment(new Point(11*s, 4*s),  true));
+            topFace.Segments.Add(new LineSegment(new Point(29*s, 4*s),  true));
+            topFace.Segments.Add(new LineSegment(new Point(22*s, 10*s), true));
+            topFace.IsClosed = true;
+            dc.DrawGeometry(fill, pen, new PathGeometry(new[] { topFace }));
+
+            // Right side face
+            var sideFace = new PathFigure { StartPoint = new Point(22*s, 10*s) };
+            sideFace.Segments.Add(new LineSegment(new Point(29*s,  4*s), true));
+            sideFace.Segments.Add(new LineSegment(new Point(29*s, 23*s), true));
+            sideFace.Segments.Add(new LineSegment(new Point(22*s, 29*s), true));
+            sideFace.IsClosed = true;
+            dc.DrawGeometry(fill, pen, new PathGeometry(new[] { sideFace }));
+
+            // Spec label lines on front face
+            dc.DrawLine(linePen, new Point(6*s, 16*s), new Point(19*s, 16*s));
+            dc.DrawLine(linePen, new Point(6*s, 20*s), new Point(17*s, 20*s));
+            dc.DrawLine(linePen, new Point(6*s, 24*s), new Point(13*s, 24*s));
         }
 
         // Dialog handling event

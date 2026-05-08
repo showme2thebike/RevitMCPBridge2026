@@ -22,9 +22,11 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 var uiApp = commandData.Application;
 
-                // If panel exists and is open, just bring it to front
-                if (_panel != null && _panel.IsVisible)
+                // If panel exists (visible or hidden), show and bring to front
+                if (_panel != null)
                 {
+                    _panel.Show();
+                    _panel.WindowState = System.Windows.WindowState.Normal;
                     _panel.Activate();
                     return Result.Succeeded;
                 }

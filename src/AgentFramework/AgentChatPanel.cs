@@ -59,6 +59,7 @@ namespace RevitMCPBridge2026.AgentFramework
             "BIM Monkey", "preferences.json");
         private bool _isProcessing;
         private bool _isClosing;
+        private bool _allowClose;
         private bool _subscriptionBlocked;
         private string _firmMemory;
         private string _projectNotes;
@@ -135,7 +136,7 @@ namespace RevitMCPBridge2026.AgentFramework
             Height = 700;
             MinWidth = 350;
             MinHeight = 400;
-            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            WindowStartupLocation = WindowStartupLocation.Manual;
             Background = new SolidColorBrush(Color.FromRgb(30, 30, 30));
 
             // Build UI
@@ -189,11 +190,17 @@ namespace RevitMCPBridge2026.AgentFramework
                 }
             };
 
-            // Cleanup and save on close
+            // Hide instead of close so conversation survives accidental X press
             Closing += (s, e) =>
             {
+                if (!_allowClose)
+                {
+                    e.Cancel = true;
+                    Hide();
+                    return;
+                }
                 _isClosing = true;
-                _agent?.NotifyInterrupted(); // sends session_outcome=interrupted if session was open
+                _agent?.NotifyInterrupted();
                 SaveSession();
                 DisconnectMCP();
                 _thinkingTimer?.Stop();
@@ -235,6 +242,15 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             base.OnSourceInitialized(e);
             var helper = new WindowInteropHelper(this);
+
+            // Parent to Revit's main window — panel stays above Revit, never gets buried behind it
+            helper.Owner = System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle;
+
+            // Position to right edge of work area on first show
+            var work = SystemParameters.WorkArea;
+            Left = work.Right - Width - 20;
+            Top  = work.Top + (work.Height - Height) / 2;
+
             _hwndSource = HwndSource.FromHwnd(helper.Handle);
             _hwndSource?.AddHook(WndProc);
             RegisterHotKey(helper.Handle, HOTKEY_ID, MOD_CTRL, VK_B);
@@ -251,6 +267,12 @@ namespace RevitMCPBridge2026.AgentFramework
                 handled = true;
             }
             return IntPtr.Zero;
+        }
+
+        public void Shutdown()
+        {
+            _allowClose = true;
+            Close();
         }
 
         protected override void OnClosed(EventArgs e)
