@@ -7,6 +7,7 @@ using Autodesk.Revit.UI;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using RevitMCPBridge.Helpers;
+using Serilog;
 
 // Suppress obsolete API warnings for backward compatibility with older Revit models
 #pragma warning disable CS0618
@@ -865,6 +866,9 @@ namespace RevitMCPBridge
                 var requestedIds = parameters["elementIds"].ToObject<int[]>()
                     .Select(id => new ElementId(id)).ToList();
 
+                bool dryRun = parameters["dryRun"]?.Value<bool>() ?? false;
+                Log.Information("deleteElements: dryRun={DryRun}, requestedCount={Count}", dryRun, requestedIds.Count);
+
                 // Pre-flight: diagnose each element before attempting deletion
                 var diagnostics = new List<object>();
                 var deletableIds = new List<ElementId>();
@@ -893,26 +897,48 @@ namespace RevitMCPBridge
                     return JsonConvert.SerializeObject(new
                     {
                         success = false,
+                        dryRun,
                         deletedCount = 0,
                         error = "No elements could be deleted",
                         diagnostics
                     });
                 }
 
-                using (var trans = new Transaction(doc, "Delete Elements"))
+                using (var trans = new Transaction(doc, dryRun ? "Delete Elements (dry run)" : "Delete Elements"))
                 {
                     trans.Start();
                     var failureOptions = trans.GetFailureHandlingOptions();
                     failureOptions.SetFailuresPreprocessor(new WarningSwallower());
                     trans.SetFailureHandlingOptions(failureOptions);
 
-                    var actuallyDeleted = doc.Delete(deletableIds);
+                    var cascadeDeleted = doc.Delete(deletableIds);
+
+                    if (dryRun)
+                    {
+                        trans.RollBack();
+                        Log.Information("deleteElements: dryRun rollback complete, wouldDeleteCount={Count}", cascadeDeleted.Count);
+                        var requestedSet = new HashSet<long>(deletableIds.Select(id => id.Value));
+                        var wouldDelete = cascadeDeleted
+                            .Select(id => new { elementId = (int)id.Value, cascade = !requestedSet.Contains(id.Value) })
+                            .OrderBy(e => e.cascade).ThenBy(e => e.elementId)
+                            .ToList();
+                        return JsonConvert.SerializeObject(new
+                        {
+                            success = true,
+                            dryRun = true,
+                            wouldDeleteCount = cascadeDeleted.Count,
+                            wouldDelete,
+                            diagnostics = diagnostics.Count > 0 ? diagnostics : null
+                        });
+                    }
+
                     trans.Commit();
 
                     return JsonConvert.SerializeObject(new
                     {
-                        success = actuallyDeleted.Count > 0,
-                        deletedCount = actuallyDeleted.Count,
+                        success = cascadeDeleted.Count > 0,
+                        dryRun = false,
+                        deletedCount = cascadeDeleted.Count,
                         requestedCount = requestedIds.Count,
                         diagnostics = diagnostics.Count > 0 ? diagnostics : null
                     });

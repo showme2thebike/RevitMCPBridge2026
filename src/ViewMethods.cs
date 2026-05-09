@@ -264,14 +264,43 @@ namespace RevitMCPBridge
                                     ? new XYZ(dirArr[0], dirArr[1], dirArr.Length > 2 ? dirArr[2] : 0).Normalize()
                                     : null;
 
-                var elevationMarkerTypeId = new FilteredElementCollector(doc)
+                // Pick the right elevation family type.
+                // markerType param: "interior" (default, 4-way), "exterior" (single arrow), or exact type name.
+                // Interior elevation types support up to 4 views; exterior types support 1.
+                var markerTypeParam = parameters["markerType"]?.ToString()?.ToLowerInvariant() ?? "interior";
+                var allElevTypes = new FilteredElementCollector(doc)
                     .OfClass(typeof(ViewFamilyType))
                     .Cast<ViewFamilyType>()
-                    .FirstOrDefault(vft => vft.ViewFamily == ViewFamily.Elevation)
-                    ?.Id;
+                    .Where(vft => vft.ViewFamily == ViewFamily.Elevation)
+                    .ToList();
 
-                if (elevationMarkerTypeId == null)
-                    return ResponseBuilder.Error("Elevation view type not found", "TYPE_NOT_FOUND").Build();
+                ViewFamilyType elevType = null;
+                if (markerTypeParam == "interior")
+                {
+                    // Prefer types whose name contains "Interior"
+                    elevType = allElevTypes.FirstOrDefault(t => t.Name.IndexOf("Interior", StringComparison.OrdinalIgnoreCase) >= 0)
+                            ?? allElevTypes.FirstOrDefault();
+                }
+                else if (markerTypeParam == "exterior")
+                {
+                    // Prefer types that do NOT contain "Interior"
+                    elevType = allElevTypes.FirstOrDefault(t => t.Name.IndexOf("Interior", StringComparison.OrdinalIgnoreCase) < 0)
+                            ?? allElevTypes.FirstOrDefault();
+                }
+                else
+                {
+                    // Exact name match
+                    elevType = allElevTypes.FirstOrDefault(t => t.Name.Equals(markerTypeParam, StringComparison.OrdinalIgnoreCase))
+                            ?? allElevTypes.FirstOrDefault();
+                }
+
+                if (elevType == null)
+                {
+                    var typeNames = string.Join(", ", allElevTypes.Select(t => $"'{t.Name}'"));
+                    return ResponseBuilder.Error(
+                        $"No elevation view type found for markerType='{markerTypeParam}'. Available: {typeNames}", "TYPE_NOT_FOUND").Build();
+                }
+                var elevationMarkerTypeId = elevType.Id;
 
                 double appliedRotationDeg = 0;
 
@@ -342,12 +371,18 @@ namespace RevitMCPBridge
 
                     return ResponseBuilder.Success()
                         .WithView((int)elevationView.Id.Value, finalName, "Elevation")
-                        .With("markerId", (int)marker.Id.Value)
-                        .With("markerIndex", markerIdx)
+                        .With("markerId",          (int)marker.Id.Value)
+                        .With("markerIndex",       markerIdx)
+                        .With("maximumViewCount",  marker.MaximumViewCount)
+                        .With("markerTypeName",    elevType.Name)
                         .With("appliedRotationDeg", appliedRotationDeg)
-                        .With("note", dir != null
-                            ? "Marker rotated so index-0 faces the requested direction. Default assumption: index-0 = East (+X). If the result is 90° off, subtract or add 90 from your direction angle."
-                            : "No direction specified — marker left at default orientation.")
+                        .With("note", marker.MaximumViewCount < 4
+                            ? $"Marker type '{elevType.Name}' only supports {marker.MaximumViewCount} view(s). " +
+                              "To get a 4-way interior elevation, call createElevation with markerType='interior'. " +
+                              "If no Interior Elevation type exists in this model, load one from the library first."
+                            : (dir != null
+                                ? "Marker rotated so index-0 faces the requested direction."
+                                : "No direction specified — marker left at default orientation."))
                         .Build();
                 }
             }
@@ -386,16 +421,26 @@ namespace RevitMCPBridge
                 if (markerIndex < 0 || markerIndex > 3)
                     return ResponseBuilder.Error("markerIndex must be 0–3", "INVALID_PARAM").Build();
 
-                // Check if this index already has a view (GetElevation returns null/throws if none)
+                // Check that this marker family supports multiple views
+                int maxViews = marker.MaximumViewCount;
+                if (markerIndex >= maxViews)
+                    return ResponseBuilder.Error(
+                        $"This marker only supports {maxViews} view(s) — markerIndex {markerIndex} is out of range. " +
+                        "The marker was created with a single-arrow family. " +
+                        "To create a 4-way interior elevation, call createElevation with markerType='interior' " +
+                        "so Revit uses an Interior Elevation family type (maximumViewCount=4).",
+                        "MARKER_SINGLE_ARROW").Build();
+
+                // Check if this index already has a view
                 try
                 {
                     var existingId = marker.GetViewId(markerIndex);
                     if (existingId != null && existingId != ElementId.InvalidElementId)
                         return ResponseBuilder.Error(
-                            $"markerIndex {markerIndex} already has an elevation view (id {existingId.Value}) on this marker. " +
-                            "Use a different index (0–3).", "ALREADY_EXISTS").Build();
+                            $"markerIndex {markerIndex} already has an elevation view (id {existingId.Value}) on this marker.",
+                            "ALREADY_EXISTS").Build();
                 }
-                catch { /* GetViewId not available in this API version — proceed, CreateElevation will throw if already used */ }
+                catch { /* GetViewId may not exist in all API versions — CreateElevation will throw if index is taken */ }
 
                 using (var trans = new Transaction(doc, "Add Elevation to Marker"))
                 {
