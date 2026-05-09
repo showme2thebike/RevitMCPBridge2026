@@ -348,12 +348,12 @@ namespace RevitMCPBridge
             occupancyButton.LargeImage = CreateButtonIcon("occupancy", 32);
             occupancyButton.Image      = CreateButtonIcon("occupancy", 16);
 
-            var epdButtonData = new PushButtonData("EPD", "EPDs\n(EC3)", asm,
-                "RevitMCPBridge.Commands.EPDCommand")
-                { ToolTip = "Coming soon — pull Environmental Product Declaration (EPD) data from EC3, compare GWP across products, and tag Revit elements with embodied carbon data" };
+            var epdButtonData = new PushButtonData("EC3", "EC3", asm,
+                "RevitMCPBridge.Commands.EC3Command")
+                { ToolTip = "Search EC3 (Building Transparency) for Environmental Product Declarations — compare embodied carbon (GWP) across products, sorted lowest first, and load into Banana Chat for analysis" };
             var epdButton = codeSpecPanel.AddItem(epdButtonData) as PushButton;
-            epdButton.LargeImage = CreateButtonIcon("epd", 32);
-            epdButton.Image      = CreateButtonIcon("epd", 16);
+            epdButton.LargeImage = CreateButtonIcon("ec3", 32);
+            epdButton.Image      = CreateButtonIcon("ec3", 16);
 
             var productDataButtonData = new PushButtonData("ProductData", "Product\nData", asm,
                 "RevitMCPBridge.Commands.ProductDataCommand")
@@ -741,8 +741,8 @@ namespace RevitMCPBridge
                         case "occupancy":
                             DrawOccupancyIcon(dc, size);
                             break;
-                        case "epd":
-                            DrawEPDIcon(dc, size);
+                        case "ec3":
+                            DrawEC3Icon(dc, size);
                             break;
                         case "productdata":
                             DrawProductDataIcon(dc, size);
@@ -1905,7 +1905,7 @@ namespace RevitMCPBridge
             dc.DrawLine(arrowPen, new Point(27*s, 19.5*s), new Point(30*s, 16*s));
         }
 
-        private void DrawEPDIcon(DrawingContext dc, int size)
+        private void DrawEC3Icon(DrawingContext dc, int size)
         {
             // Leaf inside a circle — flat white + dark outline (environmental/green theme)
             double s    = size / 32.0;

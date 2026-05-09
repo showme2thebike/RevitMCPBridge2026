@@ -712,6 +712,26 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { }
         }
 
+        public void PreloadEC3Prompt(RevitMCPBridge.Commands.EC3Result result)
+        {
+            try
+            {
+                var dataBlock = result.FormatForPrompt();
+                var prompt =
+                    $"I searched EC3 for \"{result.Query}\" and got back {result.Epds.Count} EPDs (of {result.Total} total). Here they are, sorted lowest GWP first:\n\n" +
+                    $"{dataBlock}\n\n" +
+                    "Please help me:\n" +
+                    "1. Identify the lowest-carbon options and explain what drives the GWP differences\n" +
+                    "2. Flag any products where GWP is significantly better or worse than the industry median shown\n" +
+                    "3. If I tell you how much of this material the project needs (volume or weight), calculate the total embodied carbon\n" +
+                    "4. Note which products would be compliant for LEED v4.1 MRc2 (EPD credit) or LEED v4 MRc4\n" +
+                    "5. Recommend whether it's worth requesting a project-specific EPD from the manufacturer";
+                Dispatcher.Invoke(() => { if (_inputTextBox != null) _inputTextBox.Text = prompt; });
+                Activate();
+            }
+            catch { }
+        }
+
         public void PreloadOccupancyPrompt()
         {
             try

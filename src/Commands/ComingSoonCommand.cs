@@ -4,24 +4,7 @@ using Autodesk.Revit.UI;
 
 namespace RevitMCPBridge.Commands
 {
-    [Transaction(TransactionMode.ReadOnly)]
-    [Regeneration(RegenerationOption.Manual)]
-    public class EPDCommand : IExternalCommand
-    {
-        public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
-        {
-            TaskDialog.Show("EPDs via EC3 — Coming Soon",
-                "Pull Environmental Product Declaration (EPD) data from EC3 (Embodied Carbon in Construction Calculator):\n\n" +
-                "• Search EC3's open database of 100k+ EPDs by material category\n" +
-                "• Compare Global Warming Potential (GWP) across comparable products\n" +
-                "• Tag Revit elements with EPD data (manufacturer, GWP, declared unit)\n" +
-                "• Export embodied carbon summary for LEED or LCA submittals\n\n" +
-                "EC3 is maintained by Building Transparency — no subscription required.");
-            return Result.Succeeded;
-        }
-    }
-
-    [Transaction(TransactionMode.ReadOnly)]
+[Transaction(TransactionMode.ReadOnly)]
     [Regeneration(RegenerationOption.Manual)]
     public class ProductDataCommand : IExternalCommand
     {
