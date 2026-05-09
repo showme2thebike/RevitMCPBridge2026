@@ -3295,7 +3295,7 @@ namespace RevitMCPBridge2026.AgentFramework
             if (string.IsNullOrEmpty(note))
                 return JsonConvert.SerializeObject(new { success = false, error = "note is required" });
 
-            var project = parameters?["project"]?.ToString() ?? _sessionProjectName ?? "Unknown";
+            var project = parameters?["projectName"]?.ToString() ?? parameters?["project"]?.ToString() ?? _sessionProjectName ?? "Unknown";
 
             if (string.IsNullOrEmpty(_bimMonkeyApiKey))
                 return JsonConvert.SerializeObject(new { success = false, error = "No BIM Monkey API key — cannot sync to backend" });
@@ -3307,7 +3307,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
                     client.Timeout = TimeSpan.FromSeconds(10);
 
-                    var body = JsonConvert.SerializeObject(new { project, note });
+                    var body = JsonConvert.SerializeObject(new { project_name = project, note });
                     var content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
                     var resp = await client.PostAsync(
                         "https://bimmonkey-production.up.railway.app/api/firms/project-notes", content);
