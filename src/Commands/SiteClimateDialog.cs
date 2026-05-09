@@ -254,6 +254,8 @@ namespace RevitMCPBridge.Commands
                 _statusBlock.Visibility = Visibility.Collapsed;
                 _resultBlock.Text = Result.FormatForPrompt();
                 _resultPanel.Visibility = Visibility.Visible;
+                _resultBlock.Focus();
+                _resultBlock.SelectAll();
             }
             catch (Exception ex)
             {

@@ -107,7 +107,7 @@ namespace RevitMCPBridge.Commands
             _apiKey     = apiKey;
             _railwayUrl = railwayUrl;
 
-            Title  = "Zoning & Parcel Lookup";
+            Title  = "Zoning Lookup";
             Width  = 480;
             Height = 520;
             MinWidth  = 400;
@@ -126,7 +126,7 @@ namespace RevitMCPBridge.Commands
             // Title
             root.Children.Add(new TextBlock
             {
-                Text       = "Look up parcel data for a project address",
+                Text       = "Look up zoning regulations for a project address",
                 Foreground = new SolidColorBrush(Colors.White),
                 FontSize   = 14,
                 Margin     = new Thickness(0, 0, 0, 16)
@@ -354,6 +354,8 @@ namespace RevitMCPBridge.Commands
                 _statusBlock.Visibility = Visibility.Collapsed;
                 _resultBlock.Text       = disp.ToString().Trim();
                 _resultPanel.Visibility = Visibility.Visible;
+                _resultBlock.Focus();
+                _resultBlock.SelectAll();
             }
             catch (Exception ex)
             {

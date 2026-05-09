@@ -218,6 +218,8 @@ namespace RevitMCPBridge.Commands
                 _statusBlock.Visibility = Visibility.Collapsed;
                 _resultBlock.Text = sb.ToString().Trim();
                 _resultPanel.Visibility = Visibility.Visible;
+                _resultBlock.Focus();
+                _resultBlock.SelectAll();
             }
             catch (Exception ex)
             {
