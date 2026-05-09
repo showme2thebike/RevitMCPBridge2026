@@ -2477,6 +2477,56 @@ namespace RevitMCPBridge2026.AgentFramework
             }
         }
 
+        private async Task<string> HandleParcelLookupAsync(JObject parameters)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+                return JsonConvert.SerializeObject(new { success = false, error = "BIM Monkey API key not configured." });
+            var address = parameters?["address"]?.ToString();
+            if (string.IsNullOrEmpty(address))
+                return JsonConvert.SerializeObject(new { success = false, error = "address parameter is required" });
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(20) })
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    var body = new JObject { ["address"] = address }.ToString(Newtonsoft.Json.Formatting.None);
+                    var resp = await client.PostAsync(
+                        "https://bimmonkey-production.up.railway.app/api/parcel/lookup",
+                        new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json"));
+                    var raw = await resp.Content.ReadAsStringAsync();
+                    if (!resp.IsSuccessStatusCode)
+                        return JsonConvert.SerializeObject(new { success = false, error = $"Parcel lookup failed ({(int)resp.StatusCode}): {raw}" });
+                    return JsonConvert.SerializeObject(new { success = true, data = JToken.Parse(raw) });
+                }
+            }
+            catch (Exception ex) { return JsonConvert.SerializeObject(new { success = false, error = ex.Message }); }
+        }
+
+        private async Task<string> HandleClimateLookupAsync(JObject parameters)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+                return JsonConvert.SerializeObject(new { success = false, error = "BIM Monkey API key not configured." });
+            var address = parameters?["address"]?.ToString();
+            if (string.IsNullOrEmpty(address))
+                return JsonConvert.SerializeObject(new { success = false, error = "address parameter is required" });
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) })
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    var body = new JObject { ["address"] = address }.ToString(Newtonsoft.Json.Formatting.None);
+                    var resp = await client.PostAsync(
+                        "https://bimmonkey-production.up.railway.app/api/climate/lookup",
+                        new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json"));
+                    var raw = await resp.Content.ReadAsStringAsync();
+                    if (!resp.IsSuccessStatusCode)
+                        return JsonConvert.SerializeObject(new { success = false, error = $"Climate lookup failed ({(int)resp.StatusCode}): {raw}" });
+                    return JsonConvert.SerializeObject(new { success = true, data = JToken.Parse(raw) });
+                }
+            }
+            catch (Exception ex) { return JsonConvert.SerializeObject(new { success = false, error = ex.Message }); }
+        }
+
         private async Task<string> ExecuteMCPMethodAsync(string methodName, JObject parameters)
         {
             // Handle local tools (knowledge base) - don't need MCP
@@ -2530,9 +2580,15 @@ namespace RevitMCPBridge2026.AgentFramework
 
             // BIM Monkey: query the approved library on Railway
             if (methodName == "queryLibrary")
-            {
                 return await HandleQueryLibraryAsync(parameters);
-            }
+
+            // BIM Monkey: parcel + zoning lookup
+            if (methodName == "parcelLookup")
+                return await HandleParcelLookupAsync(parameters);
+
+            // BIM Monkey: climate zone + design conditions lookup
+            if (methodName == "climateLookup")
+                return await HandleClimateLookupAsync(parameters);
 
             // Handle file operation tools locally
             var fileResult = await HandleFileOperationAsync(methodName, parameters);

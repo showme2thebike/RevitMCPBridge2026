@@ -11,23 +11,33 @@ namespace RevitMCPBridge.Commands
 {
     public class ParcelResult
     {
-        public string Address        { get; set; }
-        public string MatchedAddress { get; set; }
-        public double? Lat           { get; set; }
-        public double? Lng           { get; set; }
-        public string ParcelId       { get; set; }
-        public int?   LotArea        { get; set; }
-        public double? LotAreaAcres  { get; set; }
-        public string Zoning         { get; set; }
-        public string ZoningDescription { get; set; }
-        public JObject Setbacks      { get; set; }
-        public double? Far           { get; set; }
-        public double? MaxHeight     { get; set; }
-        public JArray  PermitHistory { get; set; }
-        public string Source         { get; set; }
-        public string Coverage       { get; set; }
-        public JArray  Notes         { get; set; }
-        public string Error          { get; set; }
+        public string   Address          { get; set; }
+        public string   MatchedAddress   { get; set; }
+        public double?  Lat              { get; set; }
+        public double?  Lng              { get; set; }
+        public string   ParcelId         { get; set; }
+        public int?     LotArea          { get; set; }
+        public double?  LotAreaAcres     { get; set; }
+        public string   Owner            { get; set; }
+        public int?     YearBuilt        { get; set; }
+        public long?    AssessedValue    { get; set; }
+        public int?     BuildingArea     { get; set; }
+        public string   PropType         { get; set; }
+        public string   Zoning           { get; set; }
+        public string   ZoningDescription { get; set; }
+        public string   ZoningCategory   { get; set; }
+        public JObject  Setbacks         { get; set; }
+        public double?  Far              { get; set; }
+        public double?  MaxHeight        { get; set; }
+        public double?  LotCoverage      { get; set; }
+        public JArray   PermittedUses    { get; set; }
+        public JArray   ConditionalUses  { get; set; }
+        public JArray   Overlays         { get; set; }
+        public JArray   PermitHistory    { get; set; }
+        public string   Source           { get; set; }
+        public string   Coverage         { get; set; }
+        public JArray   Notes            { get; set; }
+        public string   Error            { get; set; }
 
         public string FormatForPrompt()
         {
@@ -35,20 +45,30 @@ namespace RevitMCPBridge.Commands
             sb.AppendLine($"Address: {MatchedAddress ?? Address}");
             if (ParcelId    != null) sb.AppendLine($"Parcel ID: {ParcelId}");
             if (LotArea     != null) sb.AppendLine($"Lot Area: {LotArea:N0} sq ft ({LotAreaAcres:0.000} acres)");
-            if (Zoning      != null) sb.AppendLine($"Zoning: {Zoning}{(ZoningDescription != null ? $" ({ZoningDescription})" : "")}");
+            if (Owner       != null) sb.AppendLine($"Owner: {Owner}");
+            if (YearBuilt   != null) sb.AppendLine($"Year Built: {YearBuilt}");
+            if (AssessedValue != null) sb.AppendLine($"Assessed Value: ${AssessedValue:N0}");
+            if (BuildingArea != null) sb.AppendLine($"Building Footprint: {BuildingArea:N0} sq ft");
+            if (PropType    != null) sb.AppendLine($"Property Type: {PropType}");
+            if (Zoning      != null) sb.AppendLine($"Zoning: {Zoning}{(ZoningDescription != null ? $" — {ZoningDescription}" : "")}{(ZoningCategory != null ? $" ({ZoningCategory})" : "")}");
 
             if (Setbacks != null)
             {
                 sb.AppendLine("Setbacks:");
-                if (Setbacks["front"]        != null) sb.AppendLine($"  Front:         {Setbacks["front"]}\'");
-                if (Setbacks["rear"]         != null) sb.AppendLine($"  Rear:          {Setbacks["rear"]}\'");
-                if (Setbacks["sideInterior"] != null) sb.AppendLine($"  Side (int):    {Setbacks["sideInterior"]}\'");
-                if (Setbacks["sideStreet"]   != null) sb.AppendLine($"  Side (street): {Setbacks["sideStreet"]}\'");
+                if (Setbacks["front"]        != null) sb.AppendLine($"  Front:         {Setbacks["front"]}'");
+                if (Setbacks["rear"]         != null) sb.AppendLine($"  Rear:          {Setbacks["rear"]}'");
+                if (Setbacks["sideInterior"] != null) sb.AppendLine($"  Side (int):    {Setbacks["sideInterior"]}'");
+                if (Setbacks["sideStreet"]   != null) sb.AppendLine($"  Side (street): {Setbacks["sideStreet"]}'");
                 if (Setbacks["notes"]        != null) sb.AppendLine($"  Note: {Setbacks["notes"]}");
             }
 
-            if (Far       != null) sb.AppendLine($"Max FAR: {Far}");
-            if (MaxHeight != null) sb.AppendLine($"Max Height: {MaxHeight}\'");
+            if (Far         != null) sb.AppendLine($"Max FAR: {Far}");
+            if (MaxHeight   != null) sb.AppendLine($"Max Height: {MaxHeight}'");
+            if (LotCoverage != null) sb.AppendLine($"Max Lot Coverage: {LotCoverage}%");
+
+            if (PermittedUses   != null && PermittedUses.Count   > 0) sb.AppendLine($"Permitted Uses: {string.Join(", ", PermittedUses)}");
+            if (ConditionalUses != null && ConditionalUses.Count > 0) sb.AppendLine($"Conditional Uses: {string.Join(", ", ConditionalUses)}");
+            if (Overlays        != null && Overlays.Count        > 0) sb.AppendLine($"Overlay Districts: {string.Join(", ", Overlays)}");
 
             if (PermitHistory != null && PermitHistory.Count > 0)
             {
@@ -61,7 +81,7 @@ namespace RevitMCPBridge.Commands
                 foreach (var n in Notes)
                     sb.AppendLine($"Note: {n}");
 
-            sb.AppendLine($"Source: {Source}");
+            if (Source != null) sb.AppendLine($"Source: {Source}");
             return sb.ToString().Trim();
         }
     }
@@ -72,7 +92,7 @@ namespace RevitMCPBridge.Commands
         private Button      _lookupBtn;
         private Button      _openChatBtn;
         private Button      _cancelBtn;
-        private TextBlock   _resultBlock;
+        private TextBox     _resultBlock;
         private TextBlock   _statusBlock;
         private StackPanel  _resultPanel;
 
@@ -179,12 +199,17 @@ namespace RevitMCPBridge.Commands
                 Padding         = new Thickness(12),
                 Margin          = new Thickness(0, 0, 0, 16)
             };
-            _resultBlock = new TextBlock
+            _resultBlock = new TextBox
             {
-                FontSize    = 12,
-                Foreground  = new SolidColorBrush(Colors.White),
-                FontFamily  = new FontFamily("Consolas"),
-                TextWrapping = TextWrapping.Wrap
+                IsReadOnly      = true,
+                IsTabStop       = false,
+                FontSize        = 12,
+                Foreground      = new SolidColorBrush(Colors.White),
+                FontFamily      = new FontFamily("Consolas"),
+                TextWrapping    = TextWrapping.Wrap,
+                Background      = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding         = new Thickness(0),
             };
             resultBorder.Child = _resultBlock;
             _resultPanel.Children.Add(resultBorder);
@@ -274,21 +299,60 @@ namespace RevitMCPBridge.Commands
                     ParcelId         = obj["parcelId"]?.ToString(),
                     LotArea          = obj["lotArea"]?.ToObject<int?>(),
                     LotAreaAcres     = obj["lotAreaAcres"]?.ToObject<double?>(),
+                    Owner            = obj["owner"]?.ToString(),
+                    YearBuilt        = obj["yearBuilt"]?.ToObject<int?>(),
+                    AssessedValue    = obj["assessedValue"]?.ToObject<long?>(),
+                    BuildingArea     = obj["buildingArea"]?.ToObject<int?>(),
+                    PropType         = obj["propType"]?.ToString(),
                     Zoning           = obj["zoning"]?.ToString(),
                     ZoningDescription = obj["zoningDescription"]?.ToString(),
+                    ZoningCategory   = obj["zoningCategory"]?.ToString(),
                     Setbacks         = obj["setbacks"] as JObject,
                     Far              = obj["far"]?.ToObject<double?>(),
                     MaxHeight        = obj["maxHeight"]?.ToObject<double?>(),
-                    PermitHistory    = obj["permitHistory"] as JArray,
-                    Notes            = obj["notes"] as JArray,
+                    LotCoverage      = obj["lotCoverage"]?.ToObject<double?>(),
+                    PermittedUses    = obj["permittedUses"]   as JArray,
+                    ConditionalUses  = obj["conditionalUses"] as JArray,
+                    Overlays         = obj["overlays"]        as JArray,
+                    PermitHistory    = obj["permitHistory"]   as JArray,
+                    Notes            = obj["notes"]           as JArray,
                     Source           = obj["coverage"]?.ToString() == "address_only"
                                          ? "Geocoded — no parcel data available for this location yet"
                                          : obj["source"]?.ToString(),
                     Coverage         = obj["coverage"]?.ToString()
                 };
 
+                // Zoning dialog shows code-relevant data only
+                // (Parcel ID, lot area, owner, permits → those live in their own dialogs)
+                var disp = new System.Text.StringBuilder();
+                disp.AppendLine($"Address:  {Result.MatchedAddress ?? Result.Address}");
+                if (Result.Zoning != null)
+                {
+                    var z = Result.Zoning;
+                    if (Result.ZoningDescription != null) z += $" — {Result.ZoningDescription}";
+                    if (Result.ZoningCategory    != null) z += $" ({Result.ZoningCategory})";
+                    disp.AppendLine($"Zoning:   {z}");
+                }
+                if (Result.Setbacks != null)
+                {
+                    disp.AppendLine("Setbacks:");
+                    if (Result.Setbacks["front"]        != null) disp.AppendLine($"  Front:      {Result.Setbacks["front"]}'");
+                    if (Result.Setbacks["rear"]         != null) disp.AppendLine($"  Rear:       {Result.Setbacks["rear"]}'");
+                    if (Result.Setbacks["sideInterior"] != null) disp.AppendLine($"  Side (int): {Result.Setbacks["sideInterior"]}'");
+                    if (Result.Setbacks["sideStreet"]   != null) disp.AppendLine($"  Side (str): {Result.Setbacks["sideStreet"]}'");
+                }
+                if (Result.Far        != null) disp.AppendLine($"Max FAR:  {Result.Far}");
+                if (Result.MaxHeight  != null) disp.AppendLine($"Height:   {Result.MaxHeight}'");
+                if (Result.LotCoverage != null) disp.AppendLine($"Lot Cov:  {Result.LotCoverage}%");
+                if (Result.PermittedUses   != null && Result.PermittedUses.Count   > 0) disp.AppendLine($"Permitted: {string.Join(", ", Result.PermittedUses)}");
+                if (Result.ConditionalUses != null && Result.ConditionalUses.Count > 0) disp.AppendLine($"Conditional: {string.Join(", ", Result.ConditionalUses)}");
+                if (Result.Overlays        != null && Result.Overlays.Count        > 0) disp.AppendLine($"Overlays: {string.Join(", ", Result.Overlays)}");
+                if (Result.Notes != null)
+                    foreach (var n in Result.Notes) disp.AppendLine($"Note: {n}");
+                if (Result.Source != null) disp.AppendLine($"Source:   {Result.Source}");
+
                 _statusBlock.Visibility = Visibility.Collapsed;
-                _resultBlock.Text       = Result.FormatForPrompt();
+                _resultBlock.Text       = disp.ToString().Trim();
                 _resultPanel.Visibility = Visibility.Visible;
             }
             catch (Exception ex)

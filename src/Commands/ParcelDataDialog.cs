@@ -14,7 +14,7 @@ namespace RevitMCPBridge.Commands
         private Button     _lookupBtn;
         private Button     _openChatBtn;
         private Button     _cancelBtn;
-        private TextBlock  _resultBlock;
+        private TextBox    _resultBlock;
         private TextBlock  _statusBlock;
         private StackPanel _resultPanel;
 
@@ -98,10 +98,17 @@ namespace RevitMCPBridge.Commands
                 BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(12), Margin = new Thickness(0, 0, 0, 16)
             };
-            _resultBlock = new TextBlock
+            _resultBlock = new TextBox
             {
-                FontSize = 12, Foreground = new SolidColorBrush(Colors.White),
-                FontFamily = new FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap
+                IsReadOnly      = true,
+                IsTabStop       = false,
+                FontSize        = 12,
+                Foreground      = new SolidColorBrush(Colors.White),
+                FontFamily      = new FontFamily("Consolas"),
+                TextWrapping    = TextWrapping.Wrap,
+                Background      = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding         = new Thickness(0),
             };
             border.Child = _resultBlock;
             _resultPanel.Children.Add(border);
@@ -185,16 +192,25 @@ namespace RevitMCPBridge.Commands
                     ParcelId       = obj["parcelId"]?.ToString(),
                     LotArea        = obj["lotArea"]?.ToObject<int?>(),
                     LotAreaAcres   = obj["lotAreaAcres"]?.ToObject<double?>(),
+                    Owner          = obj["owner"]?.ToString(),
+                    YearBuilt      = obj["yearBuilt"]?.ToObject<int?>(),
+                    AssessedValue  = obj["assessedValue"]?.ToObject<long?>(),
+                    BuildingArea   = obj["buildingArea"]?.ToObject<int?>(),
+                    PropType       = obj["propType"]?.ToString(),
                     Source         = obj["source"]?.ToString(),
                 };
 
                 var sb = new System.Text.StringBuilder();
                 sb.AppendLine($"Address:    {Result.MatchedAddress ?? Result.Address}");
-                if (Result.ParcelId   != null) sb.AppendLine($"Parcel ID:  {Result.ParcelId}");
-                if (Result.LotArea    != null) sb.AppendLine($"Lot Area:   {Result.LotArea:N0} sq ft");
-                if (Result.LotAreaAcres != null) sb.AppendLine($"            {Result.LotAreaAcres:0.000} acres");
-                if (Result.Lat        != null) sb.AppendLine($"Coords:     {Result.Lat:0.0000}, {Result.Lng:0.0000}");
-                if (Result.Source     != null) sb.AppendLine($"Source:     {Result.Source}");
+                if (Result.ParcelId     != null) sb.AppendLine($"Parcel ID:  {Result.ParcelId}");
+                if (Result.LotArea      != null) sb.AppendLine($"Lot Area:   {Result.LotArea:N0} sq ft  ({Result.LotAreaAcres:0.000} acres)");
+                if (Result.BuildingArea != null) sb.AppendLine($"Bldg Area:  {Result.BuildingArea:N0} sq ft (footprint)");
+                if (Result.Owner        != null) sb.AppendLine($"Owner:      {Result.Owner}");
+                if (Result.YearBuilt    != null) sb.AppendLine($"Year Built: {Result.YearBuilt}");
+                if (Result.AssessedValue != null) sb.AppendLine($"Assessed:   ${Result.AssessedValue:N0}");
+                if (Result.PropType     != null) sb.AppendLine($"Prop Type:  {Result.PropType}");
+                if (Result.Lat          != null) sb.AppendLine($"Coords:     {Result.Lat:0.0000}, {Result.Lng:0.0000}");
+                if (Result.Source       != null) sb.AppendLine($"Source:     {Result.Source}");
 
                 sb.AppendLine();
                 sb.AppendLine("Parcel boundary polygon (GeoJSON footprint) — roadmap Q4 2026");

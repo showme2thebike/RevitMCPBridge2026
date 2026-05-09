@@ -14,7 +14,7 @@ namespace RevitMCPBridge.Commands
         private Button     _lookupBtn;
         private Button     _openChatBtn;
         private Button     _cancelBtn;
-        private TextBlock  _resultBlock;
+        private TextBox    _resultBlock;
         private TextBlock  _statusBlock;
         private StackPanel _resultPanel;
 
@@ -106,14 +106,22 @@ namespace RevitMCPBridge.Commands
                 Padding = new Thickness(12), Margin = new Thickness(0, 0, 0, 16),
                 MaxHeight = 240
             };
-            var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-            _resultBlock = new TextBlock
+            _resultBlock = new TextBox
             {
-                FontSize = 11, Foreground = new SolidColorBrush(Colors.White),
-                FontFamily = new FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap
+                IsReadOnly      = true,
+                IsTabStop       = false,
+                FontSize        = 11,
+                Foreground      = new SolidColorBrush(Colors.White),
+                FontFamily      = new FontFamily("Consolas"),
+                TextWrapping    = TextWrapping.Wrap,
+                Background      = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding         = new Thickness(0),
+                MaxHeight       = 216,
+                VerticalScrollBarVisibility   = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             };
-            scroll.Content = _resultBlock;
-            border.Child = scroll;
+            border.Child = _resultBlock;
             _resultPanel.Children.Add(border);
 
             _openChatBtn = new Button

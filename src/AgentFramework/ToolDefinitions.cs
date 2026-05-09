@@ -54,6 +54,34 @@ namespace RevitMCPBridge2026.AgentFramework
                 },
                 new ToolDefinition
                 {
+                    Name = "parcelLookup",
+                    Description = "Look up parcel data and zoning regulations for a U.S. address. Returns parcel ID, lot area, owner, year built, assessed value, zoning code, setbacks, FAR, max height, lot coverage, permitted uses, conditional uses, overlay districts, and recent permit history. Use this whenever the user asks about zoning, lot size, setbacks, FAR, what they can build, or site code constraints.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            address = new { type = "string", description = "Full address including city and state, e.g. \"1234 Main St, Seattle, WA\"" }
+                        },
+                        required = new[] { "address" }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "climateLookup",
+                    Description = "Look up ASHRAE 169 climate zone and historical design conditions for a U.S. address. Returns climate zone, heating/cooling design temperatures, HDD/CDD, annual precipitation, wind speed, and peak solar month. Use when the user asks about energy code, climate zone, design temperatures, envelope requirements, or mechanical system sizing.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            address = new { type = "string", description = "Full address including city and state, e.g. \"1234 Main St, Seattle, WA\"" }
+                        },
+                        required = new[] { "address" }
+                    }
+                },
+                new ToolDefinition
+                {
                     Name = "analyzeView",
                     Description = "VISUAL VERIFICATION: Capture the current view/sheet and analyze it with AI vision. Use after placing elements to confirm they appear correctly.",
                     InputSchema = new

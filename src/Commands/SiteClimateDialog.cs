@@ -59,7 +59,7 @@ namespace RevitMCPBridge.Commands
         private Button     _lookupBtn;
         private Button     _openChatBtn;
         private Button     _cancelBtn;
-        private TextBlock  _resultBlock;
+        private TextBox    _resultBlock;
         private TextBlock  _statusBlock;
         private StackPanel _resultPanel;
 
@@ -144,10 +144,17 @@ namespace RevitMCPBridge.Commands
                 BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(12), Margin = new Thickness(0, 0, 0, 16)
             };
-            _resultBlock = new TextBlock
+            _resultBlock = new TextBox
             {
-                FontSize = 12, Foreground = new SolidColorBrush(Colors.White),
-                FontFamily = new FontFamily("Consolas"), TextWrapping = TextWrapping.Wrap
+                IsReadOnly      = true,
+                IsTabStop       = false,
+                FontSize        = 12,
+                Foreground      = new SolidColorBrush(Colors.White),
+                FontFamily      = new FontFamily("Consolas"),
+                TextWrapping    = TextWrapping.Wrap,
+                Background      = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding         = new Thickness(0),
             };
             border.Child = _resultBlock;
             _resultPanel.Children.Add(border);

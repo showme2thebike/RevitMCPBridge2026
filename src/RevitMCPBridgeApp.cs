@@ -1876,36 +1876,30 @@ namespace RevitMCPBridge
 
         private void DrawOccupancyIcon(DrawingContext dc, int size)
         {
-            // Plan-view door symbol: horizontal wall with opening, door panel, dashed swing arc
-            double s       = size / 32.0;
-            var fill       = new SolidColorBrush(Colors.White);
-            var wallPen    = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 2.0 * s));
-            var doorPen    = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5 * s));
-            var dashPen    = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.7, 1.1 * s))
-                { DashStyle = new DashStyle(new[] { 3.0, 2.0 }, 0) };
+            // Exit sign style: person striding through open doorway
+            double s    = size / 32.0;
+            var dark    = new SolidColorBrush(Color.FromRgb(55, 55, 55));
+            var limb    = new Pen(dark, Math.Max(1.5, 2.8 * s))
+                { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
 
-            // Horizontal wall — two segments flanking a door opening
-            double wallY  = 13 * s;   // wall centerline y
-            double wallH  = 4.5 * s;  // wall thickness
-            double jambL  = 7 * s;    // left jamb x
-            double doorW  = 16 * s;   // door clear width
-            double jambR  = jambL + doorW;  // = 23*s
+            // Door frame: left jamb + header
+            dc.DrawRectangle(dark, null, new Rect(2 * s, 3 * s, 4 * s, 27 * s));
+            dc.DrawRectangle(dark, null, new Rect(2 * s, 3 * s, 20 * s, 3.5 * s));
 
-            // Left wall piece: 2*s → 7*s
-            dc.DrawRectangle(fill, wallPen, new Rect(2*s, wallY, jambL - 2*s, wallH));
-            // Right wall piece: 23*s → 30*s
-            dc.DrawRectangle(fill, wallPen, new Rect(jambR, wallY, 30*s - jambR, wallH));
+            // Open door panel: solid trapezoid hinged at right, swung open
+            var door = new PathFigure { IsClosed = true, StartPoint = new Point(21 * s, 3.5 * s) };
+            door.Segments.Add(new LineSegment(new Point(30 * s, 5 * s),   true));
+            door.Segments.Add(new LineSegment(new Point(29 * s, 30 * s),  true));
+            door.Segments.Add(new LineSegment(new Point(21 * s, 30 * s),  true));
+            dc.DrawGeometry(dark, null, new PathGeometry(new[] { door }));
 
-            // Door panel: thin line at the top of the wall (hinged at left jamb, shown open/horizontal)
-            dc.DrawLine(doorPen, new Point(jambL, wallY), new Point(jambR, wallY));
-
-            // Dashed swing arc: quarter circle from open (horizontal) to closed (vertical)
-            // Starts at (jambR, wallY) → sweeps to (jambL, wallY + doorW)
-            var arcFig = new PathFigure { StartPoint = new Point(jambR, wallY) };
-            arcFig.Segments.Add(new ArcSegment(
-                new Point(jambL, wallY + doorW),
-                new Size(doorW, doorW), 0, false, SweepDirection.Clockwise, true));
-            dc.DrawGeometry(null, dashPen, new PathGeometry(new[] { arcFig }));
+            // Figure striding through opening
+            dc.DrawEllipse(dark, null, new Point(12 * s, 10.5 * s), 2.8 * s, 2.8 * s);   // head
+            dc.DrawLine(limb, new Point(12 * s, 13.5 * s), new Point(13 * s, 21 * s));    // body
+            dc.DrawLine(limb, new Point(13 * s, 21 * s),   new Point(17 * s, 30 * s));    // front leg
+            dc.DrawLine(limb, new Point(13 * s, 21 * s),   new Point(8  * s, 30 * s));    // back leg
+            dc.DrawLine(limb, new Point(12 * s, 15.5 * s), new Point(21 * s, 19 * s));    // arm → door
+            dc.DrawLine(limb, new Point(12 * s, 15.5 * s), new Point(7  * s, 17.5 * s));  // arm back
         }
 
         private void DrawEC3Icon(DrawingContext dc, int size)
