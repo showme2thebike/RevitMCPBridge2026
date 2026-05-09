@@ -2249,8 +2249,9 @@ namespace RevitMCPBridge
             try
             {
                 var doc = uiApp.ActiveUIDocument.Document;
-                var wallIdParam = parameters?["wallId"];
-                var typeIdParam = parameters?["typeId"];
+                var wallIdParam   = parameters?["wallId"];
+                // Accept both "typeId" and "wallTypeId" (wallTypeId is the standard name used elsewhere)
+                var typeIdParam   = parameters?["typeId"] ?? parameters?["wallTypeId"];
 
                 WallType wallType = null;
 
@@ -2259,9 +2260,7 @@ namespace RevitMCPBridge
                     var wallId = new ElementId(wallIdParam.ToObject<int>());
                     var wall = doc.GetElement(wallId) as Wall;
                     if (wall != null)
-                    {
                         wallType = wall.WallType;
-                    }
                 }
                 else if (typeIdParam != null)
                 {
@@ -2274,7 +2273,7 @@ namespace RevitMCPBridge
                     return JsonConvert.SerializeObject(new
                     {
                         success = false,
-                        error = "Wall or WallType not found. Provide wallId or typeId."
+                        error = "Wall or WallType not found. Provide wallId, typeId, or wallTypeId."
                     });
                 }
 

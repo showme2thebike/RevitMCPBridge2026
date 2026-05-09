@@ -6,6 +6,7 @@ using Autodesk.Revit.UI;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using RevitMCPBridge.Helpers;
+using Serilog;
 
 namespace RevitMCPBridge
 {
@@ -879,6 +880,7 @@ namespace RevitMCPBridge
                     .ToList();
 
                 bool dryRun = parameters["dryRun"]?.Value<bool>() ?? false;
+                Log.Information("deleteElements: dryRun={DryRun}, requestedCount={Count}", dryRun, elementIds.Count);
 
                 // Run inside a transaction whether live or dry — for dryRun we rollback at the end.
                 // doc.Delete() return value is the authoritative list of what was actually removed
@@ -916,6 +918,7 @@ namespace RevitMCPBridge
                     if (dryRun)
                     {
                         trans.RollBack();
+                        Log.Information("deleteElements: dryRun rollback complete, wouldDeleteCount={Count}", cascadeDeleted.Count);
                         return JsonConvert.SerializeObject(new
                         {
                             success = true,

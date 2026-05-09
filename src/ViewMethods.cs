@@ -308,7 +308,16 @@ namespace RevitMCPBridge
                         appliedRotationDeg = Math.Round(rotNeeded * 180.0 / Math.PI, 2);
                     }
 
-                    var elevationView = marker.CreateElevation(doc, doc.ActiveView.Id, markerIdx);
+                    var planViewId = FindFloorPlanViewId(doc, parameters);
+                    if (planViewId == null)
+                    {
+                        trans.RollBack();
+                        return ResponseBuilder.Error(
+                            "No floor plan view found in document. createElevation requires a ViewPlan. " +
+                            "Either activate a floor plan view first or pass planViewId explicitly.", "NO_PLAN_VIEW").Build();
+                    }
+
+                    var elevationView = marker.CreateElevation(doc, planViewId, markerIdx);
 
                     if (!string.IsNullOrEmpty(viewName))
                         elevationView.Name = viewName;
@@ -395,7 +404,14 @@ namespace RevitMCPBridge
                     failureOptions.SetFailuresPreprocessor(new WarningSwallower());
                     trans.SetFailureHandlingOptions(failureOptions);
 
-                    var elevationView = marker.CreateElevation(doc, doc.ActiveView.Id, markerIndex);
+                    var planViewId2 = FindFloorPlanViewId(doc, parameters);
+                    if (planViewId2 == null)
+                    {
+                        trans.RollBack();
+                        return ResponseBuilder.Error(
+                            "No floor plan view found. Pass planViewId or activate a floor plan first.", "NO_PLAN_VIEW").Build();
+                    }
+                    var elevationView = marker.CreateElevation(doc, planViewId2, markerIndex);
                     elevationView.Scale = scale;
 
                     string wantedName = !string.IsNullOrEmpty(viewName) ? viewName : elevationView.Name;
@@ -4397,6 +4413,35 @@ namespace RevitMCPBridge
             {
                 return ResponseBuilder.FromException(ex).Build();
             }
+        }
+        /// <summary>
+        /// Find a floor plan ViewId suitable for passing to ElevationMarker.CreateElevation().
+        /// Prefers the caller-supplied planViewId, then the active view if it's a floor plan,
+        /// then the first non-template floor plan in the document.
+        /// Returns null if no floor plan exists.
+        /// </summary>
+        private static ElementId FindFloorPlanViewId(Document doc, JObject parameters)
+        {
+            // 1. Explicit caller override
+            var explicitParam = parameters["planViewId"] ?? parameters["viewPlanId"] ?? parameters["floorPlanId"];
+            if (explicitParam != null)
+            {
+                var id = new ElementId(explicitParam.Value<int>());
+                if (doc.GetElement(id) is ViewPlan)
+                    return id;
+            }
+
+            // 2. Active view if it's already a floor plan
+            if (doc.ActiveView is ViewPlan activePlan && activePlan.ViewType == ViewType.FloorPlan && !activePlan.IsTemplate)
+                return activePlan.Id;
+
+            // 3. Any non-template floor plan in the document
+            return new FilteredElementCollector(doc)
+                .OfClass(typeof(ViewPlan))
+                .Cast<ViewPlan>()
+                .Where(v => v.ViewType == ViewType.FloorPlan && !v.IsTemplate)
+                .OrderBy(v => v.Name)
+                .FirstOrDefault()?.Id;
         }
     }
 }

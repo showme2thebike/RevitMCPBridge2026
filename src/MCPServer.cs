@@ -762,6 +762,7 @@ namespace RevitMCPBridge
                         return await CallMCPMethodPassthrough(request, parameters);
 
                     case "getProjectInfo":
+                    case "getModelInfo":
                         return await GetProjectInfo();
 
                     case "getOpenDocuments":
@@ -952,6 +953,7 @@ namespace RevitMCPBridge
 
                     // ViewAnnotation - Compound Layer Analysis
                     case "getWallTypeLayers":
+                    case "getWallTypeDetails": // alias — same data, consistent naming with getWallTypes
                         return await ExecuteInRevitContext(uiApp => ViewAnnotationMethods.GetWallTypeLayers(uiApp, parameters));
 
                     case "getRoofTypeLayers":
@@ -2804,6 +2806,7 @@ namespace RevitMCPBridge
                     case "findElementsWithMaterial":
                         return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.MaterialMethods.FindElementsWithMaterial(uiApp, parameters));
                     case "getAllMaterials":
+                    case "getMaterials": // alias — mirrors getWallTypes / getDoorTypes naming pattern
                         return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.MaterialMethods.GetAllMaterials(uiApp, parameters));
                     case "getAppearanceAssets":
                         return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.MaterialMethods.GetAppearanceAssets(uiApp, parameters));
@@ -2814,6 +2817,7 @@ namespace RevitMCPBridge
                     case "getMaterialClasses":
                         return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.MaterialMethods.GetMaterialClasses(uiApp, parameters));
                     case "getMaterialInfo":
+                    case "getMaterialById": // alias — common pattern from other get-by-id methods
                         return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.MaterialMethods.GetMaterialInfo(uiApp, parameters));
                     case "getMaterialPhysicalProperties":
                         return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.MaterialMethods.GetMaterialPhysicalProperties(uiApp, parameters));
