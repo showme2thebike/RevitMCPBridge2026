@@ -38,6 +38,10 @@ namespace RevitMCPBridge.Commands
         public string   Coverage         { get; set; }
         public JArray   Notes            { get; set; }
         public string   Error            { get; set; }
+        public long?    LandValue        { get; set; }
+        public long?    ImprovValue      { get; set; }
+        public string   Parking          { get; set; }
+        public string   Density          { get; set; }
 
         public string FormatForPrompt()
         {
@@ -255,7 +259,7 @@ namespace RevitMCPBridge.Commands
 
             _lookupBtn.IsEnabled = false;
             _resultPanel.Visibility = Visibility.Collapsed;
-            _statusBlock.Text       = "Looking up parcel data...";
+            _statusBlock.Text       = "Looking up zoning data...";
             _statusBlock.Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150));
             _statusBlock.Visibility = Visibility.Visible;
 
@@ -294,16 +298,6 @@ namespace RevitMCPBridge.Commands
                 {
                     Address          = address,
                     MatchedAddress   = obj["matchedAddress"]?.ToString(),
-                    Lat              = obj["lat"]?.ToObject<double?>(),
-                    Lng              = obj["lng"]?.ToObject<double?>(),
-                    ParcelId         = obj["parcelId"]?.ToString(),
-                    LotArea          = obj["lotArea"]?.ToObject<int?>(),
-                    LotAreaAcres     = obj["lotAreaAcres"]?.ToObject<double?>(),
-                    Owner            = obj["owner"]?.ToString(),
-                    YearBuilt        = obj["yearBuilt"]?.ToObject<int?>(),
-                    AssessedValue    = obj["assessedValue"]?.ToObject<long?>(),
-                    BuildingArea     = obj["buildingArea"]?.ToObject<int?>(),
-                    PropType         = obj["propType"]?.ToString(),
                     Zoning           = obj["zoning"]?.ToString(),
                     ZoningDescription = obj["zoningDescription"]?.ToString(),
                     ZoningCategory   = obj["zoningCategory"]?.ToString(),
@@ -311,14 +305,13 @@ namespace RevitMCPBridge.Commands
                     Far              = obj["far"]?.ToObject<double?>(),
                     MaxHeight        = obj["maxHeight"]?.ToObject<double?>(),
                     LotCoverage      = obj["lotCoverage"]?.ToObject<double?>(),
+                    Parking          = obj["parking"]?.ToString(),
+                    Density          = obj["density"]?.ToString(),
                     PermittedUses    = obj["permittedUses"]   as JArray,
                     ConditionalUses  = obj["conditionalUses"] as JArray,
                     Overlays         = obj["overlays"]        as JArray,
-                    PermitHistory    = obj["permitHistory"]   as JArray,
                     Notes            = obj["notes"]           as JArray,
-                    Source           = obj["coverage"]?.ToString() == "address_only"
-                                         ? "Geocoded — no parcel data available for this location yet"
-                                         : obj["source"]?.ToString(),
+                    Source           = obj["source"]?.ToString(),
                     Coverage         = obj["coverage"]?.ToString()
                 };
 
@@ -344,6 +337,8 @@ namespace RevitMCPBridge.Commands
                 if (Result.Far        != null) disp.AppendLine($"Max FAR:  {Result.Far}");
                 if (Result.MaxHeight  != null) disp.AppendLine($"Height:   {Result.MaxHeight}'");
                 if (Result.LotCoverage != null) disp.AppendLine($"Lot Cov:  {Result.LotCoverage}%");
+                if (Result.Parking    != null) disp.AppendLine($"Parking:  {Result.Parking}");
+                if (Result.Density    != null) disp.AppendLine($"Density:  {Result.Density}");
                 if (Result.PermittedUses   != null && Result.PermittedUses.Count   > 0) disp.AppendLine($"Permitted: {string.Join(", ", Result.PermittedUses)}");
                 if (Result.ConditionalUses != null && Result.ConditionalUses.Count > 0) disp.AppendLine($"Conditional: {string.Join(", ", Result.ConditionalUses)}");
                 if (Result.Overlays        != null && Result.Overlays.Count        > 0) disp.AppendLine($"Overlays: {string.Join(", ", Result.Overlays)}");

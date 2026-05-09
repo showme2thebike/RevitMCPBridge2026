@@ -195,8 +195,11 @@ namespace RevitMCPBridge.Commands
                     Owner          = obj["owner"]?.ToString(),
                     YearBuilt      = obj["yearBuilt"]?.ToObject<int?>(),
                     AssessedValue  = obj["assessedValue"]?.ToObject<long?>(),
+                    LandValue      = obj["landValue"]?.ToObject<long?>(),
+                    ImprovValue    = obj["improvValue"]?.ToObject<long?>(),
                     BuildingArea   = obj["buildingArea"]?.ToObject<int?>(),
                     PropType       = obj["propType"]?.ToString(),
+                    Zoning         = obj["zoning"]?.ToString(),
                     Source         = obj["source"]?.ToString(),
                 };
 
@@ -208,7 +211,10 @@ namespace RevitMCPBridge.Commands
                 if (Result.Owner        != null) sb.AppendLine($"Owner:      {Result.Owner}");
                 if (Result.YearBuilt    != null) sb.AppendLine($"Year Built: {Result.YearBuilt}");
                 if (Result.AssessedValue != null) sb.AppendLine($"Assessed:   ${Result.AssessedValue:N0}");
+                if (Result.LandValue    != null) sb.AppendLine($"Land Val:   ${Result.LandValue:N0}");
+                if (Result.ImprovValue  != null) sb.AppendLine($"Bldg Val:   ${Result.ImprovValue:N0}");
                 if (Result.PropType     != null) sb.AppendLine($"Prop Type:  {Result.PropType}");
+                if (Result.Zoning       != null) sb.AppendLine($"Zone Code:  {Result.Zoning}");
                 if (Result.Lat          != null) sb.AppendLine($"Coords:     {Result.Lat:0.0000}, {Result.Lng:0.0000}");
                 if (Result.Source       != null) sb.AppendLine($"Source:     {Result.Source}");
 
