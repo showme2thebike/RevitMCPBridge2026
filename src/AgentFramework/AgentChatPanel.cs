@@ -2486,17 +2486,38 @@ namespace RevitMCPBridge2026.AgentFramework
                 return JsonConvert.SerializeObject(new { success = false, error = "address parameter is required" });
             try
             {
-                using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(20) })
+                using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(25) })
                 {
                     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
-                    var body = new JObject { ["address"] = address }.ToString(Newtonsoft.Json.Formatting.None);
-                    var resp = await client.PostAsync(
-                        "https://bimmonkey-production.up.railway.app/api/parcel/lookup",
-                        new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json"));
-                    var raw = await resp.Content.ReadAsStringAsync();
-                    if (!resp.IsSuccessStatusCode)
-                        return JsonConvert.SerializeObject(new { success = false, error = $"Parcel lookup failed ({(int)resp.StatusCode}): {raw}" });
-                    return JsonConvert.SerializeObject(new { success = true, data = JToken.Parse(raw) });
+                    var body = new System.Net.Http.StringContent(
+                        new JObject { ["address"] = address }.ToString(Newtonsoft.Json.Formatting.None),
+                        System.Text.Encoding.UTF8, "application/json");
+                    var bodyZoning = new System.Net.Http.StringContent(
+                        new JObject { ["address"] = address }.ToString(Newtonsoft.Json.Formatting.None),
+                        System.Text.Encoding.UTF8, "application/json");
+
+                    var parcelTask = client.PostAsync(
+                        "https://bimmonkey-production.up.railway.app/api/parcel/lookup", body);
+                    var zoningTask = client.PostAsync(
+                        "https://bimmonkey-production.up.railway.app/api/zoning/lookup", bodyZoning);
+
+                    await System.Threading.Tasks.Task.WhenAll(parcelTask, zoningTask);
+
+                    var parcelRaw = await parcelTask.Result.Content.ReadAsStringAsync();
+                    if (!parcelTask.Result.IsSuccessStatusCode)
+                        return JsonConvert.SerializeObject(new { success = false, error = $"Parcel lookup failed ({(int)parcelTask.Result.StatusCode}): {parcelRaw}" });
+
+                    var merged = JObject.Parse(parcelRaw);
+
+                    if (zoningTask.Result.IsSuccessStatusCode)
+                    {
+                        var zoningRaw = await zoningTask.Result.Content.ReadAsStringAsync();
+                        var zoning = JObject.Parse(zoningRaw);
+                        foreach (var field in new[] { "zoningDescription", "zoningCategory", "setbacks", "far", "maxHeight", "lotCoverage", "parking", "density", "permittedUses", "conditionalUses", "overlays" })
+                            if (zoning[field] != null) merged[field] = zoning[field];
+                    }
+
+                    return JsonConvert.SerializeObject(new { success = true, data = merged });
                 }
             }
             catch (Exception ex) { return JsonConvert.SerializeObject(new { success = false, error = ex.Message }); }

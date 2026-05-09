@@ -262,7 +262,7 @@ namespace RevitMCPBridge.Commands
             try
             {
                 var body    = new JObject { ["address"] = address }.ToString(Newtonsoft.Json.Formatting.None);
-                var req     = new HttpRequestMessage(HttpMethod.Post, $"{_railwayUrl}/api/parcel/lookup");
+                var req     = new HttpRequestMessage(HttpMethod.Post, $"{_railwayUrl}/api/zoning/lookup");
                 req.Headers.Add("Authorization", $"Bearer {_apiKey}");
                 req.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
