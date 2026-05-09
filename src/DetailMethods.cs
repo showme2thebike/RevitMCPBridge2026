@@ -54,11 +54,9 @@ namespace RevitMCPBridge2026
                     return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = $"View with ID {viewIdInt} not found" });
                 }
 
-                var startPt = parameters["startPoint"];
-                var endPt = parameters["endPoint"];
-
-                XYZ start = new XYZ(startPt["x"].ToObject<double>(), startPt["y"].ToObject<double>(), startPt["z"]?.ToObject<double>() ?? 0);
-                XYZ end = new XYZ(endPt["x"].ToObject<double>(), endPt["y"].ToObject<double>(), endPt["z"]?.ToObject<double>() ?? 0);
+                // Accept both {x,y,z} object and [x,y,z] array formats
+                XYZ start = GeometryHelper.ParseXYZ(parameters["startPoint"]);
+                XYZ end   = GeometryHelper.ParseXYZ(parameters["endPoint"]);
 
                 Line line = Line.CreateBound(start, end);
 

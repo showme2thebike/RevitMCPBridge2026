@@ -25,7 +25,8 @@ namespace RevitMCPBridge
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 var viewId = new ElementId(int.Parse(parameters["viewId"].ToString()));
-                var location = parameters["location"].ToObject<double[]>();
+                // Accept both [x,y,z] array and {x,y,z} object — same helper as createDetailLine/createWall
+                var locationXYZ = Helpers.GeometryHelper.ParseXYZ(parameters["location"]);
                 var text = parameters["text"].ToString();
 
                 var view = doc.GetElement(viewId) as View;
@@ -45,7 +46,7 @@ namespace RevitMCPBridge
                     failureOptions.SetFailuresPreprocessor(new WarningSwallower());
                     trans.SetFailureHandlingOptions(failureOptions);
 
-                    var point = new XYZ(location[0], location[1], location[2]);
+                    var point = locationXYZ;
 
                     // Get text note type - with smart defaults based on context
                     ElementId textTypeId;

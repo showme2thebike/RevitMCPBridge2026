@@ -878,22 +878,59 @@ namespace RevitMCPBridge
                     .Select(id => new ElementId(id))
                     .ToList();
 
-                using (var trans = new Transaction(doc, "Delete Elements"))
+                bool dryRun = parameters["dryRun"]?.Value<bool>() ?? false;
+
+                // Run inside a transaction whether live or dry — for dryRun we rollback at the end.
+                // doc.Delete() return value is the authoritative list of what was actually removed
+                // (includes all cascade-deleted dependents, not just what was requested).
+                using (var trans = new Transaction(doc, dryRun ? "Delete Elements (dry run)" : "Delete Elements"))
                 {
                     trans.Start();
                     var failureOptions = trans.GetFailureHandlingOptions();
                     failureOptions.SetFailuresPreprocessor(new WarningSwallower());
                     trans.SetFailureHandlingOptions(failureOptions);
 
-                    doc.Delete(elementIds);
+                    ICollection<ElementId> cascadeDeleted;
+                    try
+                    {
+                        cascadeDeleted = doc.Delete(elementIds);
+                    }
+                    catch (Exception exDel)
+                    {
+                        trans.RollBack();
+                        return JsonConvert.SerializeObject(new
+                        {
+                            success = false,
+                            error = $"Delete failed: {exDel.Message}",
+                            dryRun
+                        });
+                    }
+
+                    // Build manifest: requested vs cascade
+                    var requestedSet = new HashSet<long>(elementIds.Select(id => id.Value));
+                    var cascadeManifest = cascadeDeleted
+                        .Select(id => new { elementId = (int)id.Value, cascade = !requestedSet.Contains(id.Value) })
+                        .OrderBy(e => e.cascade).ThenBy(e => e.elementId)
+                        .ToList();
+
+                    if (dryRun)
+                    {
+                        trans.RollBack();
+                        return JsonConvert.SerializeObject(new
+                        {
+                            success = true,
+                            dryRun = true,
+                            wouldDeleteCount = cascadeDeleted.Count,
+                            wouldDelete = cascadeManifest
+                        });
+                    }
 
                     trans.Commit();
 
-                    // Verify by element existence — doc.Delete() count is unreliable for pinned/protected elements
+                    // Verify by element existence after commit
                     var confirmedDeleted = elementIds.Where(id => doc.GetElement(id) == null).Select(id => (int)id.Value).ToList();
                     var notDeletedIds = elementIds.Where(id => doc.GetElement(id) != null).ToList();
 
-                    // Diagnose why each element wasn't deleted
                     var notDeletedDiag = notDeletedIds.Select(id =>
                     {
                         var el = doc.GetElement(id);
@@ -916,9 +953,12 @@ namespace RevitMCPBridge
                     return JsonConvert.SerializeObject(new
                     {
                         success = true,
+                        dryRun = false,
                         requestedCount = elementIds.Count,
                         deletedCount = confirmedDeleted.Count,
+                        cascadeDeletedCount = cascadeManifest.Count(e => e.cascade),
                         deletedIds = confirmedDeleted.ToArray(),
+                        cascadeManifest,
                         notDeleted = notDeletedDiag
                     });
                 }

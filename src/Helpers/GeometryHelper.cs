@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.Revit.DB;
+using Newtonsoft.Json.Linq;
 
 namespace RevitMCPBridge.Helpers
 {
@@ -79,6 +80,37 @@ namespace RevitMCPBridge.Helpers
         #endregion
 
         #region Point/Vector Creation
+
+        /// <summary>
+        /// Parse an XYZ point from a JToken that may be either an array [x,y,z]
+        /// or an object {x,y,z}. z is optional in both formats (defaults to defaultZ).
+        /// Throws ArgumentException for unexpected token types so the caller gets a
+        /// clear error instead of a NullReferenceException.
+        /// </summary>
+        public static XYZ ParseXYZ(JToken token, double defaultZ = 0)
+        {
+            if (token == null)
+                throw new ArgumentNullException(nameof(token), "XYZ point parameter is null or missing");
+
+            if (token is JArray arr)
+            {
+                double x = arr.Count > 0 ? arr[0].Value<double>() : 0;
+                double y = arr.Count > 1 ? arr[1].Value<double>() : 0;
+                double z = arr.Count > 2 ? arr[2].Value<double>() : defaultZ;
+                return new XYZ(x, y, z);
+            }
+
+            if (token is JObject obj)
+            {
+                double x = obj["x"]?.Value<double>() ?? 0;
+                double y = obj["y"]?.Value<double>() ?? 0;
+                double z = obj["z"]?.Value<double>() ?? defaultZ;
+                return new XYZ(x, y, z);
+            }
+
+            throw new ArgumentException(
+                $"Cannot parse XYZ from {token.Type}: expected array [x,y,z] or object {{\"x\":0,\"y\":0,\"z\":0}}");
+        }
 
         /// <summary>
         /// Create an XYZ point from coordinates.

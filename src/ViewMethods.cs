@@ -349,6 +349,88 @@ namespace RevitMCPBridge
         }
 
         /// <summary>
+        /// Add an elevation view to an existing ElevationMarker at a specific index (0-3).
+        /// Use after createElevation to build a true 4-way interior elevation set from one marker.
+        /// markerIndex: 0=first arrow (default East), 1=90° CCW, 2=180°, 3=270° — relative to marker rotation.
+        /// </summary>
+        [MCPMethod("addElevationToMarker", Category = "View",
+            Description = "Add an elevation view to an existing ElevationMarker at markerIndex 0-3. " +
+                          "Use to build 4-way interior elevations: call createElevation once to get markerId, " +
+                          "then call addElevationToMarker for each remaining direction.")]
+        public static string AddElevationToMarker(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                var markerIdRaw = parameters["markerId"]?.Value<int>()
+                    ?? throw new ArgumentException("markerId is required");
+                int markerIndex = parameters["markerIndex"]?.Value<int>() ?? 1;
+                var viewName    = parameters["viewName"]?.ToString() ?? parameters["name"]?.ToString();
+                int scale       = parameters["scale"]?.Value<int>() ?? 48;
+
+                var markerId = new ElementId(markerIdRaw);
+                var marker   = doc.GetElement(markerId) as ElevationMarker;
+                if (marker == null)
+                    return ResponseBuilder.Error($"No ElevationMarker found with id {markerIdRaw}", "ELEMENT_NOT_FOUND").Build();
+
+                if (markerIndex < 0 || markerIndex > 3)
+                    return ResponseBuilder.Error("markerIndex must be 0–3", "INVALID_PARAM").Build();
+
+                // Check if this index already has a view (GetElevation returns null/throws if none)
+                try
+                {
+                    var existingId = marker.GetViewId(markerIndex);
+                    if (existingId != null && existingId != ElementId.InvalidElementId)
+                        return ResponseBuilder.Error(
+                            $"markerIndex {markerIndex} already has an elevation view (id {existingId.Value}) on this marker. " +
+                            "Use a different index (0–3).", "ALREADY_EXISTS").Build();
+                }
+                catch { /* GetViewId not available in this API version — proceed, CreateElevation will throw if already used */ }
+
+                using (var trans = new Transaction(doc, "Add Elevation to Marker"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    var elevationView = marker.CreateElevation(doc, doc.ActiveView.Id, markerIndex);
+                    elevationView.Scale = scale;
+
+                    string wantedName = !string.IsNullOrEmpty(viewName) ? viewName : elevationView.Name;
+                    if (!wantedName.EndsWith(" *")) wantedName += " *";
+                    try { elevationView.Name = wantedName; } catch { wantedName = elevationView.Name; }
+
+                    trans.Commit();
+
+                    // Second pass rename (Revit sometimes resets after commit)
+                    string finalName = elevationView.Name;
+                    if (finalName != wantedName)
+                    {
+                        using (var renameTrans = new Transaction(doc, "Rename Elevation"))
+                        {
+                            renameTrans.Start();
+                            try { elevationView.Name = wantedName; renameTrans.Commit(); finalName = wantedName; }
+                            catch { renameTrans.RollBack(); }
+                        }
+                    }
+
+                    return ResponseBuilder.Success()
+                        .WithView((int)elevationView.Id.Value, finalName, "Elevation")
+                        .With("markerId",     markerIdRaw)
+                        .With("markerIndex",  markerIndex)
+                        .WithMessage($"Elevation view added to marker {markerIdRaw} at index {markerIndex}.")
+                        .Build();
+                }
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
         /// Create a drafting view for 2D detailing
         /// </summary>
         [MCPMethod("createDraftingView", Category = "View", Description = "Create a drafting view for 2D detailing")]

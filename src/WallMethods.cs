@@ -34,9 +34,9 @@ namespace RevitMCPBridge
                 v.Optional("height").IsPositive();
                 v.ThrowIfInvalid();
 
-                // Extract point arrays
-                var startPoint = parameters["startPoint"].ToObject<double[]>();
-                var endPoint = parameters["endPoint"].ToObject<double[]>();
+                // Accept both [x,y,z] array and {x,y,z} object formats
+                var start      = GeometryHelper.ParseXYZ(parameters["startPoint"]);
+                var end        = GeometryHelper.ParseXYZ(parameters["endPoint"]);
                 var levelIdInt = v.GetRequired<int>("levelId");
                 var height = v.GetOptional<double>("height", 10.0);
 
@@ -73,8 +73,6 @@ namespace RevitMCPBridge
                     failureOptions.SetFailuresPreprocessor(new WarningSwallower());
                     trans.SetFailureHandlingOptions(failureOptions);
 
-                    var start = new XYZ(startPoint[0], startPoint[1], startPoint[2]);
-                    var end = new XYZ(endPoint[0], endPoint[1], endPoint[2]);
                     var line = Line.CreateBound(start, end);
 
                     var wall = Wall.Create(doc, line, wallType.Id, level.Id, height, 0, false, false);
@@ -789,6 +787,11 @@ namespace RevitMCPBridge
                     trans.SetFailureHandlingOptions(failureOptions);
 
                     var newType = sourceType.Duplicate(newTypeName) as WallType;
+                    if (newType == null)
+                    {
+                        trans.RollBack();
+                        return ResponseBuilder.Error($"Duplicate() returned null — '{newTypeName}' may contain invalid characters", "DUPLICATE_FAILED").Build();
+                    }
 
                     trans.Commit();
 
@@ -2035,5 +2038,70 @@ namespace RevitMCPBridge
         }
 
         #endregion
+
+        /// <summary>
+        /// Set the material for a specific layer of a wall type.
+        /// layerIndex is 0-based from exterior face (matches getWallTypeDetails layer order).
+        /// </summary>
+        [MCPMethod("setWallTypeLayerMaterial", Category = "Wall",
+            Description = "Set the material assigned to a specific layer of a wall type. " +
+                          "Get layerIndex from getWallTypeDetails (0 = exterior face). " +
+                          "Get materialId from getMaterials.")]
+        public static string SetWallTypeLayerMaterial(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                int wallTypeIdInt = parameters["wallTypeId"]?.Value<int>()
+                    ?? throw new ArgumentException("wallTypeId is required");
+                int layerIndex = parameters["layerIndex"]?.Value<int>()
+                    ?? throw new ArgumentException("layerIndex is required");
+                int materialIdInt = parameters["materialId"]?.Value<int>()
+                    ?? throw new ArgumentException("materialId is required");
+
+                var wallType = doc.GetElement(new ElementId(wallTypeIdInt)) as WallType;
+                if (wallType == null)
+                    return ResponseBuilder.Error($"Wall type {wallTypeIdInt} not found", "ELEMENT_NOT_FOUND").Build();
+
+                var material = doc.GetElement(new ElementId(materialIdInt)) as Material;
+                if (material == null)
+                    return ResponseBuilder.Error($"Material {materialIdInt} not found", "ELEMENT_NOT_FOUND").Build();
+
+                var cs = wallType.GetCompoundStructure();
+                if (cs == null)
+                    return ResponseBuilder.Error("Wall type has no compound structure (may be a curtain or stacked type)", "INVALID_TYPE").Build();
+
+                int layerCount = cs.LayerCount;
+                if (layerIndex < 0 || layerIndex >= layerCount)
+                    return ResponseBuilder.Error($"layerIndex {layerIndex} out of range — wall type has {layerCount} layers (0 to {layerCount - 1})", "INVALID_PARAM").Build();
+
+                using (var trans = new Transaction(doc, "Set Wall Type Layer Material"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    cs.SetMaterialId(layerIndex, material.Id);
+                    wallType.SetCompoundStructure(cs);
+
+                    trans.Commit();
+
+                    return ResponseBuilder.Success()
+                        .With("wallTypeId",   wallTypeIdInt)
+                        .With("wallTypeName", wallType.Name)
+                        .With("layerIndex",   layerIndex)
+                        .With("materialId",   materialIdInt)
+                        .With("materialName", material.Name)
+                        .WithMessage($"Layer {layerIndex} of '{wallType.Name}' set to '{material.Name}'.")
+                        .Build();
+                }
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
     }
 }
