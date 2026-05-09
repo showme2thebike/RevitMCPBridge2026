@@ -732,18 +732,21 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { }
         }
 
-        public void PreloadOccupancyPrompt()
+        public void PreloadOccupancyPrompt(RevitMCPBridge.Commands.OccupancyAnalysis analysis)
         {
             try
             {
+                var table = analysis.FormatForPrompt();
                 var prompt =
-                    "Please run an occupancy and egress analysis for this project using IBC 2021:\n\n" +
-                    "1. Use getFloors and getSpaces (or getRooms) to identify all spaces and their listed occupancy types\n" +
-                    "2. Calculate occupant loads per IBC Table 1004.5 for each space\n" +
-                    "3. Determine the required number of exits and minimum egress width per IBC §1006 and §1005\n" +
-                    "4. Flag any spaces that appear to lack a compliant egress path or second exit\n" +
-                    "5. Note mixed-occupancy separation requirements (§508) if multiple occupancy groups are present\n" +
-                    "6. Summarize total occupant load by floor and for the building as a whole";
+                    $"I ran an occupant load analysis on this project using IBC 2021 Table 1004.5. Here are the results:\n\n" +
+                    $"{table}\n\n" +
+                    "Please help me with the egress compliance analysis:\n" +
+                    "1. Confirm or challenge the required exit counts per level based on IBC §1006\n" +
+                    "2. Calculate minimum egress width per IBC §1005.1 (0.2\" per occupant for stairways, 0.15\" for other components)\n" +
+                    "3. Flag any rooms or levels where a single exit may be permitted vs. where two are mandatory\n" +
+                    "4. Note any mixed-occupancy separation requirements under IBC §508 based on the occupancy groups present\n" +
+                    "5. Identify any rooms marked \"(default)\" that I should verify — those may be misclassified\n" +
+                    "6. List what egress path information you'd still need from me to complete a full IBC §1003–1006 review";
                 Dispatcher.Invoke(() => { if (_inputTextBox != null) _inputTextBox.Text = prompt; });
                 Activate();
             }
