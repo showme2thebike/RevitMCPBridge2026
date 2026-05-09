@@ -196,6 +196,9 @@ namespace RevitMCPBridge.Commands
                 if (Result.Lat        != null) sb.AppendLine($"Coords:     {Result.Lat:0.0000}, {Result.Lng:0.0000}");
                 if (Result.Source     != null) sb.AppendLine($"Source:     {Result.Source}");
 
+                sb.AppendLine();
+                sb.AppendLine("Parcel boundary polygon (GeoJSON footprint) — roadmap Q4 2026");
+
                 _statusBlock.Visibility = Visibility.Collapsed;
                 _resultBlock.Text = sb.ToString().Trim();
                 _resultPanel.Visibility = Visibility.Visible;

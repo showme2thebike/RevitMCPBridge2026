@@ -355,9 +355,9 @@ namespace RevitMCPBridge
             epdButton.LargeImage = CreateButtonIcon("ec3", 32);
             epdButton.Image      = CreateButtonIcon("ec3", 16);
 
-            var productDataButtonData = new PushButtonData("ProductData", "Product\nData", asm,
+            var productDataButtonData = new PushButtonData("ProductData", "Spec\nWriter", asm,
                 "RevitMCPBridge.Commands.ProductDataCommand")
-                { ToolTip = "Coming soon — query manufacturer product databases and auto-generate spec sections from model elements" };
+                { ToolTip = "Coming soon — pick a CSI MasterFormat section, pull relevant elements from your model, and generate a draft 3-part spec section in Banana Chat" };
             var productDataButton = codeSpecPanel.AddItem(productDataButtonData) as PushButton;
             productDataButton.LargeImage = CreateButtonIcon("productdata", 32);
             productDataButton.Image      = CreateButtonIcon("productdata", 16);
