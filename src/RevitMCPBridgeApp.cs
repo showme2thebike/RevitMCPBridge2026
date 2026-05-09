@@ -1876,30 +1876,31 @@ namespace RevitMCPBridge
 
         private void DrawOccupancyIcon(DrawingContext dc, int size)
         {
-            // Exit sign style: person striding through open doorway
+            // Exit sign style: person striding through open doorway — white fill, grey outline
             double s    = size / 32.0;
-            var dark    = new SolidColorBrush(Color.FromRgb(55, 55, 55));
-            var limb    = new Pen(dark, Math.Max(1.5, 2.8 * s))
+            var white   = new SolidColorBrush(Colors.White);
+            var outline = new Pen(new SolidColorBrush(Color.FromRgb(90, 90, 90)), Math.Max(0.8, 1.2 * s));
+            var limb    = new Pen(new SolidColorBrush(Color.FromRgb(90, 90, 90)), Math.Max(1.0, 1.8 * s))
                 { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
 
             // Door frame: left jamb + header
-            dc.DrawRectangle(dark, null, new Rect(2 * s, 3 * s, 4 * s, 27 * s));
-            dc.DrawRectangle(dark, null, new Rect(2 * s, 3 * s, 20 * s, 3.5 * s));
+            dc.DrawRectangle(white, outline, new Rect(2 * s, 3 * s, 4 * s, 27 * s));
+            dc.DrawRectangle(white, outline, new Rect(2 * s, 3 * s, 20 * s, 3.5 * s));
 
-            // Open door panel: solid trapezoid hinged at right, swung open
+            // Open door panel: trapezoid hinged at right, swung open
             var door = new PathFigure { IsClosed = true, StartPoint = new Point(21 * s, 3.5 * s) };
             door.Segments.Add(new LineSegment(new Point(30 * s, 5 * s),   true));
             door.Segments.Add(new LineSegment(new Point(29 * s, 30 * s),  true));
             door.Segments.Add(new LineSegment(new Point(21 * s, 30 * s),  true));
-            dc.DrawGeometry(dark, null, new PathGeometry(new[] { door }));
+            dc.DrawGeometry(white, outline, new PathGeometry(new[] { door }));
 
             // Figure striding through opening
-            dc.DrawEllipse(dark, null, new Point(12 * s, 10.5 * s), 2.8 * s, 2.8 * s);   // head
-            dc.DrawLine(limb, new Point(12 * s, 13.5 * s), new Point(13 * s, 21 * s));    // body
-            dc.DrawLine(limb, new Point(13 * s, 21 * s),   new Point(17 * s, 30 * s));    // front leg
-            dc.DrawLine(limb, new Point(13 * s, 21 * s),   new Point(8  * s, 30 * s));    // back leg
-            dc.DrawLine(limb, new Point(12 * s, 15.5 * s), new Point(21 * s, 19 * s));    // arm → door
-            dc.DrawLine(limb, new Point(12 * s, 15.5 * s), new Point(7  * s, 17.5 * s));  // arm back
+            dc.DrawEllipse(white, outline, new Point(12 * s, 10.5 * s), 2.8 * s, 2.8 * s);
+            dc.DrawLine(limb, new Point(12 * s, 13.5 * s), new Point(13 * s, 21 * s));
+            dc.DrawLine(limb, new Point(13 * s, 21 * s),   new Point(17 * s, 30 * s));
+            dc.DrawLine(limb, new Point(13 * s, 21 * s),   new Point(8  * s, 30 * s));
+            dc.DrawLine(limb, new Point(12 * s, 15.5 * s), new Point(21 * s, 19 * s));
+            dc.DrawLine(limb, new Point(12 * s, 15.5 * s), new Point(7  * s, 17.5 * s));
         }
 
         private void DrawEC3Icon(DrawingContext dc, int size)

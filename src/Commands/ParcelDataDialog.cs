@@ -213,13 +213,10 @@ namespace RevitMCPBridge.Commands
                 if (Result.AssessedValue != null) sb.AppendLine($"Assessed:   ${Result.AssessedValue:N0}");
                 if (Result.LandValue    != null) sb.AppendLine($"Land Val:   ${Result.LandValue:N0}");
                 if (Result.ImprovValue  != null) sb.AppendLine($"Bldg Val:   ${Result.ImprovValue:N0}");
-                if (Result.PropType     != null) sb.AppendLine($"Prop Type:  {Result.PropType}");
-                if (Result.Zoning       != null) sb.AppendLine($"Zone Code:  {Result.Zoning}");
-                if (Result.Lat          != null) sb.AppendLine($"Coords:     {Result.Lat:0.0000}, {Result.Lng:0.0000}");
-                if (Result.Source       != null) sb.AppendLine($"Source:     {Result.Source}");
-
-                sb.AppendLine();
-                sb.AppendLine("Parcel boundary polygon (GeoJSON footprint) — roadmap Q4 2026");
+                if (!string.IsNullOrWhiteSpace(Result.PropType)) sb.AppendLine($"Prop Type:  {Result.PropType}");
+                if (!string.IsNullOrWhiteSpace(Result.Zoning))   sb.AppendLine($"Zone Code:  {Result.Zoning}");
+                if (Result.Lat != null) sb.AppendLine($"Coords:     {Result.Lat:0.0000}, {Result.Lng:0.0000}");
+                if (!string.IsNullOrWhiteSpace(Result.Source))   sb.AppendLine($"Source:     {Result.Source}");
 
                 _statusBlock.Visibility = Visibility.Collapsed;
                 _resultBlock.Text = sb.ToString().Trim();

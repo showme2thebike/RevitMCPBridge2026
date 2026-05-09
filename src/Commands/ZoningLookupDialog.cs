@@ -319,11 +319,11 @@ namespace RevitMCPBridge.Commands
                 // (Parcel ID, lot area, owner, permits → those live in their own dialogs)
                 var disp = new System.Text.StringBuilder();
                 disp.AppendLine($"Address:  {Result.MatchedAddress ?? Result.Address}");
-                if (Result.Zoning != null)
+                if (!string.IsNullOrWhiteSpace(Result.Zoning))
                 {
                     var z = Result.Zoning;
-                    if (Result.ZoningDescription != null) z += $" — {Result.ZoningDescription}";
-                    if (Result.ZoningCategory    != null) z += $" ({Result.ZoningCategory})";
+                    if (!string.IsNullOrWhiteSpace(Result.ZoningDescription)) z += $" — {Result.ZoningDescription}";
+                    if (!string.IsNullOrWhiteSpace(Result.ZoningCategory))    z += $" ({Result.ZoningCategory})";
                     disp.AppendLine($"Zoning:   {z}");
                 }
                 if (Result.Setbacks != null)
@@ -337,14 +337,14 @@ namespace RevitMCPBridge.Commands
                 if (Result.Far        != null) disp.AppendLine($"Max FAR:  {Result.Far}");
                 if (Result.MaxHeight  != null) disp.AppendLine($"Height:   {Result.MaxHeight}'");
                 if (Result.LotCoverage != null) disp.AppendLine($"Lot Cov:  {Result.LotCoverage}%");
-                if (Result.Parking    != null) disp.AppendLine($"Parking:  {Result.Parking}");
-                if (Result.Density    != null) disp.AppendLine($"Density:  {Result.Density}");
+                if (!string.IsNullOrWhiteSpace(Result.Parking)) disp.AppendLine($"Parking:  {Result.Parking}");
+                if (!string.IsNullOrWhiteSpace(Result.Density)) disp.AppendLine($"Density:  {Result.Density}");
                 if (Result.PermittedUses   != null && Result.PermittedUses.Count   > 0) disp.AppendLine($"Permitted: {string.Join(", ", Result.PermittedUses)}");
                 if (Result.ConditionalUses != null && Result.ConditionalUses.Count > 0) disp.AppendLine($"Conditional: {string.Join(", ", Result.ConditionalUses)}");
                 if (Result.Overlays        != null && Result.Overlays.Count        > 0) disp.AppendLine($"Overlays: {string.Join(", ", Result.Overlays)}");
                 if (Result.Notes != null)
-                    foreach (var n in Result.Notes) disp.AppendLine($"Note: {n}");
-                if (Result.Source != null) disp.AppendLine($"Source:   {Result.Source}");
+                    foreach (var n in Result.Notes) if (!string.IsNullOrWhiteSpace(n?.ToString())) disp.AppendLine($"Note: {n}");
+                if (!string.IsNullOrWhiteSpace(Result.Source)) disp.AppendLine($"Source:   {Result.Source}");
 
                 _statusBlock.Visibility = Visibility.Collapsed;
                 _resultBlock.Text       = disp.ToString().Trim();
