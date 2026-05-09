@@ -348,7 +348,7 @@ namespace RevitMCPBridge
             occupancyButton.LargeImage = CreateButtonIcon("occupancy", 32);
             occupancyButton.Image      = CreateButtonIcon("occupancy", 16);
 
-            var epdButtonData = new PushButtonData("EC3", "EC3", asm,
+            var epdButtonData = new PushButtonData("EC3", "EPDs", asm,
                 "RevitMCPBridge.Commands.EC3Command")
                 { ToolTip = "Search EC3 (Building Transparency) for Environmental Product Declarations — compare embodied carbon (GWP) across products, sorted lowest first, and load into Banana Chat for analysis" };
             var epdButton = codeSpecPanel.AddItem(epdButtonData) as PushButton;
