@@ -645,6 +645,91 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { }
         }
 
+        public void PreloadParcelPrompt(RevitMCPBridge.Commands.ParcelResult parcel)
+        {
+            try
+            {
+                var dataBlock = parcel.FormatForPrompt();
+                var prompt =
+                    $"I looked up parcel data for {parcel.MatchedAddress ?? parcel.Address}. Here's what came back:\n\n" +
+                    $"{dataBlock}\n\n" +
+                    "Please help me:\n" +
+                    "1. Store parcel ID, lot area, and zoning in project memory for this session\n" +
+                    "2. If Revit project parameters exist for lot area or zoning, update them — use getProjectInfo first\n" +
+                    "3. Flag any FAR, height limit, or setback constraints relevant to my program\n" +
+                    "4. Tell me what jurisdiction data (county assessor, GIS) you'd need to complete a full site code check";
+                Dispatcher.Invoke(() => { if (_inputTextBox != null) _inputTextBox.Text = prompt; });
+                Activate();
+            }
+            catch { }
+        }
+
+        public void PreloadPermitsPrompt(RevitMCPBridge.Commands.ParcelResult parcel)
+        {
+            try
+            {
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine($"Address: {parcel.MatchedAddress ?? parcel.Address}");
+                if (parcel.PermitHistory != null && parcel.PermitHistory.Count > 0)
+                {
+                    sb.AppendLine($"\nRecent Permit History ({parcel.PermitHistory.Count} records):");
+                    foreach (Newtonsoft.Json.Linq.JObject p in parcel.PermitHistory)
+                        sb.AppendLine($"  • {p["applicationDate"]} {p["type"]}: {p["description"]} [{p["status"]}]");
+                }
+                else
+                {
+                    sb.AppendLine("\nNo permit history found for this address/city.");
+                }
+                var prompt =
+                    $"I pulled permit history for a project address. Here's what came back:\n\n{sb}\n\n" +
+                    "Please help me:\n" +
+                    "1. Summarize what types of work have been permitted on this parcel (additions, plumbing, electrical, etc.)\n" +
+                    "2. Flag any open or expired permits that could complicate my project\n" +
+                    "3. Note the most recent permit date and what it tells us about the building's documented history\n" +
+                    "4. Suggest what I should verify with the jurisdiction before permit submittal";
+                Dispatcher.Invoke(() => { if (_inputTextBox != null) _inputTextBox.Text = prompt; });
+                Activate();
+            }
+            catch { }
+        }
+
+        public void PreloadClimatePrompt(RevitMCPBridge.Commands.ClimateResult climate)
+        {
+            try
+            {
+                var dataBlock = climate.FormatForPrompt();
+                var prompt =
+                    $"I pulled site climate data for my project. Here's what came back:\n\n{dataBlock}\n\n" +
+                    "Please help me:\n" +
+                    "1. Identify the applicable energy code requirements based on the ASHRAE climate zone\n" +
+                    "2. Flag the envelope performance minimums (U-values, continuous insulation) for this climate zone\n" +
+                    "3. Note any heating vs. cooling dominated implications for mechanical system selection\n" +
+                    "4. Summarize solar exposure context for passive design or PV feasibility\n" +
+                    "5. Store the climate zone and design temps in project memory for future sessions";
+                Dispatcher.Invoke(() => { if (_inputTextBox != null) _inputTextBox.Text = prompt; });
+                Activate();
+            }
+            catch { }
+        }
+
+        public void PreloadOccupancyPrompt()
+        {
+            try
+            {
+                var prompt =
+                    "Please run an occupancy and egress analysis for this project using IBC 2021:\n\n" +
+                    "1. Use getFloors and getSpaces (or getRooms) to identify all spaces and their listed occupancy types\n" +
+                    "2. Calculate occupant loads per IBC Table 1004.5 for each space\n" +
+                    "3. Determine the required number of exits and minimum egress width per IBC §1006 and §1005\n" +
+                    "4. Flag any spaces that appear to lack a compliant egress path or second exit\n" +
+                    "5. Note mixed-occupancy separation requirements (§508) if multiple occupancy groups are present\n" +
+                    "6. Summarize total occupant load by floor and for the building as a whole";
+                Dispatcher.Invoke(() => { if (_inputTextBox != null) _inputTextBox.Text = prompt; });
+                Activate();
+            }
+            catch { }
+        }
+
         private void HandleComplianceRun(string runId, JArray checks)
         {
             try

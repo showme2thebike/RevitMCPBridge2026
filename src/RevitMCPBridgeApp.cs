@@ -310,9 +310,23 @@ namespace RevitMCPBridge
             vicinityMapButton.LargeImage = CreateButtonIcon("vicinitymap", 32);
             vicinityMapButton.Image      = CreateButtonIcon("vicinitymap", 16);
 
+            var parcelButtonData = new PushButtonData("Parcel", "Parcel\nData", asm,
+                "RevitMCPBridge.Commands.ParcelCommand")
+                { ToolTip = "Look up parcel ID and lot area for a project address via Regrid" };
+            var parcelButton = siteDataPanel.AddItem(parcelButtonData) as PushButton;
+            parcelButton.LargeImage = CreateButtonIcon("parcel", 32);
+            parcelButton.Image      = CreateButtonIcon("parcel", 16);
+
+            var permitsButtonData = new PushButtonData("Permits", "Permit\nHistory", asm,
+                "RevitMCPBridge.Commands.PermitsCommand")
+                { ToolTip = "Pull recent building permit history for a project address — 13 cities supported (Seattle, NYC, Chicago, LA, SF, Austin, Denver, DC, Portland, Miami, Philadelphia, Nashville, Minneapolis)" };
+            var permitsButton = siteDataPanel.AddItem(permitsButtonData) as PushButton;
+            permitsButton.LargeImage = CreateButtonIcon("permits", 32);
+            permitsButton.Image      = CreateButtonIcon("permits", 16);
+
             var siteClimateButtonData = new PushButtonData("SiteClimate", "Site\nClimate", asm,
                 "RevitMCPBridge.Commands.SiteClimateCommand")
-                { ToolTip = "Coming soon — pull historical climate data, wind rose, precipitation, and heating/cooling degree days for any project location" };
+                { ToolTip = "Pull ASHRAE climate zone and design conditions (heating/cooling temps, HDD/CDD, precipitation, wind) for any project address" };
             var siteClimateButton = siteDataPanel.AddItem(siteClimateButtonData) as PushButton;
             siteClimateButton.LargeImage = CreateButtonIcon("siteclimate", 32);
             siteClimateButton.Image      = CreateButtonIcon("siteclimate", 16);
@@ -326,6 +340,20 @@ namespace RevitMCPBridge
             var codeCheckButton = codeSpecPanel.AddItem(codeCheckButtonData) as PushButton;
             codeCheckButton.LargeImage = CreateButtonIcon("compliance", 32);
             codeCheckButton.Image      = CreateButtonIcon("compliance", 16);
+
+            var occupancyButtonData = new PushButtonData("Occupancy", "Occupancy\n& Egress", asm,
+                "RevitMCPBridge.Commands.OccupancyCommand")
+                { ToolTip = "Open Banana Chat pre-loaded with an IBC occupancy load and egress analysis — calculates occupant loads, required exits, and egress widths per IBC 2021" };
+            var occupancyButton = codeSpecPanel.AddItem(occupancyButtonData) as PushButton;
+            occupancyButton.LargeImage = CreateButtonIcon("occupancy", 32);
+            occupancyButton.Image      = CreateButtonIcon("occupancy", 16);
+
+            var epdButtonData = new PushButtonData("EPD", "EPDs\n(EC3)", asm,
+                "RevitMCPBridge.Commands.EPDCommand")
+                { ToolTip = "Coming soon — pull Environmental Product Declaration (EPD) data from EC3, compare GWP across products, and tag Revit elements with embodied carbon data" };
+            var epdButton = codeSpecPanel.AddItem(epdButtonData) as PushButton;
+            epdButton.LargeImage = CreateButtonIcon("epd", 32);
+            epdButton.Image      = CreateButtonIcon("epd", 16);
 
             var productDataButtonData = new PushButtonData("ProductData", "Product\nData", asm,
                 "RevitMCPBridge.Commands.ProductDataCommand")
@@ -703,6 +731,18 @@ namespace RevitMCPBridge
                             break;
                         case "zoning":
                             DrawZoningIcon(dc, size);
+                            break;
+                        case "parcel":
+                            DrawParcelIcon(dc, size);
+                            break;
+                        case "permits":
+                            DrawPermitIcon(dc, size);
+                            break;
+                        case "occupancy":
+                            DrawOccupancyIcon(dc, size);
+                            break;
+                        case "epd":
+                            DrawEPDIcon(dc, size);
                             break;
                         case "productdata":
                             DrawProductDataIcon(dc, size);
@@ -1749,6 +1789,151 @@ namespace RevitMCPBridge
             // Corner marker — two short tick lines at top-left corner of setback rect
             dc.DrawLine(pen, new Point(7*s, 4*s), new Point(7*s, 7*s));
             dc.DrawLine(pen, new Point(4*s, 7*s), new Point(7*s, 7*s));
+        }
+
+        private void DrawParcelIcon(DrawingContext dc, int size)
+        {
+            // Land parcel: rectangle with diagonal hatch lines — flat white + dark outline
+            double s    = size / 32.0;
+            var fill    = new SolidColorBrush(Colors.White);
+            var pen     = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5 * s));
+            var hatchPen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.6, 0.9 * s));
+
+            // Parcel boundary
+            dc.DrawRectangle(fill, pen, new Rect(3*s, 5*s, 26*s, 22*s));
+
+            // Diagonal hatch lines inside the parcel
+            for (double offset = 0; offset <= 32; offset += 6)
+            {
+                var x1 = 3*s + offset*s; var y1 = 5*s;
+                var x2 = 3*s;            var y2 = 5*s + offset*s;
+                // Clip to rect bounds
+                if (x1 > 29*s) { var d = x1 - 29*s; x1 = 29*s; y1 += d; }
+                if (y2 > 27*s) { var d = y2 - 27*s; y2 = 27*s; x2 += d; }
+                if (y1 > 27*s || x2 > 29*s) continue;
+                dc.DrawLine(hatchPen, new Point(x1, y1), new Point(x2, y2));
+            }
+
+            // Pin / location marker at top-center
+            double px = 16*s, pyr = 7*s, pbr = 3.5*s;
+            dc.DrawEllipse(fill, pen, new Point(px, pyr), pbr, pbr);
+            var pinFig = new PathFigure { StartPoint = new Point(px - pbr, pyr) };
+            pinFig.Segments.Add(new ArcSegment(new Point(px + pbr, pyr), new Size(pbr, pbr), 0, false, SweepDirection.Clockwise, true));
+            pinFig.Segments.Add(new LineSegment(new Point(px, pyr + 5*s), true));
+            pinFig.IsClosed = true;
+            dc.DrawGeometry(fill, pen, new PathGeometry(new[] { pinFig }));
+
+            // Area label line at bottom
+            dc.DrawLine(pen, new Point(7*s, 23*s), new Point(25*s, 23*s));
+        }
+
+        private void DrawPermitIcon(DrawingContext dc, int size)
+        {
+            // Document with stamp circle — flat white + dark outline
+            double s    = size / 32.0;
+            var fill    = new SolidColorBrush(Colors.White);
+            var pen     = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5 * s));
+            var linePen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.7, 1.1 * s));
+
+            double dm = 3*s, dw = 17*s, dh = 26*s, fold = 5*s;
+            var pagePath = new StreamGeometry();
+            using (var ctx = pagePath.Open())
+            {
+                ctx.BeginFigure(new Point(dm, dm), true, true);
+                ctx.LineTo(new Point(dm+dw-fold, dm), true, false);
+                ctx.LineTo(new Point(dm+dw, dm+fold), true, false);
+                ctx.LineTo(new Point(dm+dw, dm+dh), true, false);
+                ctx.LineTo(new Point(dm, dm+dh), true, false);
+            }
+            dc.DrawGeometry(fill, pen, pagePath);
+
+            var foldPath = new StreamGeometry();
+            using (var ctx = foldPath.Open())
+            {
+                ctx.BeginFigure(new Point(dm+dw-fold, dm), false, false);
+                ctx.LineTo(new Point(dm+dw-fold, dm+fold), true, false);
+                ctx.LineTo(new Point(dm+dw, dm+fold), true, false);
+            }
+            dc.DrawGeometry(null, pen, foldPath);
+
+            // Text lines
+            dc.DrawLine(linePen, new Point(6*s, 10*s), new Point(15*s, 10*s));
+            dc.DrawLine(linePen, new Point(6*s, 14*s), new Point(14*s, 14*s));
+
+            // Approved stamp circle (bottom-right)
+            double bx = 23*s, by = 22*s, br = 7*s;
+            dc.DrawEllipse(fill, pen, new Point(bx, by), br, br);
+            // Inner dashed ring
+            var dashPen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.5, 0.8*s))
+                { DashStyle = new DashStyle(new double[] { 2, 1.5 }, 0) };
+            dc.DrawEllipse(null, dashPen, new Point(bx, by), br - 1.5*s, br - 1.5*s);
+            // Checkmark inside stamp
+            var checkPen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 2*s))
+                { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round, LineJoin = PenLineJoin.Round };
+            dc.DrawLine(checkPen, new Point(19.5*s, 22*s), new Point(22.5*s, 25*s));
+            dc.DrawLine(checkPen, new Point(22.5*s, 25*s), new Point(26.5*s, 18.5*s));
+        }
+
+        private void DrawOccupancyIcon(DrawingContext dc, int size)
+        {
+            // Two people figures with egress arrow — flat white + dark outline
+            double s    = size / 32.0;
+            var fill    = new SolidColorBrush(Colors.White);
+            var pen     = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5 * s));
+            var bodyPen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1.5, 2.2 * s))
+                { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+
+            // Person 1 (left)
+            dc.DrawEllipse(fill, pen, new Point(10*s, 7*s), 3*s, 3*s);   // head
+            dc.DrawLine(bodyPen, new Point(10*s, 10*s), new Point(10*s, 19*s)); // body
+            dc.DrawLine(bodyPen, new Point(6*s, 13*s), new Point(14*s, 13*s));  // arms
+            dc.DrawLine(bodyPen, new Point(10*s, 19*s), new Point(7*s, 27*s));  // left leg
+            dc.DrawLine(bodyPen, new Point(10*s, 19*s), new Point(13*s, 27*s)); // right leg
+
+            // Person 2 (center-right, slightly smaller)
+            dc.DrawEllipse(fill, pen, new Point(19*s, 8*s), 2.5*s, 2.5*s);
+            dc.DrawLine(bodyPen, new Point(19*s, 11*s), new Point(19*s, 19*s));
+            dc.DrawLine(bodyPen, new Point(15.5*s, 14*s), new Point(22.5*s, 14*s));
+            dc.DrawLine(bodyPen, new Point(19*s, 19*s), new Point(16.5*s, 26*s));
+            dc.DrawLine(bodyPen, new Point(19*s, 19*s), new Point(21.5*s, 26*s));
+
+            // Egress arrow (right side, pointing right)
+            var arrowPen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1.5, 2.5*s))
+                { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            dc.DrawLine(arrowPen, new Point(24*s, 16*s), new Point(30*s, 16*s));
+            dc.DrawLine(arrowPen, new Point(27*s, 12.5*s), new Point(30*s, 16*s));
+            dc.DrawLine(arrowPen, new Point(27*s, 19.5*s), new Point(30*s, 16*s));
+        }
+
+        private void DrawEPDIcon(DrawingContext dc, int size)
+        {
+            // Leaf inside a circle — flat white + dark outline (environmental/green theme)
+            double s    = size / 32.0;
+            var fill    = new SolidColorBrush(Colors.White);
+            var pen     = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5 * s));
+            var leafPen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.8, 1.2 * s))
+                { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+
+            // Circle border
+            dc.DrawEllipse(fill, pen, new Point(16*s, 16*s), 13*s, 13*s);
+
+            // Leaf shape
+            var leaf = new StreamGeometry();
+            using (var ctx = leaf.Open())
+            {
+                ctx.BeginFigure(new Point(16*s, 25*s), true, true);
+                ctx.BezierTo(new Point(8*s, 22*s), new Point(8*s, 10*s), new Point(16*s, 8*s), true, false);
+                ctx.BezierTo(new Point(24*s, 10*s), new Point(24*s, 22*s), new Point(16*s, 25*s), true, false);
+            }
+            dc.DrawGeometry(fill, pen, leaf);
+
+            // Center vein
+            dc.DrawLine(leafPen, new Point(16*s, 25*s), new Point(16*s, 8*s));
+            // Side veins
+            dc.DrawLine(leafPen, new Point(16*s, 14*s), new Point(20*s, 12*s));
+            dc.DrawLine(leafPen, new Point(16*s, 18*s), new Point(20*s, 16*s));
+            dc.DrawLine(leafPen, new Point(16*s, 14*s), new Point(12*s, 12*s));
+            dc.DrawLine(leafPen, new Point(16*s, 18*s), new Point(12*s, 16*s));
         }
 
         private void DrawProductDataIcon(DrawingContext dc, int size)

@@ -1819,7 +1819,7 @@ namespace RevitMCPBridge
                 {
                     http.Timeout = TimeSpan.FromSeconds(20);
                     var payload = new System.Net.Http.StringContent(
-                        $"{{\"address\":\"{address.Replace("\"", "\\\"")}\"}}",
+                        new JObject { ["address"] = address }.ToString(Formatting.None),
                         System.Text.Encoding.UTF8, "application/json");
                     var request = new System.Net.Http.HttpRequestMessage(
                         System.Net.Http.HttpMethod.Post,

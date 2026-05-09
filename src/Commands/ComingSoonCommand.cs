@@ -6,18 +6,17 @@ namespace RevitMCPBridge.Commands
 {
     [Transaction(TransactionMode.ReadOnly)]
     [Regeneration(RegenerationOption.Manual)]
-    public class SiteClimateCommand : IExternalCommand
+    public class EPDCommand : IExternalCommand
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
-            TaskDialog.Show("Site Climate — Coming Soon",
-                "Pull historical climate data directly into your project:\n\n" +
-                "• Wind rose and prevailing wind direction\n" +
-                "• Monthly precipitation averages\n" +
-                "• Heating and cooling degree days\n" +
-                "• Design temperatures (summer/winter)\n" +
-                "• Solar exposure and sun path\n\n" +
-                "Data sourced from NOAA and ASHRAE climate zones based on your project address.");
+            TaskDialog.Show("EPDs via EC3 — Coming Soon",
+                "Pull Environmental Product Declaration (EPD) data from EC3 (Embodied Carbon in Construction Calculator):\n\n" +
+                "• Search EC3's open database of 100k+ EPDs by material category\n" +
+                "• Compare Global Warming Potential (GWP) across comparable products\n" +
+                "• Tag Revit elements with EPD data (manufacturer, GWP, declared unit)\n" +
+                "• Export embodied carbon summary for LEED or LCA submittals\n\n" +
+                "EC3 is maintained by Building Transparency — no subscription required.");
             return Result.Succeeded;
         }
     }

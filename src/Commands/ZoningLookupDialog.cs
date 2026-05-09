@@ -236,18 +236,30 @@ namespace RevitMCPBridge.Commands
 
             try
             {
-                var payload = $"{{\"address\":\"{address.Replace("\"", "\\\"")}\"}}";
+                var body    = new JObject { ["address"] = address }.ToString(Newtonsoft.Json.Formatting.None);
                 var req     = new HttpRequestMessage(HttpMethod.Post, $"{_railwayUrl}/api/parcel/lookup");
                 req.Headers.Add("Authorization", $"Bearer {_apiKey}");
-                req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+                req.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
                 var resp = await _http.SendAsync(req);
-                var json = await resp.Content.ReadAsStringAsync();
-                var obj  = JObject.Parse(json);
+                var raw  = await resp.Content.ReadAsStringAsync();
 
                 if (!resp.IsSuccessStatusCode)
                 {
-                    _statusBlock.Text       = obj["error"]?.ToString() ?? "Lookup failed.";
+                    string errMsg;
+                    try   { errMsg = JObject.Parse(raw)["error"]?.ToString() ?? raw; }
+                    catch { errMsg = $"HTTP {(int)resp.StatusCode}: {raw.Substring(0, Math.Min(200, raw.Length))}"; }
+                    _statusBlock.Text       = errMsg;
+                    _statusBlock.Foreground = new SolidColorBrush(Color.FromRgb(220, 80, 80));
+                    _lookupBtn.IsEnabled    = true;
+                    return;
+                }
+
+                JObject obj;
+                try { obj = JObject.Parse(raw); }
+                catch
+                {
+                    _statusBlock.Text       = $"Server returned unexpected response: {raw.Substring(0, Math.Min(200, raw.Length))}";
                     _statusBlock.Foreground = new SolidColorBrush(Color.FromRgb(220, 80, 80));
                     _lookupBtn.IsEnabled    = true;
                     return;

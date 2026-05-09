@@ -21,7 +21,7 @@ namespace RevitMCPBridge.Commands
                 var uiApp = commandData.Application;
                 var doc   = uiApp.ActiveUIDocument?.Document;
 
-                var bmKey = ReadBimMonkeyApiKey();
+                var bmKey = ReadApiKey();
                 if (string.IsNullOrEmpty(bmKey))
                 {
                     TaskDialog.Show("Zoning Lookup", "BIM Monkey API key not found. Open Banana Chat and complete setup first.");
@@ -71,7 +71,7 @@ namespace RevitMCPBridge.Commands
             }
         }
 
-        private static string ReadBimMonkeyApiKey()
+        internal static string ReadApiKey()
         {
             // 1. Claude Code settings.json
             try
