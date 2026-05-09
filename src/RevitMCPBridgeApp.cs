@@ -296,19 +296,19 @@ namespace RevitMCPBridge
             // ── Site Data ─────────────────────────────────────────────────
             var siteDataPanel = application.CreateRibbonPanel(_tabName, "Site Data");
 
-            var zoningButtonData = new PushButtonData("Zoning", "Zoning", asm,
-                "RevitMCPBridge.Commands.ZoningCommand")
-                { ToolTip = "Look up parcel data for a project address — lot area, zoning, setbacks, FAR, and permit history from county assessor APIs" };
-            var zoningButton = siteDataPanel.AddItem(zoningButtonData) as PushButton;
-            zoningButton.LargeImage = CreateButtonIcon("zoning", 32);
-            zoningButton.Image      = CreateButtonIcon("zoning", 16);
-
             var vicinityMapButtonData = new PushButtonData("VicinityMap", "Vicinity\nMap", asm,
                 "RevitMCPBridge2026.AgentFramework.LaunchVicinityMapCommand")
                 { ToolTip = "Generate a vicinity map from live OpenStreetMap data — creates editable street lines and labels in a drafting view, ready to place on your VM sheet" };
             var vicinityMapButton = siteDataPanel.AddItem(vicinityMapButtonData) as PushButton;
             vicinityMapButton.LargeImage = CreateButtonIcon("vicinitymap", 32);
             vicinityMapButton.Image      = CreateButtonIcon("vicinitymap", 16);
+
+            var zoningButtonData = new PushButtonData("Zoning", "Zoning", asm,
+                "RevitMCPBridge.Commands.ZoningCommand")
+                { ToolTip = "Look up parcel data for a project address — lot area, zoning, setbacks, FAR, and permit history from county assessor APIs" };
+            var zoningButton = siteDataPanel.AddItem(zoningButtonData) as PushButton;
+            zoningButton.LargeImage = CreateButtonIcon("zoning", 32);
+            zoningButton.Image      = CreateButtonIcon("zoning", 16);
 
             var parcelButtonData = new PushButtonData("Parcel", "Parcel\nData", asm,
                 "RevitMCPBridge.Commands.ParcelCommand")
@@ -331,34 +331,37 @@ namespace RevitMCPBridge
             siteClimateButton.LargeImage = CreateButtonIcon("siteclimate", 32);
             siteClimateButton.Image      = CreateButtonIcon("siteclimate", 16);
 
-            // ── Code & Spec ───────────────────────────────────────────────
-            var codeSpecPanel = application.CreateRibbonPanel(_tabName, "Code & Spec");
+            // ── Compliance ───────────────────────────────────────────────
+            var compliancePanel = application.CreateRibbonPanel(_tabName, "Compliance");
 
             var codeCheckButtonData = new PushButtonData("CodeCheck", "Code\nCheck", asm,
                 "RevitMCPBridge2026.AgentFramework.LaunchComplianceCommand")
                 { ToolTip = "Run an IBC code compliance check — opens Banana Chat pre-loaded with a compliance prompt covering egress, occupancy loads, fire ratings, and more" };
-            var codeCheckButton = codeSpecPanel.AddItem(codeCheckButtonData) as PushButton;
+            var codeCheckButton = compliancePanel.AddItem(codeCheckButtonData) as PushButton;
             codeCheckButton.LargeImage = CreateButtonIcon("compliance", 32);
             codeCheckButton.Image      = CreateButtonIcon("compliance", 16);
 
             var occupancyButtonData = new PushButtonData("Occupancy", "Occupancy\n& Egress", asm,
                 "RevitMCPBridge.Commands.OccupancyCommand")
                 { ToolTip = "Open Banana Chat pre-loaded with an IBC occupancy load and egress analysis — calculates occupant loads, required exits, and egress widths per IBC 2021" };
-            var occupancyButton = codeSpecPanel.AddItem(occupancyButtonData) as PushButton;
+            var occupancyButton = compliancePanel.AddItem(occupancyButtonData) as PushButton;
             occupancyButton.LargeImage = CreateButtonIcon("occupancy", 32);
             occupancyButton.Image      = CreateButtonIcon("occupancy", 16);
+
+            // ── Specifications ───────────────────────────────────────────
+            var specsPanel = application.CreateRibbonPanel(_tabName, "Specifications");
 
             var epdButtonData = new PushButtonData("EC3", "EPDs", asm,
                 "RevitMCPBridge.Commands.EC3Command")
                 { ToolTip = "Search EC3 (Building Transparency) for Environmental Product Declarations — compare embodied carbon (GWP) across products, sorted lowest first, and load into Banana Chat for analysis" };
-            var epdButton = codeSpecPanel.AddItem(epdButtonData) as PushButton;
+            var epdButton = specsPanel.AddItem(epdButtonData) as PushButton;
             epdButton.LargeImage = CreateButtonIcon("ec3", 32);
             epdButton.Image      = CreateButtonIcon("ec3", 16);
 
             var productDataButtonData = new PushButtonData("ProductData", "Spec\nWriter", asm,
                 "RevitMCPBridge.Commands.ProductDataCommand")
                 { ToolTip = "Coming soon — pick a CSI MasterFormat section, pull relevant elements from your model, and generate a draft 3-part spec section in Banana Chat" };
-            var productDataButton = codeSpecPanel.AddItem(productDataButtonData) as PushButton;
+            var productDataButton = specsPanel.AddItem(productDataButtonData) as PushButton;
             productDataButton.LargeImage = CreateButtonIcon("productdata", 32);
             productDataButton.Image      = CreateButtonIcon("productdata", 16);
 
@@ -414,7 +417,15 @@ namespace RevitMCPBridge
                 { "MCPServerStatus",   "3" },
                 { "ModelCheck",        "M" },
                 { "Standards",         "A" },
+                { "VicinityMap",       "V" },
+                { "Zoning",            "Z" },
+                { "Parcel",            "P" },
+                { "Permits",           "T" },
+                { "SiteClimate",       "S" },
                 { "CodeCheck",         "C" },
+                { "Occupancy",         "O" },
+                { "EC3",               "G" },
+                { "ProductData",       "R" },
                 { "RedlineLoad",       "L" },
                 { "RedlineCancel",     "N" },
                 { "RedlineClear",      "D" },
@@ -1880,7 +1891,7 @@ namespace RevitMCPBridge
             double s    = size / 32.0;
             var white   = new SolidColorBrush(Colors.White);
             var outline = new Pen(new SolidColorBrush(Color.FromRgb(90, 90, 90)), Math.Max(0.8, 1.2 * s));
-            var limb    = new Pen(new SolidColorBrush(Color.FromRgb(90, 90, 90)), Math.Max(1.0, 1.8 * s))
+            var limb    = new Pen(new SolidColorBrush(Colors.White), Math.Max(1.0, 1.8 * s))
                 { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
 
             // Door frame: left jamb + header
