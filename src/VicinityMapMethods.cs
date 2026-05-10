@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Autodesk.Revit.DB;
@@ -45,6 +46,75 @@ namespace RevitMCPBridge
         private static string OutputDir =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
                          "BIM Monkey");
+
+        [MCPMethod("generateVicinityMapData", Category = "Detail",
+            Description = "Run generate_vicinity_map.py to fetch OSM street data for an address and produce vicinity_map.json. " +
+                          "Call createVicinityMapLines after this succeeds. Prefer this over runScript — args are passed correctly.")]
+        public static string GenerateVicinityMapData(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var address = parameters["address"]?.ToString();
+                if (string.IsNullOrWhiteSpace(address))
+                    return ResponseBuilder.Error("address is required").Build();
+
+                var wrapperDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                    "BIM Monkey", "wrapper");
+                var scriptPath = Path.Combine(wrapperDir, "generate_vicinity_map.py");
+
+                if (!File.Exists(scriptPath))
+                    return ResponseBuilder.Error($"Script not found: {scriptPath}. Reinstall BIM Monkey.").Build();
+
+                var timeoutSec  = parameters["timeoutSeconds"]?.Value<int>() ?? 120;
+                var pngFile     = parameters["pngFile"]?.ToString() ?? "vicinity_map.png";
+                var distMeters  = parameters["distMeters"]?.Value<int>() ?? 0;
+
+                var distArg = distMeters > 0 ? $" --dist {distMeters}" : "";
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName               = "python",
+                    Arguments              = $"\"{scriptPath}\" \"{address}\" \"{pngFile}\"{distArg}",
+                    UseShellExecute        = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError  = true,
+                    CreateNoWindow         = true,
+                    WorkingDirectory       = OutputDir,
+                };
+
+                Log.Information("generateVicinityMapData: running script for address={Address}", address);
+
+                using (var proc = Process.Start(psi))
+                {
+                    var stdout  = proc.StandardOutput.ReadToEnd();
+                    var stderr  = proc.StandardError.ReadToEnd();
+                    bool done   = proc.WaitForExit(timeoutSec * 1000);
+
+                    if (!done)
+                    {
+                        try { proc.Kill(); } catch { }
+                        return ResponseBuilder.Error($"Script timed out after {timeoutSec}s").Build();
+                    }
+                    if (proc.ExitCode != 0)
+                        return ResponseBuilder.Error($"Script failed (exit {proc.ExitCode}): {stderr.Trim()}").Build();
+
+                    var jsonPath = Path.Combine(OutputDir, "vicinity_map.json");
+                    Log.Information("generateVicinityMapData: complete, jsonPath={Path}", jsonPath);
+
+                    return ResponseBuilder.Success()
+                        .With("jsonPath", jsonPath)
+                        .With("stdout",   stdout.Trim())
+                        .WithMessage($"OSM data fetched. JSON ready at: {jsonPath}")
+                        .Build();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "generateVicinityMapData: unhandled exception");
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
 
         [MCPMethod("createVicinityMapLines", Category = "Detail",
             Description = "Import vicinity_map.json as editable detail lines and text notes in a new drafting view. " +
@@ -105,12 +175,29 @@ namespace RevitMCPBridge
 
                 Log.Information("createVicinityMapLines: textTypeId={Id}", textTypeId?.Value.ToString() ?? "null");
 
+                // Delete any existing vicinity map drafting views so re-runs don't accumulate duplicates.
+                using (var txCleanup = new Transaction(doc, "Delete Stale Vicinity Map Views"))
+                {
+                    txCleanup.Start();
+                    var stale = new FilteredElementCollector(doc)
+                        .OfClass(typeof(ViewDrafting))
+                        .Cast<ViewDrafting>()
+                        .Where(v => v.Name.StartsWith("VICINITY MAP", StringComparison.OrdinalIgnoreCase))
+                        .Select(v => v.Id)
+                        .ToList();
+                    if (stale.Count > 0)
+                    {
+                        doc.Delete(new System.Collections.Generic.List<ElementId>(stale));
+                        Log.Information("createVicinityMapLines: deleted {N} stale vicinity map view(s)", stale.Count);
+                    }
+                    txCleanup.Commit();
+                }
+
                 int lineCount = 0, labelCount = 0;
                 ElementId viewId;
                 ViewDrafting persistedView;
 
                 // If caller supplies an existing view ID, skip creation and target that view directly.
-                // This lets us test whether the rollback is specific to newly-created views.
                 int targetViewIdRaw = parameters["targetViewId"]?.Value<int>() ?? 0;
                 if (targetViewIdRaw != 0)
                 {
@@ -187,17 +274,26 @@ namespace RevitMCPBridge
                     {
                         foreach (var seg in lines)
                         {
-                            double x1 = seg["x1"]?.Value<double>() ?? 0;
-                            double y1 = seg["y1"]?.Value<double>() ?? 0;
-                            double x2 = seg["x2"]?.Value<double>() ?? 0;
-                            double y2 = seg["y2"]?.Value<double>() ?? 0;
-                            var p1 = new XYZ(x1, y1, 0);
-                            var p2 = new XYZ(x2, y2, 0);
-                            if (p1.DistanceTo(p2) < 1e-6) continue;
-                            doc.Create.NewDetailCurve(persistedView, Line.CreateBound(p1, p2));
-                            lineCount++;
-                            if (lineCount % 500 == 0)
-                                Log.Information("createVicinityMapLines: {N} curves so far", lineCount);
+                            try
+                            {
+                                double x1 = seg["x1"]?.Value<double>() ?? 0;
+                                double y1 = seg["y1"]?.Value<double>() ?? 0;
+                                double x2 = seg["x2"]?.Value<double>() ?? 0;
+                                double y2 = seg["y2"]?.Value<double>() ?? 0;
+                                if (!double.IsFinite(x1) || !double.IsFinite(y1) ||
+                                    !double.IsFinite(x2) || !double.IsFinite(y2)) continue;
+                                var p1 = new XYZ(x1, y1, 0);
+                                var p2 = new XYZ(x2, y2, 0);
+                                if (p1.DistanceTo(p2) < 1e-6) continue;
+                                doc.Create.NewDetailCurve(persistedView, Line.CreateBound(p1, p2));
+                                lineCount++;
+                                if (lineCount % 500 == 0)
+                                    Log.Information("createVicinityMapLines: {N} curves so far", lineCount);
+                            }
+                            catch (Exception exSeg)
+                            {
+                                Log.Warning("createVicinityMapLines: skipping bad segment — {Err}", exSeg.Message);
+                            }
                         }
 
                         // Site marker: four lines with gap at center to avoid join warning
