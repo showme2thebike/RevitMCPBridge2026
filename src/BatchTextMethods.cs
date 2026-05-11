@@ -1269,34 +1269,6 @@ namespace RevitMCPBridge2026
             }
         }
 
-        [MCPMethod("renameLineStyle", Category = "BatchText", Description = "NOT SUPPORTED: Line style rename is not available via the Revit public API (Category.Name is read-only). Returns the current name of the line style for reference. Use Revit's Manage > Additional Settings > Line Styles to rename manually.")]
-        public static string RenameLineStyle(UIApplication uiApp, JObject parameters)
-        {
-            try
-            {
-                var doc = uiApp.ActiveUIDocument.Document;
-                var styleId = new ElementId(parameters["lineStyleId"].Value<int>());
-
-                var graphicsStyle = doc.GetElement(styleId) as GraphicsStyle;
-                if (graphicsStyle == null)
-                    return ResponseBuilder.Error("Line style (GraphicsStyle) not found", "ELEMENT_NOT_FOUND").Build();
-
-                string currentName = graphicsStyle.GraphicsStyleCategory.Name;
-                return ResponseBuilder.Error(
-                    $"Line style rename is not supported by the Revit public API. " +
-                    $"Current name: '{currentName}'. " +
-                    $"To rename, use Revit's Manage tab > Additional Settings > Line Styles dialog.",
-                    "NOT_SUPPORTED")
-                    .With("lineStyleId", (int)styleId.Value)
-                    .With("currentName", currentName)
-                    .Build();
-            }
-            catch (Exception ex)
-            {
-                return ResponseBuilder.FromException(ex).Build();
-            }
-        }
-
         #endregion
 
         #region Text Note Creation

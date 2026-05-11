@@ -1655,8 +1655,6 @@ namespace RevitMCPBridge
                     case "renameTextNoteType":
                         return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.BatchTextMethods.RenameTextNoteType(uiApp, parameters));
 
-                    case "renameLineStyle":
-                        return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.BatchTextMethods.RenameLineStyle(uiApp, parameters));
                     case "standardizeTextNoteTypes":
                         return await ExecuteInRevitContext(uiApp => RevitMCPBridge2026.BatchTextMethods.StandardizeTextNoteTypes(uiApp, parameters));
                     case "processDetailFile":
