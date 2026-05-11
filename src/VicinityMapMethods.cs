@@ -185,11 +185,14 @@ namespace RevitMCPBridge
                         .Where(v => v.Name.StartsWith("VICINITY MAP", StringComparison.OrdinalIgnoreCase))
                         .Select(v => v.Id)
                         .ToList();
-                    if (stale.Count > 0)
+                    int deleted = 0;
+                    foreach (var id in stale)
                     {
-                        doc.Delete(new System.Collections.Generic.List<ElementId>(stale));
-                        Log.Information("createVicinityMapLines: deleted {N} stale vicinity map view(s)", stale.Count);
+                        try { doc.Delete(id); deleted++; }
+                        catch { /* skip views that are on sheets */ }
                     }
+                    if (deleted > 0)
+                        Log.Information("createVicinityMapLines: deleted {N} stale vicinity map view(s)", deleted);
                     txCleanup.Commit();
                 }
 
@@ -345,6 +348,30 @@ namespace RevitMCPBridge
                         // Elements are created and will commit when user dismisses it.
                         Log.Warning("createVicinityMapLines: content tx Pending — user will see join dialog; elements will persist");
                     }
+                }
+
+                // If nothing was drawn, delete the empty view we just created so it doesn't
+                // accumulate as an orphan in the project browser, then surface a real error.
+                if (lineCount == 0)
+                {
+                    try
+                    {
+                        using (var txDel = new Transaction(doc, "Delete Empty Vicinity Map View"))
+                        {
+                            txDel.Start();
+                            doc.Delete(viewId);
+                            txDel.Commit();
+                            Log.Warning("createVicinityMapLines: deleted empty view {Id} after 0-line failure", viewId?.Value);
+                        }
+                    }
+                    catch (Exception exDel)
+                    {
+                        Log.Warning(exDel, "createVicinityMapLines: could not delete empty view {Id}", viewId?.Value);
+                    }
+                    return ResponseBuilder.Error(
+                        $"Vicinity map transaction rolled back — 0 lines drawn. " +
+                        $"JSON had {lines.Count} segments; reduce --dist or check JSON for bad coordinates. " +
+                        $"Empty view deleted.").Build();
                 }
 
                 Log.Information("createVicinityMapLines: complete — viewId={ViewId}, viewName={Name}, lines={Lines}, labels={Labels}",
