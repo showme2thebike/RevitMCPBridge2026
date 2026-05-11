@@ -660,35 +660,37 @@ namespace RevitMCPBridge
                     }
                 }
 
-                // Parse location - accept either "location" array OR "x"/"y" params
-                // Default to center of printable area instead of hardcoded values
+                // Parse location. centerOnSheet=true (or omitting all coordinate params)
+                // places at the computed center of the printable area — use this for
+                // single-viewport sheets to avoid coordinate guessing errors.
                 double x = centerX, y = centerY;
-
-                if (parameters["location"] != null)
-                {
-                    var location = parameters["location"].ToObject<double[]>();
-                    if (location != null && location.Length >= 2)
-                    {
-                        x = location[0];
-                        y = location[1];
-                    }
-                }
-                else
-                {
-                    // Accept x/y as separate params
-                    if (parameters["x"] != null) { x = double.Parse(parameters["x"].ToString()); }
-                    if (parameters["y"] != null) { y = double.Parse(parameters["y"].ToString()); }
-                }
-
-                // CONSTRAIN position to be within titleblock printable area
-                // This prevents elements from being placed off the sheet
                 bool wasConstrained = false;
-                double originalX = x, originalY = y;
 
-                if (x < printMinX) { x = printMinX + 0.1; wasConstrained = true; }
-                if (x > printMaxX) { x = printMaxX - 0.1; wasConstrained = true; }
-                if (y < printMinY) { y = printMinY + 0.1; wasConstrained = true; }
-                if (y > printMaxY) { y = printMaxY - 0.1; wasConstrained = true; }
+                double originalX = x, originalY = y;
+                bool centerOnSheet = parameters["centerOnSheet"]?.Value<bool>() ?? false;
+                if (!centerOnSheet)
+                {
+                    if (parameters["location"] != null)
+                    {
+                        var location = parameters["location"].ToObject<double[]>();
+                        if (location != null && location.Length >= 2)
+                        {
+                            x = location[0];
+                            y = location[1];
+                        }
+                    }
+                    else if (parameters["x"] != null || parameters["y"] != null)
+                    {
+                        if (parameters["x"] != null) { x = double.Parse(parameters["x"].ToString()); }
+                        if (parameters["y"] != null) { y = double.Parse(parameters["y"].ToString()); }
+                    }
+
+                    originalX = x; originalY = y;
+                    if (x < printMinX) { x = printMinX + 0.1; wasConstrained = true; }
+                    if (x > printMaxX) { x = printMaxX - 0.1; wasConstrained = true; }
+                    if (y < printMinY) { y = printMinY + 0.1; wasConstrained = true; }
+                    if (y > printMaxY) { y = printMaxY - 0.1; wasConstrained = true; }
+                }
 
                 // Validate view exists
                 var view = doc.GetElement(viewId) as View;
@@ -1630,6 +1632,40 @@ namespace RevitMCPBridge
                         .With("viewportIds", newViewportIds)
                         .Build();
                 }
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// List all viewport types available in the project
+        /// </summary>
+        [MCPMethod("getViewportTypes", Category = "Sheet", Description = "List all viewport types available in the project. Use typeId values with setViewportType.")]
+        public static string GetViewportTypes(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                var types = new FilteredElementCollector(doc)
+                    .OfCategory(BuiltInCategory.OST_Viewports)
+                    .WhereElementIsElementType()
+                    .Cast<ElementType>()
+                    .Select(t => new
+                    {
+                        typeId = (int)t.Id.Value,
+                        name = t.Name,
+                        familyName = t.FamilyName
+                    })
+                    .OrderBy(t => t.name)
+                    .ToList();
+
+                return ResponseBuilder.Success()
+                    .With("types", types)
+                    .With("count", types.Count)
+                    .Build();
             }
             catch (Exception ex)
             {

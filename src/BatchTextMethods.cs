@@ -942,34 +942,112 @@ namespace RevitMCPBridge2026
             {
                 var doc = uiApp.ActiveUIDocument.Document;
 
+                // ── Selective mode: caller passes renames:[{typeId, newName, fontName?, sizeInches?}] ──
+                // Only the explicitly listed types are touched; everything else is left alone.
+                var renamesToken = parameters["renames"];
+                if (renamesToken != null && renamesToken.Type == JTokenType.Array)
+                {
+                    string globalFont = parameters["fontName"]?.ToString();
+                    double? globalSizeIn = parameters["sizeInches"]?.ToObject<double?>();
+
+                    int typesRenamed = 0;
+                    var renamedTypes = new List<object>();
+
+                    using (var trans = new Transaction(doc, "Rename Dimension Types"))
+                    {
+                        trans.Start();
+
+                        foreach (JObject entry in renamesToken)
+                        {
+                            var typeIdVal = entry["typeId"]?.Value<int>();
+                            if (typeIdVal == null) continue;
+
+                            var dimType = doc.GetElement(new ElementId(typeIdVal.Value)) as DimensionType;
+                            if (dimType == null)
+                            {
+                                renamedTypes.Add(new { typeId = typeIdVal.Value, error = "DimensionType not found" });
+                                continue;
+                            }
+
+                            string originalName = dimType.Name;
+                            string newName = entry["newName"]?.ToString();
+                            string font = entry["fontName"]?.ToString() ?? globalFont;
+                            double? sizeIn = entry["sizeInches"]?.ToObject<double?>() ?? globalSizeIn;
+
+                            try
+                            {
+                                bool changed = false;
+
+                                if (!string.IsNullOrEmpty(newName) && newName != originalName)
+                                {
+                                    dimType.Name = newName;
+                                    changed = true;
+                                }
+
+                                if (!string.IsNullOrEmpty(font))
+                                {
+                                    var p = dimType.get_Parameter(BuiltInParameter.TEXT_FONT);
+                                    if (p != null && !p.IsReadOnly) { p.Set(font); changed = true; }
+                                }
+
+                                if (sizeIn.HasValue)
+                                {
+                                    var p = dimType.get_Parameter(BuiltInParameter.TEXT_SIZE);
+                                    if (p != null && !p.IsReadOnly) { p.Set(sizeIn.Value / 12.0); changed = true; }
+                                }
+
+                                if (changed) typesRenamed++;
+                                renamedTypes.Add(new
+                                {
+                                    typeId = typeIdVal.Value,
+                                    originalName = originalName,
+                                    newName = newName ?? originalName,
+                                    changed = changed
+                                });
+                            }
+                            catch (Exception exEntry)
+                            {
+                                renamedTypes.Add(new { typeId = typeIdVal.Value, originalName = originalName, error = exEntry.Message });
+                            }
+                        }
+
+                        trans.Commit();
+                    }
+
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        mode = "selective",
+                        typesRenamed = typesRenamed,
+                        renamedTypes = renamedTypes,
+                        message = $"Selectively renamed {typesRenamed} dimension type(s)"
+                    });
+                }
+
+                // ── Bulk mode (original behavior) ─────────────────────────────────────────────
+                // Renames ALL dimension types based on keyword detection. Use with caution.
                 string prefix = parameters["prefix"]?.ToString() ?? "FC";
                 string fontName = parameters["fontName"]?.ToString() ?? "Century Gothic";
                 double sizeInches = parameters["sizeInches"]?.ToObject<double>() ?? 0.09375;
                 double sizeFeet = sizeInches / 12.0;
                 bool skipAlreadyPrefixed = parameters["skipAlreadyPrefixed"]?.ToObject<bool>() ?? true;
 
-                int typesRenamed = 0;
-                var renamedTypes = new List<object>();
+                int typesRenamedBulk = 0;
+                var renamedTypesBulk = new List<object>();
 
                 using (var trans = new Transaction(doc, "Rename Dimension Types"))
                 {
                     trans.Start();
 
-                    // Get all dimension types
-                    var collector = new FilteredElementCollector(doc)
-                        .OfClass(typeof(DimensionType));
+                    var collector = new FilteredElementCollector(doc).OfClass(typeof(DimensionType));
 
                     foreach (DimensionType dimType in collector)
                     {
                         string originalName = dimType.Name;
 
-                        // Skip if already has prefix
                         if (skipAlreadyPrefixed && originalName.StartsWith(prefix + " "))
-                        {
                             continue;
-                        }
 
-                        // Determine the dimension style category from original name
                         string styleCategory = "Dimension";
                         if (originalName.Contains("Linear") || originalName.Contains("Horizontal"))
                             styleCategory = "Linear";
@@ -988,10 +1066,8 @@ namespace RevitMCPBridge2026
                         else if (originalName.Contains("Diagonal"))
                             styleCategory = "Diagonal";
 
-                        // Create new name with prefix
                         string newName = $"{prefix} {styleCategory}";
 
-                        // Add unique suffix if there are multiple of same category
                         int counter = 1;
                         string testName = newName;
                         var existingNames = new FilteredElementCollector(doc)
@@ -1007,32 +1083,23 @@ namespace RevitMCPBridge2026
                         }
                         newName = testName;
 
-                        // Skip if name would be unchanged
                         if (newName == originalName)
-                        {
                             continue;
-                        }
 
                         try
                         {
-                            // Rename the type
                             dimType.Name = newName;
 
-                            // Update font and size
                             var textFontParam = dimType.get_Parameter(BuiltInParameter.TEXT_FONT);
                             if (textFontParam != null && !textFontParam.IsReadOnly)
-                            {
                                 textFontParam.Set(fontName);
-                            }
 
                             var textSizeParam = dimType.get_Parameter(BuiltInParameter.TEXT_SIZE);
                             if (textSizeParam != null && !textSizeParam.IsReadOnly)
-                            {
                                 textSizeParam.Set(sizeFeet);
-                            }
 
-                            typesRenamed++;
-                            renamedTypes.Add(new
+                            typesRenamedBulk++;
+                            renamedTypesBulk.Add(new
                             {
                                 id = dimType.Id.Value,
                                 originalName = originalName,
@@ -1043,8 +1110,7 @@ namespace RevitMCPBridge2026
                         }
                         catch (Exception ex)
                         {
-                            // Type might be in use or protected, log and continue
-                            renamedTypes.Add(new
+                            renamedTypesBulk.Add(new
                             {
                                 id = dimType.Id.Value,
                                 originalName = originalName,
@@ -1060,12 +1126,13 @@ namespace RevitMCPBridge2026
                 return JsonConvert.SerializeObject(new
                 {
                     success = true,
-                    typesRenamed = typesRenamed,
+                    mode = "bulk",
+                    typesRenamed = typesRenamedBulk,
                     prefix = prefix,
                     fontName = fontName,
                     sizeInches = sizeInches,
-                    renamedTypes = renamedTypes,
-                    message = $"Renamed {typesRenamed} dimension types with '{prefix}' prefix"
+                    renamedTypes = renamedTypesBulk,
+                    message = $"Renamed {typesRenamedBulk} dimension types with '{prefix}' prefix"
                 });
             }
             catch (Exception ex)
@@ -1161,6 +1228,68 @@ namespace RevitMCPBridge2026
                     modifiedTypes = modifiedTypes,
                     message = $"Modified {typesModified} text note types to {fontName} at {sizeInches}\" size"
                 });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        [MCPMethod("renameTextNoteType", Category = "BatchText", Description = "Rename a single text note type by its element ID. Parameters: typeId (int), newName (string).")]
+        public static string RenameTextNoteType(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var typeId = new ElementId(parameters["typeId"].Value<int>());
+                string newName = parameters["newName"]?.ToString()
+                    ?? throw new ArgumentException("newName is required");
+
+                var textNoteType = doc.GetElement(typeId) as TextNoteType;
+                if (textNoteType == null)
+                    return ResponseBuilder.Error("TextNoteType not found", "ELEMENT_NOT_FOUND").Build();
+
+                string oldName = textNoteType.Name;
+                using (var trans = new Transaction(doc, "Rename Text Note Type"))
+                {
+                    trans.Start();
+                    textNoteType.Name = newName;
+                    trans.Commit();
+                }
+
+                return ResponseBuilder.Success()
+                    .With("typeId", (int)typeId.Value)
+                    .With("oldName", oldName)
+                    .With("newName", newName)
+                    .Build();
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        [MCPMethod("renameLineStyle", Category = "BatchText", Description = "NOT SUPPORTED: Line style rename is not available via the Revit public API (Category.Name is read-only). Returns the current name of the line style for reference. Use Revit's Manage > Additional Settings > Line Styles to rename manually.")]
+        public static string RenameLineStyle(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var styleId = new ElementId(parameters["lineStyleId"].Value<int>());
+
+                var graphicsStyle = doc.GetElement(styleId) as GraphicsStyle;
+                if (graphicsStyle == null)
+                    return ResponseBuilder.Error("Line style (GraphicsStyle) not found", "ELEMENT_NOT_FOUND").Build();
+
+                string currentName = graphicsStyle.GraphicsStyleCategory.Name;
+                return ResponseBuilder.Error(
+                    $"Line style rename is not supported by the Revit public API. " +
+                    $"Current name: '{currentName}'. " +
+                    $"To rename, use Revit's Manage tab > Additional Settings > Line Styles dialog.",
+                    "NOT_SUPPORTED")
+                    .With("lineStyleId", (int)styleId.Value)
+                    .With("currentName", currentName)
+                    .Build();
             }
             catch (Exception ex)
             {
