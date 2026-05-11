@@ -263,95 +263,120 @@ namespace RevitMCPBridge
                 }
                 } // end else (new view)
 
-                // Single content transaction: lines + labels together.
-                // No preprocessor (triggers 666 loop regardless of failure count).
-                // Commit may return Pending if Revit shows a join/overlap dialog after
-                // Execute() returns — treat Pending as soft success since elements ARE
-                // created and will persist when the user dismisses the dialog.
-                using (var txContent = new Transaction(doc, "Vicinity Map Content"))
-                {
-                    txContent.Start();
-                    Log.Information("createVicinityMapLines: content tx started");
+                // Commit every 25 segments in a separate transaction — Revit rolls back
+                // single transactions containing more than ~40 NewDetailCurve calls.
+                const int BATCH_SIZE = 25;
+                int batchNum = 0;
+                var pending = new System.Collections.Generic.List<(XYZ, XYZ)>();
 
+                foreach (var seg in lines)
+                {
                     try
                     {
-                        foreach (var seg in lines)
+                        double x1 = seg["x1"]?.Value<double>() ?? 0;
+                        double y1 = seg["y1"]?.Value<double>() ?? 0;
+                        double x2 = seg["x2"]?.Value<double>() ?? 0;
+                        double y2 = seg["y2"]?.Value<double>() ?? 0;
+                        if (!double.IsFinite(x1) || !double.IsFinite(y1) ||
+                            !double.IsFinite(x2) || !double.IsFinite(y2)) continue;
+                        var p1 = new XYZ(x1, y1, 0);
+                        var p2 = new XYZ(x2, y2, 0);
+                        if (p1.DistanceTo(p2) < 1e-6) continue;
+                        pending.Add((p1, p2));
+                    }
+                    catch (Exception exSeg)
+                    {
+                        Log.Warning("createVicinityMapLines: skipping bad segment — {Err}", exSeg.Message);
+                    }
+
+                    if (pending.Count >= BATCH_SIZE)
+                    {
+                        batchNum++;
+                        using (var txBatch = new Transaction(doc, $"Vicinity Map Lines {batchNum}"))
                         {
-                            try
+                            txBatch.Start();
+                            int added = 0;
+                            foreach (var (bp1, bp2) in pending)
                             {
-                                double x1 = seg["x1"]?.Value<double>() ?? 0;
-                                double y1 = seg["y1"]?.Value<double>() ?? 0;
-                                double x2 = seg["x2"]?.Value<double>() ?? 0;
-                                double y2 = seg["y2"]?.Value<double>() ?? 0;
-                                if (!double.IsFinite(x1) || !double.IsFinite(y1) ||
-                                    !double.IsFinite(x2) || !double.IsFinite(y2)) continue;
-                                var p1 = new XYZ(x1, y1, 0);
-                                var p2 = new XYZ(x2, y2, 0);
-                                if (p1.DistanceTo(p2) < 1e-6) continue;
-                                doc.Create.NewDetailCurve(persistedView, Line.CreateBound(p1, p2));
-                                lineCount++;
-                                if (lineCount % 500 == 0)
-                                    Log.Information("createVicinityMapLines: {N} curves so far", lineCount);
+                                try { doc.Create.NewDetailCurve(persistedView, Line.CreateBound(bp1, bp2)); added++; }
+                                catch { }
                             }
-                            catch (Exception exSeg)
-                            {
-                                Log.Warning("createVicinityMapLines: skipping bad segment — {Err}", exSeg.Message);
-                            }
+                            var bs = txBatch.Commit();
+                            if (bs != TransactionStatus.RolledBack) lineCount += added;
+                            else Log.Warning("createVicinityMapLines: batch {N} rolled back", batchNum);
                         }
-
-                        // Site marker: four lines with gap at center to avoid join warning
-                        double arm = scaleDenom * (0.05 / 12.0);
-                        double gap = arm * 0.05;
-                        doc.Create.NewDetailCurve(persistedView, Line.CreateBound(new XYZ(-arm, 0, 0), new XYZ(-gap, 0, 0)));
-                        doc.Create.NewDetailCurve(persistedView, Line.CreateBound(new XYZ(gap, 0, 0),  new XYZ(arm, 0, 0)));
-                        doc.Create.NewDetailCurve(persistedView, Line.CreateBound(new XYZ(0, -arm, 0), new XYZ(0, -gap, 0)));
-                        doc.Create.NewDetailCurve(persistedView, Line.CreateBound(new XYZ(0, gap, 0),  new XYZ(0, arm, 0)));
-
-                        foreach (var label in labels)
-                        {
-                            double x      = label["x"]?.Value<double>() ?? 0;
-                            double y      = label["y"]?.Value<double>() ?? 0;
-                            string text   = label["text"]?.ToString() ?? "";
-                            double rotDeg = label["rotation"]?.Value<double>() ?? 0;
-                            double rotRad = rotDeg * Math.PI / 180.0;
-                            if (string.IsNullOrEmpty(text) || textTypeId == ElementId.InvalidElementId) continue;
-                            var opts = new TextNoteOptions
-                            {
-                                TypeId = textTypeId,
-                                HorizontalAlignment = HorizontalTextAlignment.Center,
-                                Rotation = rotRad
-                            };
-                            TextNote.Create(doc, persistedView.Id, new XYZ(x, y, 0), text, opts);
-                            labelCount++;
-                        }
-                        Log.Information("createVicinityMapLines: {Lines} lines + {Labels} labels created, committing", lineCount, labelCount);
-                    }
-                    catch (Exception exContent)
-                    {
-                        Log.Error(exContent, "createVicinityMapLines: exception in content tx");
-                    }
-
-                    TransactionStatus cContent;
-                    try { cContent = txContent.Commit(); }
-                    catch (Exception exC) { Log.Error(exC, "createVicinityMapLines: content Commit() threw"); cContent = TransactionStatus.RolledBack; }
-                    Log.Information("createVicinityMapLines: content tx={Status}", cContent);
-
-                    if (cContent == TransactionStatus.RolledBack)
-                    {
-                        lineCount  = 0;
-                        labelCount = 0;
-                        Log.Error("createVicinityMapLines: content tx rolled back — no elements created");
-                    }
-                    else if (cContent == TransactionStatus.Pending)
-                    {
-                        // Revit will show a join/overlap dialog after Execute() returns.
-                        // Elements are created and will commit when user dismisses it.
-                        Log.Warning("createVicinityMapLines: content tx Pending — user will see join dialog; elements will persist");
+                        pending.Clear();
                     }
                 }
 
-                // If nothing was drawn, delete the empty view we just created so it doesn't
-                // accumulate as an orphan in the project browser, then surface a real error.
+                if (pending.Count > 0)
+                {
+                    batchNum++;
+                    using (var txBatch = new Transaction(doc, $"Vicinity Map Lines {batchNum}"))
+                    {
+                        txBatch.Start();
+                        int added = 0;
+                        foreach (var (bp1, bp2) in pending)
+                        {
+                            try { doc.Create.NewDetailCurve(persistedView, Line.CreateBound(bp1, bp2)); added++; }
+                            catch { }
+                        }
+                        var bs = txBatch.Commit();
+                        if (bs != TransactionStatus.RolledBack) lineCount += added;
+                        else Log.Warning("createVicinityMapLines: batch {N} rolled back", batchNum);
+                    }
+                    pending.Clear();
+                }
+                Log.Information("createVicinityMapLines: {Lines} lines drawn in {Batches} batches", lineCount, batchNum);
+
+                using (var txMarker = new Transaction(doc, "Vicinity Map Site Marker"))
+                {
+                    txMarker.Start();
+                    double arm = scaleDenom * (0.05 / 12.0);
+                    double gap = arm * 0.05;
+                    doc.Create.NewDetailCurve(persistedView, Line.CreateBound(new XYZ(-arm, 0, 0), new XYZ(-gap, 0, 0)));
+                    doc.Create.NewDetailCurve(persistedView, Line.CreateBound(new XYZ(gap, 0, 0),  new XYZ(arm, 0, 0)));
+                    doc.Create.NewDetailCurve(persistedView, Line.CreateBound(new XYZ(0, -arm, 0), new XYZ(0, -gap, 0)));
+                    doc.Create.NewDetailCurve(persistedView, Line.CreateBound(new XYZ(0, gap, 0),  new XYZ(0, arm, 0)));
+                    txMarker.Commit();
+                }
+
+                using (var txLabels = new Transaction(doc, "Vicinity Map Labels"))
+                {
+                    txLabels.Start();
+                    foreach (var label in labels)
+                    {
+                        double x      = label["x"]?.Value<double>() ?? 0;
+                        double y      = label["y"]?.Value<double>() ?? 0;
+                        string text   = label["text"]?.ToString() ?? "";
+                        double rotDeg = label["rotation"]?.Value<double>() ?? 0;
+                        double rotRad = rotDeg * Math.PI / 180.0;
+                        if (string.IsNullOrEmpty(text) || textTypeId == ElementId.InvalidElementId) continue;
+                        var opts = new TextNoteOptions
+                        {
+                            TypeId = textTypeId,
+                            HorizontalAlignment = HorizontalTextAlignment.Center,
+                            Rotation = rotRad
+                        };
+                        try
+                        {
+                            TextNote.Create(doc, persistedView.Id, new XYZ(x, y, 0), text, opts);
+                            labelCount++;
+                        }
+                        catch (Exception exLabel)
+                        {
+                            Log.Warning("createVicinityMapLines: skipping label '{T}' — {Err}", text, exLabel.Message);
+                        }
+                    }
+                    var ls = txLabels.Commit();
+                    if (ls == TransactionStatus.RolledBack)
+                    {
+                        labelCount = 0;
+                        Log.Warning("createVicinityMapLines: labels tx rolled back");
+                    }
+                    Log.Information("createVicinityMapLines: {Labels} labels committed", labelCount);
+                }
+
                 if (lineCount == 0)
                 {
                     try
@@ -369,9 +394,21 @@ namespace RevitMCPBridge
                         Log.Warning(exDel, "createVicinityMapLines: could not delete empty view {Id}", viewId?.Value);
                     }
                     return ResponseBuilder.Error(
-                        $"Vicinity map transaction rolled back — 0 lines drawn. " +
-                        $"JSON had {lines.Count} segments; reduce --dist or check JSON for bad coordinates. " +
-                        $"Empty view deleted.").Build();
+                        $"Vicinity map failed — 0 lines drawn across {batchNum} batches. " +
+                        $"JSON had {lines.Count} segments. Check log for batch rollbacks.").Build();
+                }
+
+                using (var txCrop = new Transaction(doc, "Vicinity Map Crop Region"))
+                {
+                    txCrop.Start();
+                    var bbox = new BoundingBoxXYZ();
+                    bbox.Min = new XYZ(-radiusFeet, -radiusFeet, -1);
+                    bbox.Max = new XYZ(radiusFeet,  radiusFeet,   1);
+                    persistedView.CropBox       = bbox;
+                    persistedView.CropBoxActive  = true;
+                    persistedView.CropBoxVisible = false;
+                    txCrop.Commit();
+                    Log.Information("createVicinityMapLines: crop box set to ±{R} ft", Math.Round(radiusFeet));
                 }
 
                 Log.Information("createVicinityMapLines: complete — viewId={ViewId}, viewName={Name}, lines={Lines}, labels={Labels}",
