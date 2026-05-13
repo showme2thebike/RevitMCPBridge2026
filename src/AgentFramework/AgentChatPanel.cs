@@ -30,7 +30,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private TextBlock _tokenText;
         private TextBlock _costText;
         private TextBlock _timerText;
-        private TextBlock _spinnerText;
+        private FrameworkElement _spinnerText;
         private int _spinnerFrame;
         private StackPanel _chatHistory;
         private ScrollViewer _chatScrollViewer;
@@ -434,15 +434,36 @@ namespace RevitMCPBridge2026.AgentFramework
                 Margin = new Thickness(0, 0, 6, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
-            _spinnerText = new TextBlock
+            // WPF .NET 4.8 can't render color emoji — draw banana with WPF primitives
+            // Thick bezier stroke + round caps = crescent silhouette; inner highlight = white face
+            var spinnerCanvas = new Canvas
             {
-                Text = "🍌",
-                FontFamily = new System.Windows.Media.FontFamily("Segoe UI Emoji"),
-                FontSize = 13,
+                Width = 20, Height = 20,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 RenderTransformOrigin = new Point(0.5, 0.85)
             };
+            var bananaBody = new System.Windows.Shapes.Path
+            {
+                Stroke = new SolidColorBrush(Color.FromRgb(255, 213, 0)),
+                StrokeThickness = 6,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                Fill = System.Windows.Media.Brushes.Transparent,
+                Data = Geometry.Parse("M 13 2 Q 2 10 13 18"),
+            };
+            var bananaHighlight = new System.Windows.Shapes.Path
+            {
+                Stroke = new SolidColorBrush(Color.FromArgb(210, 255, 252, 200)),
+                StrokeThickness = 2,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                Fill = System.Windows.Media.Brushes.Transparent,
+                Data = Geometry.Parse("M 12 4 Q 5 10 12 16"),
+            };
+            spinnerCanvas.Children.Add(bananaBody);
+            spinnerCanvas.Children.Add(bananaHighlight);
+            _spinnerText = spinnerCanvas;
             spinnerContainer.Child = _spinnerText;
             titleRow.Children.Add(spinnerContainer);
 
