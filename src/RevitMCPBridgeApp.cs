@@ -294,57 +294,56 @@ namespace RevitMCPBridge
 
 
             // ── Site Data ─────────────────────────────────────────────────
-            // SplitButton: Vicinity Map is the default action; lookup tools in single-column dropdown.
-            // Matches Revit's native "Model Site ▼" pattern — no panel pin, no 2-column grid.
+            // AddSlideOut() puts ▼ on the "Site Data" panel title (like Revit's "Manage Models ▼").
+            // Vicinity Map is always visible; lookup tools expand from the panel title.
             var siteDataPanel = application.CreateRibbonPanel(_tabName, "Site Data");
 
             var vicinityMapButtonData = new PushButtonData("VicinityMap", "Vicinity\nMap", asm,
                 "RevitMCPBridge2026.AgentFramework.LaunchVicinityMapCommand")
                 { ToolTip = "Generate a vicinity map from live OpenStreetMap data — creates editable street lines and labels in a drafting view, ready to place on your VM sheet",
                   LargeImage = CreateButtonIcon("vicinitymap", 32), Image = CreateButtonIcon("vicinitymap", 16) };
+            siteDataPanel.AddItem(vicinityMapButtonData);
+
+            siteDataPanel.AddSlideOut();  // ▼ on "Site Data" panel title; everything below is hidden until clicked
+
+            // AddStackedItems = compact bar format: small icon left, text right, stacked vertically in the popup
             var zoningButtonData = new PushButtonData("Zoning", "Zoning", asm,
                 "RevitMCPBridge.Commands.ZoningCommand")
                 { ToolTip = "Look up parcel data for a project address — lot area, zoning, setbacks, FAR, and permit history from county assessor APIs",
-                  LargeImage = CreateButtonIcon("zoning", 32), Image = CreateButtonIcon("zoning", 16) };
+                  LargeImage = CreateButtonIcon("zoning", 16), Image = CreateButtonIcon("zoning", 16) };
             var parcelButtonData = new PushButtonData("Parcel", "Parcel Data", asm,
                 "RevitMCPBridge.Commands.ParcelCommand")
                 { ToolTip = "Look up parcel ID and lot area for a project address via Regrid",
-                  LargeImage = CreateButtonIcon("parcel", 32), Image = CreateButtonIcon("parcel", 16) };
+                  LargeImage = CreateButtonIcon("parcel", 16), Image = CreateButtonIcon("parcel", 16) };
             var permitsButtonData = new PushButtonData("Permits", "Permit History", asm,
                 "RevitMCPBridge.Commands.PermitsCommand")
                 { ToolTip = "Pull recent building permit history for a project address — 13 cities supported",
-                  LargeImage = CreateButtonIcon("permits", 32), Image = CreateButtonIcon("permits", 16) };
+                  LargeImage = CreateButtonIcon("permits", 16), Image = CreateButtonIcon("permits", 16) };
             var siteClimateButtonData = new PushButtonData("SiteClimate", "Site Climate", asm,
                 "RevitMCPBridge.Commands.SiteClimateCommand")
                 { ToolTip = "Pull ASHRAE climate zone and design conditions for any project address",
-                  LargeImage = CreateButtonIcon("siteclimate", 32), Image = CreateButtonIcon("siteclimate", 16) };
-
-            var siteDataSplitData = new SplitButtonData("SiteData", "Site Data");
-            var siteDataSplit = siteDataPanel.AddItem(siteDataSplitData) as SplitButton;
-            siteDataSplit.AddPushButton(vicinityMapButtonData);
-            siteDataSplit.AddPushButton(zoningButtonData);
-            siteDataSplit.AddPushButton(parcelButtonData);
-            siteDataSplit.AddPushButton(permitsButtonData);
-            siteDataSplit.AddPushButton(siteClimateButtonData);
+                  LargeImage = CreateButtonIcon("siteclimate", 16), Image = CreateButtonIcon("siteclimate", 16) };
+            siteDataPanel.AddStackedItems(zoningButtonData, parcelButtonData);
+            siteDataPanel.AddStackedItems(permitsButtonData, siteClimateButtonData);
 
             // ── Compliance ───────────────────────────────────────────────
-            // SplitButton: Code Check is the default action; Occupancy & Egress in dropdown.
-            // Small icon only in dropdown — fixes oversized icon bug. No panel pin.
+            // AddSlideOut() puts ▼ on the "Compliance" panel title.
+            // Code Check is always visible; Occupancy & Egress expands from the panel title.
             var compliancePanel = application.CreateRibbonPanel(_tabName, "Compliance");
 
             var codeCheckButtonData = new PushButtonData("CodeCheck", "Code\nCheck", asm,
                 "RevitMCPBridge2026.AgentFramework.LaunchComplianceCommand")
                 { ToolTip = "Run an IBC code compliance check — opens Banana Chat pre-loaded with a compliance prompt covering egress, occupancy loads, fire ratings, and more",
                   LargeImage = CreateButtonIcon("compliance", 32), Image = CreateButtonIcon("compliance", 16) };
+            compliancePanel.AddItem(codeCheckButtonData);
+
+            compliancePanel.AddSlideOut();  // ▼ on "Compliance" panel title
+
             var occupancyButtonData = new PushButtonData("Occupancy", "Occupancy & Egress", asm,
                 "RevitMCPBridge.Commands.OccupancyCommand")
                 { ToolTip = "Open Banana Chat pre-loaded with an IBC occupancy load and egress analysis — calculates occupant loads, required exits, and egress widths per IBC 2021",
-                  LargeImage = CreateButtonIcon("occupancy", 32), Image = CreateButtonIcon("occupancy", 16) };
-
-            var complianceSplitData = new SplitButtonData("Compliance", "Compliance");
-            var complianceSplit = compliancePanel.AddItem(complianceSplitData) as SplitButton;
-            complianceSplit.AddPushButton(codeCheckButtonData);
-            complianceSplit.AddPushButton(occupancyButtonData);
+                  LargeImage = CreateButtonIcon("occupancy", 16), Image = CreateButtonIcon("occupancy", 16) };
+            compliancePanel.AddItem(occupancyButtonData);
 
             // ── Redline Review ─────────────────────────────────────────────
             var redlinePanel = application.CreateRibbonPanel(_tabName, "Redline Review");
@@ -371,27 +370,23 @@ namespace RevitMCPBridge
             redlineClearButton.Image      = CreateButtonIcon("redline-clear", 16);
 
             // ── Additions ─────────────────────────────────────────────────
-            // FAQ is the prominent large button. Specs & Materials PulldownButton with EPDs only.
-            // No AddSlideOut — no pin icon.
+            // AddSlideOut() puts ▼ on the "Additions" panel title.
+            // FAQ is always visible; EPDs expand from the panel title.
             var additionsPanel = application.CreateRibbonPanel(_tabName, "Additions");
 
             var faqButtonData = new PushButtonData("FAQ", "FAQ", asm,
                 "RevitMCPBridge.Commands.BimMonkeyFaqCommand")
-                { ToolTip = "Frequently asked questions and troubleshooting tips" };
-            var faqButton = additionsPanel.AddItem(faqButtonData) as PushButton;
-            faqButton.LargeImage = CreateButtonIcon("faq", 32);
-            faqButton.Image      = CreateButtonIcon("faq", 16);
+                { ToolTip = "Frequently asked questions and troubleshooting tips",
+                  LargeImage = CreateButtonIcon("faq", 32), Image = CreateButtonIcon("faq", 16) };
+            additionsPanel.AddItem(faqButtonData);
+
+            additionsPanel.AddSlideOut();  // ▼ on "Additions" panel title
 
             var epdButtonData = new PushButtonData("EC3", "EPDs", asm,
                 "RevitMCPBridge.Commands.EC3Command")
                 { ToolTip = "Search EC3 (Building Transparency) for Environmental Product Declarations — compare embodied carbon (GWP) across products, sorted lowest first",
-                  LargeImage = CreateButtonIcon("ec3", 32), Image = CreateButtonIcon("ec3", 16) };
-            var specsMoreData = new PulldownButtonData("SpecsMore", "Specs &\nMaterials")
-                { ToolTip = "EPD lookup" };
-            var specsMoreDropdown = additionsPanel.AddItem(specsMoreData) as PulldownButton;
-            specsMoreDropdown.LargeImage = CreateButtonIcon("ec3", 32);
-            specsMoreDropdown.Image      = CreateButtonIcon("ec3", 16);
-            specsMoreDropdown.AddPushButton(epdButtonData);
+                  LargeImage = CreateButtonIcon("ec3", 16), Image = CreateButtonIcon("ec3", 16) };
+            additionsPanel.AddItem(epdButtonData);
 
         }
 
