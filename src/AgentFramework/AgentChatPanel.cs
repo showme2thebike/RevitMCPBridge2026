@@ -32,7 +32,6 @@ namespace RevitMCPBridge2026.AgentFramework
         private TextBlock _timerText;
         private TextBlock _spinnerText;
         private int _spinnerFrame;
-        private static readonly string[] _spinnerFrames = { "⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷" };
         private StackPanel _chatHistory;
         private ScrollViewer _chatScrollViewer;
         private System.Windows.Controls.TextBox _inputTextBox;
@@ -91,6 +90,7 @@ namespace RevitMCPBridge2026.AgentFramework
         // Global hotkey (Ctrl+B) — open/focus Banana Chat from anywhere in Revit
         [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
         [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+        [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
         private const int    HOTKEY_ID  = 9001;
         private const uint   MOD_CTRL   = 0x0002;
         private const uint   VK_B       = 0x42;
@@ -204,6 +204,9 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     e.Cancel = true;
                     Hide();
+                    // Return focus to Revit, not Claude Code or whatever was behind BC
+                    var revitHwnd = System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle;
+                    if (revitHwnd != IntPtr.Zero) SetForegroundWindow(revitHwnd);
                     return;
                 }
                 _isClosing = true;
@@ -356,24 +359,26 @@ namespace RevitMCPBridge2026.AgentFramework
             // Buttons
             var buttonStack = new StackPanel { Orientation = Orientation.Horizontal };
 
-            var clearButton = CreateButton("Clear", false);
+            var clearButton = CreateButton("✕", false);
+            clearButton.ToolTip = "Clear chat history";
             clearButton.Click += (s, e) => ClearChat();
             buttonStack.Children.Add(clearButton);
 
-            var settingsButton = CreateButton("Settings", false);
+            var settingsButton = CreateButton("⚙", false);
             settingsButton.Margin = new Thickness(8, 0, 0, 0);
+            settingsButton.ToolTip = "Settings — API keys, model selection";
             settingsButton.Click += (s, e) => ShowSettingsDialog();
             buttonStack.Children.Add(settingsButton);
 
-            var relockButton = CreateButton("Relock", false);
+            var relockButton = CreateButton("⊞", false);
             relockButton.Margin = new Thickness(8, 0, 0, 0);
-            relockButton.ToolTip = "Lock to the currently active Revit document";
+            relockButton.ToolTip = "Relock — lock Banana Chat to the currently active Revit document";
             relockButton.Click += (s, e) => RelockDocument();
             buttonStack.Children.Add(relockButton);
 
-            _pipePauseButton = CreateButton("Pause Pipe", false);
+            _pipePauseButton = CreateButton("⏸", false);
             _pipePauseButton.Margin = new Thickness(8, 0, 0, 0);
-            _pipePauseButton.ToolTip = "Pause the MCP pipe so Revit dialogs (VG, Revisions, etc.) can open. Resume when done.";
+            _pipePauseButton.ToolTip = "Pause Pipe — temporarily stops the MCP connection so Revit dialogs (VG, Revisions, etc.) can open. Click ▶ to resume.";
             _pipePauseButton.Click += (s, e) => TogglePipe();
             buttonStack.Children.Add(_pipePauseButton);
 
@@ -421,14 +426,24 @@ namespace RevitMCPBridge2026.AgentFramework
 
             var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
 
-            _spinnerText = new TextBlock
+            // Fixed-width container prevents the rotating banana from affecting layout
+            var spinnerContainer = new Border
             {
-                Text = "⣾",
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 213, 0)),
+                Width = 20,
+                Height = 20,
                 Margin = new Thickness(0, 0, 6, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
-            titleRow.Children.Add(_spinnerText);
+            _spinnerText = new TextBlock
+            {
+                Text = "🍌",
+                FontSize = 13,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                RenderTransformOrigin = new Point(0.5, 0.85)
+            };
+            spinnerContainer.Child = _spinnerText;
+            titleRow.Children.Add(spinnerContainer);
 
             _progressTitle = new TextBlock
             {
@@ -3872,7 +3887,7 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 server.Start();
                 _pipePaused = false;
-                _pipePauseButton.Content = "Pause Pipe";
+                _pipePauseButton.Content = "⏸";
                 _pipePauseButton.Background = new SolidColorBrush(Color.FromRgb(85, 85, 85));
                 _statusText.Text = "Ready";
                 AddAssistantMessage("Pipe resumed. Ready for generation.");
@@ -3881,7 +3896,7 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 server.Stop();
                 _pipePaused = true;
-                _pipePauseButton.Content = "Resume Pipe";
+                _pipePauseButton.Content = "▶";
                 _pipePauseButton.Background = new SolidColorBrush(Color.FromRgb(160, 90, 0));
                 _statusText.Text = "Pipe paused — open Revit dialogs now";
                 AddAssistantMessage("Pipe paused. Revit dialogs (VG, Revisions, etc.) are now accessible. Click **Resume Pipe** when done.");
@@ -5021,8 +5036,16 @@ STYLE:
                         var elapsed = (int)(DateTime.Now - _thinkingStartTime).TotalSeconds;
                         _timerText.Text = $"{elapsed}s";
                         if (_elapsedText != null) _elapsedText.Text = $"{elapsed} s";
-                        _spinnerFrame = (_spinnerFrame + 1) % _spinnerFrames.Length;
-                        if (_spinnerText != null) _spinnerText.Text = _spinnerFrames[_spinnerFrame];
+                        _spinnerFrame = (_spinnerFrame + 1) % 8;
+                        if (_spinnerText != null)
+                        {
+                            double angle = Math.Sin(_spinnerFrame * Math.PI / 4.0) * 18.0;
+                            double yOff  = -Math.Abs(Math.Sin(_spinnerFrame * Math.PI / 4.0)) * 2.5;
+                            var tg = new System.Windows.Media.TransformGroup();
+                            tg.Children.Add(new System.Windows.Media.RotateTransform(angle));
+                            tg.Children.Add(new System.Windows.Media.TranslateTransform(0, yOff));
+                            _spinnerText.RenderTransform = tg;
+                        }
                     };
                 }
                 _timerText.Text = "0s";
