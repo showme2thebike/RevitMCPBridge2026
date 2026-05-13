@@ -4272,38 +4272,58 @@ namespace RevitMCPBridge
                 var doc = uiApp.ActiveUIDocument.Document;
 
                 if (parameters["textNoteId"] == null)
-                {
                     return ResponseBuilder.Error("textNoteId is required", "MISSING_PARAMETER").Build();
-                }
-
                 if (parameters["text"] == null)
-                {
                     return ResponseBuilder.Error("text is required", "MISSING_PARAMETER").Build();
-                }
 
                 var textNoteId = new ElementId(int.Parse(parameters["textNoteId"].ToString()));
                 var newText = parameters["text"].ToString();
 
                 var textNote = doc.GetElement(textNoteId) as TextNote;
                 if (textNote == null)
-                {
                     return ResponseBuilder.Error("TextNote not found with ID: " + textNoteId.Value, "ELEMENT_NOT_FOUND").Build();
-                }
+
+                // Grouped elements are read-only without GroupEditScope — transaction commits but write is silently discarded
+                if (textNote.GroupId != ElementId.InvalidElementId)
+                    return ResponseBuilder.Error(
+                        $"TextNote {textNoteId.Value} belongs to a Group (groupId={textNote.GroupId.Value}) and cannot be edited directly. Ungroup first.",
+                        "ELEMENT_IN_GROUP").Build();
+
+                // Pinned elements resist writes — same pattern as removeViewport pre-check
+                if (textNote.Pinned)
+                    return ResponseBuilder.Error(
+                        $"TextNote {textNoteId.Value} is pinned — unpin it before editing.",
+                        "ELEMENT_PINNED").Build();
 
                 var oldText = textNote.Text;
 
+                TransactionStatus status;
                 using (var trans = new Transaction(doc, "Update TextNote Text"))
                 {
                     trans.Start();
                     textNote.Text = newText;
-                    trans.Commit();
-
-                    return ResponseBuilder.Success()
-                        .With("textNoteId", (int)textNoteId.Value)
-                        .With("oldText", oldText)
-                        .With("newText", newText)
-                        .Build();
+                    status = trans.Commit();
                 }
+
+                // trans.Commit() can return RolledBack or Error without throwing — catch that
+                if (status != TransactionStatus.Committed)
+                    return ResponseBuilder.Error(
+                        $"Transaction ended with status '{status}' — TextNote was not updated.",
+                        "TRANSACTION_FAILED").Build();
+
+                // Re-read from document after commit to confirm the write actually landed.
+                // Returns the input parameter unchanged on false-success, so we must verify against the live element.
+                var actualText = (doc.GetElement(textNoteId) as TextNote)?.Text ?? "";
+                if (actualText != newText)
+                    return ResponseBuilder.Error(
+                        $"Write verification failed — element reads \"{actualText}\" after commit. Expected \"{newText}\".",
+                        "WRITE_VERIFICATION_FAILED").Build();
+
+                return ResponseBuilder.Success()
+                    .With("textNoteId", (int)textNoteId.Value)
+                    .With("oldText", oldText)
+                    .With("newText", newText)
+                    .Build();
             }
             catch (Exception ex)
             {
