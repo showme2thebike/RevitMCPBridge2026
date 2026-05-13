@@ -2346,6 +2346,57 @@ namespace RevitMCPBridge
             }
         }
 
+        [MCPMethod("renameElementType", Category = "Element",
+            Description = "Rename an element type by its element ID. Works for title block types, family types, wall types, etc. " +
+                          "Example use: rename 'Not For Construction' title block type to 'Permit Set'. " +
+                          "Pass the TYPE element ID (not an instance ID). Use getElementProperties on any instance to find its typeId.")]
+        public static string RenameElementType(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                int typeId = parameters["typeId"].Value<int>();
+                string newName = parameters["newName"]?.Value<string>();
+
+                if (string.IsNullOrWhiteSpace(newName))
+                    return JsonConvert.SerializeObject(new { success = false, error = "newName is required" });
+
+                var elem = doc.GetElement(new ElementId(typeId));
+                if (elem == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = $"Element {typeId} not found" });
+
+                var elementType = elem as ElementType;
+                if (elementType == null)
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = $"Element {typeId} is not an ElementType (it is a {elem.GetType().Name}). " +
+                                "Pass the type element ID, not an instance ID."
+                    });
+
+                string oldName = elementType.Name;
+                string familyName = elementType.FamilyName;
+
+                using (var trans = new Transaction(doc, $"Rename Type: {oldName}"))
+                {
+                    trans.Start();
+                    elementType.Name = newName;
+                    trans.Commit();
+                }
+
+                return ResponseBuilder.Success()
+                    .With("typeId", typeId)
+                    .With("familyName", familyName)
+                    .With("oldName", oldName)
+                    .With("newName", newName)
+                    .Build();
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
         #endregion
     }
 }

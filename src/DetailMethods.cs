@@ -9402,6 +9402,193 @@ namespace RevitMCPBridge2026
 
         #endregion
 
+        #region CAD Import Workflow
+
+        [MCPMethod("remapLineStylesByLayer", Category = "Detail",
+            Description = "Batch-remap line styles on all detail curves in a view by their current subcategory (CAD layer) name. " +
+                          "Use after Partial Explode to assign WS- line styles. " +
+                          "layerMapping: object mapping source layer names to target line style names, e.g. {\"A-WALL\": \"WS-Wall\", \"A-ANNO\": \"WS-Annotation\"}. " +
+                          "Run getLineStylesInView first to see current layer names.")]
+        public static string RemapLineStylesByLayer(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                int viewId = parameters["viewId"].Value<int>();
+                var layerMappingObj = parameters["layerMapping"] as JObject;
+
+                if (layerMappingObj == null)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = "layerMapping required (object mapping layer names to line style names)" });
+
+                var view = doc.GetElement(new ElementId(viewId)) as Autodesk.Revit.DB.View;
+                if (view == null)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = $"View {viewId} not found" });
+
+                // Build mapping dict (case-insensitive)
+                var mapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var prop in layerMappingObj.Properties())
+                    mapping[prop.Name] = prop.Value.Value<string>();
+
+                // Build target GraphicsStyle lookup by name
+                var allStyles = new FilteredElementCollector(doc)
+                    .OfClass(typeof(GraphicsStyle))
+                    .Cast<GraphicsStyle>()
+                    .Where(gs => gs.GraphicsStyleType == GraphicsStyleType.Projection)
+                    .GroupBy(gs => gs.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+                // Collect all detail curves in the view
+                var detailCurves = new FilteredElementCollector(doc, view.Id)
+                    .OfClass(typeof(DetailCurve))
+                    .Cast<DetailCurve>()
+                    .ToList();
+
+                var remapped = new List<object>();
+                var missingStyles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var unchanged = 0;
+
+                using (var trans = new Transaction(doc, "Remap Line Styles by Layer"))
+                {
+                    trans.Start();
+
+                    foreach (var curve in detailCurves)
+                    {
+                        var currentStyle = curve.LineStyle as GraphicsStyle;
+                        if (currentStyle == null) { unchanged++; continue; }
+
+                        string layerName = currentStyle.GraphicsStyleCategory?.Name ?? currentStyle.Name;
+
+                        if (!mapping.TryGetValue(layerName, out string targetName))
+                        {
+                            unchanged++;
+                            continue;
+                        }
+
+                        if (!allStyles.TryGetValue(targetName, out GraphicsStyle targetStyle))
+                        {
+                            missingStyles.Add(targetName);
+                            continue;
+                        }
+
+                        curve.LineStyle = targetStyle;
+                        remapped.Add(new { id = (long)curve.Id.Value, from = layerName, to = targetName });
+                    }
+
+                    trans.Commit();
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    viewId,
+                    totalDetailCurves = detailCurves.Count,
+                    remappedCount = remapped.Count,
+                    unchangedCount = unchanged,
+                    missingStyles = missingStyles.ToList(),
+                    remapped
+                });
+            }
+            catch (Exception ex)
+            {
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = ex.Message, stackTrace = ex.StackTrace });
+            }
+        }
+
+        [MCPMethod("getLineStylesInView", Category = "Detail",
+            Description = "Returns a summary of all distinct line style/layer names present on detail curves in a view. " +
+                          "Use before remapLineStylesByLayer to see what layer names exist and what counts need remapping.")]
+        public static string GetLineStylesInView(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                int viewId = parameters["viewId"].Value<int>();
+
+                var view = doc.GetElement(new ElementId(viewId)) as Autodesk.Revit.DB.View;
+                if (view == null)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = $"View {viewId} not found" });
+
+                var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+                var detailCurves = new FilteredElementCollector(doc, view.Id)
+                    .OfClass(typeof(DetailCurve))
+                    .Cast<DetailCurve>();
+
+                foreach (var curve in detailCurves)
+                {
+                    var gs = curve.LineStyle as GraphicsStyle;
+                    string name = gs?.GraphicsStyleCategory?.Name ?? gs?.Name ?? "<unknown>";
+                    counts[name] = counts.TryGetValue(name, out int c) ? c + 1 : 1;
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    viewId,
+                    totalDetailCurves = counts.Values.Sum(),
+                    distinctStyles = counts.Count,
+                    styles = counts.OrderByDescending(kv => kv.Value)
+                                   .Select(kv => new { name = kv.Key, count = kv.Value })
+                });
+            }
+            catch (Exception ex)
+            {
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = ex.Message });
+            }
+        }
+
+        [MCPMethod("triggerPartialExplode", Category = "CAD",
+            Description = "Selects a CAD import element by ID and posts Revit's Partial Explode command. " +
+                          "The command runs after this call returns — wait 2-3 seconds for Revit to process before running remapLineStylesByLayer. " +
+                          "Correct CAD→Revit workflow: Import CAD → triggerPartialExplode → remapLineStylesByLayer. " +
+                          "Do NOT use getCADGeometry + createDetailLine — that loses spline fidelity.")]
+        public static string TriggerPartialExplode(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                int importId = parameters["importId"].Value<int>();
+
+                var importElem = doc.GetElement(new ElementId(importId));
+                if (importElem == null)
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = $"Element {importId} not found" });
+
+                if (!(importElem is ImportInstance))
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = $"Element {importId} is not a CAD import (type: {importElem.GetType().Name}). Get the import ID from getCADImports."
+                    });
+
+                // Select the import so Partial Explode has something to act on
+                uiApp.ActiveUIDocument.Selection.SetElementIds(new List<ElementId> { new ElementId(importId) });
+
+                // Post Partial Explode command — runs after ExternalEvent handler returns
+                var cmdId = RevitCommandId.LookupCommandId("ID_IMPORT_PARTIAL_EXPLODE");
+                if (cmdId == null || !uiApp.CanPostCommand(cmdId))
+                    return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = "Partial Explode command not available in current context. The CAD import must be in the active view and not in a linked file. Try selecting the import manually in Revit and running Modify → Partial Explode from the ribbon."
+                    });
+
+                uiApp.PostCommand(cmdId);
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    importId,
+                    message = "Partial Explode posted. Wait 2-3 seconds for Revit to process, then run remapLineStylesByLayer on the view to assign WS- line styles by layer name."
+                });
+            }
+            catch (Exception ex)
+            {
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new { success = false, error = ex.Message });
+            }
+        }
+
+        #endregion
+
         #endregion
     }
 }

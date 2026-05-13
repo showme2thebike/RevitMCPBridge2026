@@ -76,6 +76,28 @@ ElementTransformUtils.CopyElements(sourceView, elementIds, targetView, Transform
 
 **Key insight**: Views with content can be placed. Empty views cannot.
 
+## CAD → Revit Line Trace
+
+### CORRECT Workflow (use this always)
+1. Import CAD file via Revit UI (Insert → Import CAD) — NOT Link
+2. Call `triggerPartialExplode({ importId: <import element ID> })` — selects the import and posts Revit's built-in Partial Explode command
+3. Wait 2-3 seconds for Revit to process
+4. Call `getLineStylesInView({ viewId: <view ID> })` to see what CAD layer names exist on the resulting detail curves
+5. Call `remapLineStylesByLayer({ viewId: <view ID>, layerMapping: { "A-WALL": "WS-Wall", ... } })` to batch-assign WS- line styles
+
+### WRONG Workflow (do NOT use)
+- `getCADGeometry` + `createDetailLine` / `createDetailPolyline` — produces close but not true 1:1 geometry; curved polylines lose spline fidelity (point-to-point segments only). This was tried on Project3 and produced 374 elements vs. 483 from Partial Explode, with inferior curve quality.
+
+### Why Partial Explode is correct
+- Revit internally converts CAD splines to native Revit spline curves — true 1:1 fidelity
+- Creates native ModelCurves/DetailCurves with subcategories matching CAD layer names
+- Post-explode subcategory names ARE the layer names — use them as keys in `remapLineStylesByLayer`
+- Full Explode may be needed for nested blocks that survive Partial Explode
+
+### After Partial Explode
+- Hide the original CAD import: `hideElementsInView({ viewId, elementIds: [importId] })`
+- The 483 native lines in Project3 (view ID 32) were produced this way (IDs 1241121–1241607)
+
 ## Best Practices
 
 1. Always verify element placement with screenshots
