@@ -434,9 +434,10 @@ namespace RevitMCPBridge2026.AgentFramework
                 Margin = new Thickness(0, 0, 6, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
-            // Render the emoji glyph to bitmap (renders black = correct shape silhouette)
-            // Apply it as an opacity mask over a yellow rectangle = yellow banana, exact emoji shape
-            var emojiSource = new TextBlock
+            // WPF .NET 4.8 COLR emoji: renders body opaque but leaves white-highlight as alpha-0 holes.
+            // Fix: render emoji to bitmap, recolor opaque pixels yellow, then dilate 3× to fill
+            // the transparent interior gaps with white — exact emoji shape, correct colors.
+            var emojiText = new TextBlock
             {
                 Text = "🍌",
                 FontFamily = new System.Windows.Media.FontFamily("Segoe UI Emoji"),
@@ -444,23 +445,49 @@ namespace RevitMCPBridge2026.AgentFramework
                 Padding = new Thickness(0),
                 Margin  = new Thickness(0),
             };
-            emojiSource.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            emojiSource.Arrange(new Rect(emojiSource.DesiredSize));
-            var bw = Math.Max((int)Math.Ceiling(emojiSource.DesiredSize.Width),  1);
-            var bh = Math.Max((int)Math.Ceiling(emojiSource.DesiredSize.Height), 1);
-            var emojiBitmap = new RenderTargetBitmap(bw, bh, 96, 96, PixelFormats.Pbgra32);
-            emojiBitmap.Render(emojiSource);
+            emojiText.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            emojiText.Arrange(new Rect(emojiText.DesiredSize));
+            int ebw    = Math.Max((int)Math.Ceiling(emojiText.DesiredSize.Width),  1);
+            int ebh    = Math.Max((int)Math.Ceiling(emojiText.DesiredSize.Height), 1);
+            int estride = ebw * 4;
+            var ertb = new RenderTargetBitmap(ebw, ebh, 96, 96, PixelFormats.Pbgra32);
+            ertb.Render(emojiText);
+            var epx = new byte[ebh * estride];
+            ertb.CopyPixels(epx, estride, 0);
 
-            _spinnerText = new System.Windows.Shapes.Rectangle
+            // All opaque pixels → banana yellow #FFD500
+            for (int ei = 0; ei < epx.Length; ei += 4)
+                if (epx[ei + 3] > 10)
+                { epx[ei] = 0; epx[ei+1] = 213; epx[ei+2] = 255; epx[ei+3] = 255; }
+
+            // Dilate 3× to fill transparent interior gaps with white
+            for (int pass = 0; pass < 3; pass++)
             {
-                Width  = 20,
-                Height = 20,
-                Fill   = new SolidColorBrush(Color.FromRgb(255, 213, 0)),
-                OpacityMask = new ImageBrush(emojiBitmap) { Stretch = Stretch.Uniform },
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment   = VerticalAlignment.Center,
+                var prev = (byte[])epx.Clone();
+                for (int ey = 1; ey < ebh - 1; ey++)
+                for (int ex = 1; ex < ebw - 1; ex++)
+                {
+                    int idx = ey * estride + ex * 4;
+                    if (prev[idx + 3] < 10 &&
+                       (prev[(ey-1)*estride + ex*4     + 3] > 10 ||
+                        prev[(ey+1)*estride + ex*4     + 3] > 10 ||
+                        prev[ey*estride     + (ex-1)*4 + 3] > 10 ||
+                        prev[ey*estride     + (ex+1)*4 + 3] > 10))
+                    { epx[idx] = 255; epx[idx+1] = 255; epx[idx+2] = 255; epx[idx+3] = 255; }
+                }
+            }
+
+            var recolored = BitmapSource.Create(ebw, ebh, 96, 96, PixelFormats.Pbgra32, null, epx, estride);
+            var bananaImg = new Image
+            {
+                Source = recolored,
+                Width  = 20, Height = 20,
+                HorizontalAlignment   = HorizontalAlignment.Center,
+                VerticalAlignment     = VerticalAlignment.Center,
                 RenderTransformOrigin = new Point(0.5, 0.85),
             };
+            RenderOptions.SetBitmapScalingMode(bananaImg, BitmapScalingMode.HighQuality);
+            _spinnerText = bananaImg;
             spinnerContainer.Child = _spinnerText;
             titleRow.Children.Add(spinnerContainer);
 
