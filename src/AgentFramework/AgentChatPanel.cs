@@ -434,9 +434,10 @@ namespace RevitMCPBridge2026.AgentFramework
                 Margin = new Thickness(0, 0, 6, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
-            // WPF .NET 4.8 COLR emoji: renders body opaque but leaves white-highlight as alpha-0 holes.
-            // Fix: render emoji to bitmap, recolor opaque pixels yellow, then dilate 3× to fill
-            // the transparent interior gaps with white — exact emoji shape, correct colors.
+            // WPF .NET 4.8 COLR emoji: body = opaque, white-highlight = alpha-0 interior hole.
+            // Render to bitmap → recolor body yellow → flood-fill background from edges →
+            // any remaining transparent interior pixel = white highlight → set white.
+            // Flood-fill is bounded: never bleeds outside the banana silhouette.
             var emojiText = new TextBlock
             {
                 Text = "🍌",
@@ -447,34 +448,52 @@ namespace RevitMCPBridge2026.AgentFramework
             };
             emojiText.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
             emojiText.Arrange(new Rect(emojiText.DesiredSize));
-            int ebw    = Math.Max((int)Math.Ceiling(emojiText.DesiredSize.Width),  1);
-            int ebh    = Math.Max((int)Math.Ceiling(emojiText.DesiredSize.Height), 1);
+            int ebw     = Math.Max((int)Math.Ceiling(emojiText.DesiredSize.Width),  1);
+            int ebh     = Math.Max((int)Math.Ceiling(emojiText.DesiredSize.Height), 1);
             int estride = ebw * 4;
             var ertb = new RenderTargetBitmap(ebw, ebh, 96, 96, PixelFormats.Pbgra32);
             ertb.Render(emojiText);
             var epx = new byte[ebh * estride];
             ertb.CopyPixels(epx, estride, 0);
 
-            // All opaque pixels → banana yellow #FFD500
+            // Recolor opaque pixels → banana yellow, preserve per-pixel alpha for smooth edges
             for (int ei = 0; ei < epx.Length; ei += 4)
-                if (epx[ei + 3] > 10)
-                { epx[ei] = 0; epx[ei+1] = 213; epx[ei+2] = 255; epx[ei+3] = 255; }
-
-            // Dilate 3× to fill transparent interior gaps with white
-            for (int pass = 0; pass < 3; pass++)
             {
-                var prev = (byte[])epx.Clone();
-                for (int ey = 1; ey < ebh - 1; ey++)
-                for (int ex = 1; ex < ebw - 1; ex++)
+                byte ea = epx[ei + 3];
+                if (ea > 10)
+                { epx[ei] = 0; epx[ei+1] = (byte)(213*ea/255); epx[ei+2] = ea; epx[ei+3] = ea; }
+            }
+
+            // Flood-fill from every edge-transparent pixel → marks outer background
+            var isBg = new bool[ebh * ebw];
+            var floodQ = new Queue<int>();
+            for (int ey = 0; ey < ebh; ey++)
+            for (int ex = 0; ex < ebw; ex++)
+                if ((ey == 0 || ey == ebh-1 || ex == 0 || ex == ebw-1) && epx[(ey*ebw+ex)*4+3] < 10)
+                { isBg[ey*ebw+ex] = true; floodQ.Enqueue(ey*ebw+ex); }
+
+            int[] fdy = { -1, 1, 0, 0 };
+            int[] fdx = {  0, 0,-1, 1 };
+            while (floodQ.Count > 0)
+            {
+                int cur = floodQ.Dequeue();
+                int fy = cur / ebw, fx = cur % ebw;
+                for (int fd = 0; fd < 4; fd++)
                 {
-                    int idx = ey * estride + ex * 4;
-                    if (prev[idx + 3] < 10 &&
-                       (prev[(ey-1)*estride + ex*4     + 3] > 10 ||
-                        prev[(ey+1)*estride + ex*4     + 3] > 10 ||
-                        prev[ey*estride     + (ex-1)*4 + 3] > 10 ||
-                        prev[ey*estride     + (ex+1)*4 + 3] > 10))
-                    { epx[idx] = 255; epx[idx+1] = 255; epx[idx+2] = 255; epx[idx+3] = 255; }
+                    int ny = fy+fdy[fd], nx = fx+fdx[fd];
+                    if (ny < 0 || ny >= ebh || nx < 0 || nx >= ebw) continue;
+                    int ni = ny*ebw+nx;
+                    if (!isBg[ni] && epx[ni*4+3] < 10) { isBg[ni] = true; floodQ.Enqueue(ni); }
                 }
+            }
+
+            // Interior transparent pixels (enclosed = white highlight) → white
+            for (int ey = 0; ey < ebh; ey++)
+            for (int ex = 0; ex < ebw; ex++)
+            {
+                int pi = (ey*ebw+ex)*4;
+                if (epx[pi+3] < 10 && !isBg[ey*ebw+ex])
+                { epx[pi] = 255; epx[pi+1] = 255; epx[pi+2] = 255; epx[pi+3] = 255; }
             }
 
             var recolored = BitmapSource.Create(ebw, ebh, 96, 96, PixelFormats.Pbgra32, null, epx, estride);
