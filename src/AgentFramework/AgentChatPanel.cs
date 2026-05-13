@@ -8,7 +8,6 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Media.Animation;
 using System.IO;
 using System.IO.Pipes;
 using Newtonsoft.Json;
@@ -31,10 +30,9 @@ namespace RevitMCPBridge2026.AgentFramework
         private TextBlock _tokenText;
         private TextBlock _costText;
         private TextBlock _timerText;
-        private System.Windows.Threading.DispatcherTimer _bananaTimer;
-        private RotateTransform _bananaPeel1Rotate;
-        private RotateTransform _bananaPeel2Rotate;
-        private DateTime _bananaStartTime;
+        private TextBlock _spinnerText;
+        private int _spinnerFrame;
+        private static readonly string[] _spinnerFrames = { "⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷" };
         private StackPanel _chatHistory;
         private ScrollViewer _chatScrollViewer;
         private System.Windows.Controls.TextBox _inputTextBox;
@@ -411,15 +409,31 @@ namespace RevitMCPBridge2026.AgentFramework
 
             var stack = new StackPanel();
 
+            var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+
+            _spinnerText = new TextBlock
+            {
+                Text = "⣾",
+                Foreground = new SolidColorBrush(Color.FromRgb(255, 213, 0)),
+                Margin = new Thickness(0, 0, 6, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            titleRow.Children.Add(_spinnerText);
+
             _progressTitle = new TextBlock
             {
                 Text = "Working...",
                 Foreground = Brushes.White,
                 FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 0, 0, 8)
             };
+            titleRow.Children.Add(_progressTitle);
 
-            var progressBar = CreateBananaAnimation();
+            var progressBar = new ProgressBar
+            {
+                IsIndeterminate = true,
+                Height = 4,
+                Foreground = new SolidColorBrush(Color.FromRgb(0, 120, 212))
+            };
 
             // Detail row: progress detail text + elapsed timer side by side
             var detailRow = new Grid { Margin = new Thickness(0, 8, 0, 0) };
@@ -445,7 +459,7 @@ namespace RevitMCPBridge2026.AgentFramework
             Grid.SetColumn(_timerText, 1);
             detailRow.Children.Add(_timerText);
 
-            stack.Children.Add(_progressTitle);
+            stack.Children.Add(titleRow);
             stack.Children.Add(progressBar);
             stack.Children.Add(detailRow);
             border.Child = stack;
@@ -4957,38 +4971,24 @@ STYLE:
             if (!alreadyRunning)
             {
                 _thinkingStartTime = DateTime.Now;
-                _bananaStartTime = DateTime.Now;
                 if (_thinkingTimer == null)
                 {
                     _thinkingTimer = new System.Windows.Threading.DispatcherTimer
                     {
-                        Interval = TimeSpan.FromSeconds(1)
+                        Interval = TimeSpan.FromMilliseconds(120)
                     };
                     _thinkingTimer.Tick += (s, e) =>
                     {
                         var elapsed = (int)(DateTime.Now - _thinkingStartTime).TotalSeconds;
                         _timerText.Text = $"{elapsed}s";
                         if (_elapsedText != null) _elapsedText.Text = $"{elapsed} s";
-                    };
-                }
-                if (_bananaTimer == null)
-                {
-                    _bananaTimer = new System.Windows.Threading.DispatcherTimer
-                    {
-                        Interval = TimeSpan.FromMilliseconds(50)
-                    };
-                    _bananaTimer.Tick += (s, e) =>
-                    {
-                        var t = (DateTime.Now - _bananaStartTime).TotalSeconds;
-                        var angle = 28.0 * Math.Sin(t * 2.4);
-                        if (_bananaPeel1Rotate != null) _bananaPeel1Rotate.Angle = angle;
-                        if (_bananaPeel2Rotate != null) _bananaPeel2Rotate.Angle = -angle;
+                        _spinnerFrame = (_spinnerFrame + 1) % _spinnerFrames.Length;
+                        if (_spinnerText != null) _spinnerText.Text = _spinnerFrames[_spinnerFrame];
                     };
                 }
                 _timerText.Text = "0s";
                 if (_elapsedText != null) _elapsedText.Text = "0 s";
                 _thinkingTimer.Start();
-                _bananaTimer.Start();
             }
         }
 
@@ -5001,65 +5001,9 @@ STYLE:
         {
             _progressPanel.Visibility = Visibility.Collapsed;
             _thinkingTimer?.Stop();
-            _bananaTimer?.Stop();
-            if (_bananaPeel1Rotate != null) _bananaPeel1Rotate.Angle = 0;
-            if (_bananaPeel2Rotate != null) _bananaPeel2Rotate.Angle = 0;
             if (_timerText != null) _timerText.Text = "";
             var elapsed = (int)(DateTime.Now - _thinkingStartTime).TotalSeconds;
             if (_elapsedText != null) _elapsedText.Text = $"{elapsed} s";
-        }
-
-        private Canvas CreateBananaAnimation()
-        {
-            var canvas = new Canvas { Width = 72, Height = 16, Margin = new Thickness(0, 2, 0, 2) };
-
-            // Yellow banana body
-            var body = new System.Windows.Shapes.Ellipse
-            {
-                Width = 56, Height = 12,
-                Fill = new SolidColorBrush(Color.FromRgb(255, 213, 0)),
-                Stroke = new SolidColorBrush(Color.FromRgb(160, 120, 0)),
-                StrokeThickness = 1
-            };
-            Canvas.SetLeft(body, 2);
-            Canvas.SetTop(body, 2);
-            canvas.Children.Add(body);
-
-            // Brown stem at left tip
-            var stem = new System.Windows.Shapes.Ellipse
-            {
-                Width = 6, Height = 6,
-                Fill = new SolidColorBrush(Color.FromRgb(139, 90, 43))
-            };
-            Canvas.SetLeft(stem, 0);
-            Canvas.SetTop(stem, 5);
-            canvas.Children.Add(stem);
-
-            // Peel top — triangle at right tip, pivots upward
-            _bananaPeel1Rotate = new RotateTransform(0, 58, 8);
-            var peel1 = new System.Windows.Shapes.Polygon
-            {
-                Points = new PointCollection { new Point(58, 5), new Point(70, 2), new Point(72, 8) },
-                Fill = new SolidColorBrush(Color.FromRgb(200, 160, 0)),
-                Stroke = new SolidColorBrush(Color.FromRgb(160, 120, 0)),
-                StrokeThickness = 1,
-                RenderTransform = _bananaPeel1Rotate
-            };
-            canvas.Children.Add(peel1);
-
-            // Peel bottom — mirror triangle, pivots downward
-            _bananaPeel2Rotate = new RotateTransform(0, 58, 8);
-            var peel2 = new System.Windows.Shapes.Polygon
-            {
-                Points = new PointCollection { new Point(58, 11), new Point(70, 14), new Point(72, 8) },
-                Fill = new SolidColorBrush(Color.FromRgb(200, 160, 0)),
-                Stroke = new SolidColorBrush(Color.FromRgb(160, 120, 0)),
-                StrokeThickness = 1,
-                RenderTransform = _bananaPeel2Rotate
-            };
-            canvas.Children.Add(peel2);
-
-            return canvas;
         }
 
         private void SetProcessing(bool isProcessing)
