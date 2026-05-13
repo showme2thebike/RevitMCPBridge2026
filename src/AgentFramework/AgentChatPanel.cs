@@ -80,6 +80,10 @@ namespace RevitMCPBridge2026.AgentFramework
         // Snap View button reference (Sprint 5)
         private Button _snapButton;
 
+        // Pipe pause/resume — lets Barrett open Revit dialogs (VG, Revisions) without restarting
+        private Button _pipePauseButton;
+        private bool _pipePaused;
+
         // Streaming bubble state
         private System.Windows.Controls.TextBox _streamingTextBox;
         private StackPanel _streamingContainer;
@@ -366,6 +370,12 @@ namespace RevitMCPBridge2026.AgentFramework
             relockButton.ToolTip = "Lock to the currently active Revit document";
             relockButton.Click += (s, e) => RelockDocument();
             buttonStack.Children.Add(relockButton);
+
+            _pipePauseButton = CreateButton("Pause Pipe", false);
+            _pipePauseButton.Margin = new Thickness(8, 0, 0, 0);
+            _pipePauseButton.ToolTip = "Pause the MCP pipe so Revit dialogs (VG, Revisions, etc.) can open. Resume when done.";
+            _pipePauseButton.Click += (s, e) => TogglePipe();
+            buttonStack.Children.Add(_pipePauseButton);
 
             Grid.SetColumn(buttonStack, 1);
             grid.Children.Add(buttonStack);
@@ -3847,6 +3857,35 @@ namespace RevitMCPBridge2026.AgentFramework
             if (_lockedDocLabel != null)
                 Dispatcher.Invoke(() => _lockedDocLabel.Text = $"Model: {_lockedDocTitle}");
             AddAssistantMessage($"Document lock updated to: {_lockedDocTitle}");
+        }
+
+        private void TogglePipe()
+        {
+            var server = RevitMCPBridgeApp.GetServer();
+            if (server == null)
+            {
+                AddAssistantMessage("Server not found — start it from the BIM Monkey ribbon first.");
+                return;
+            }
+
+            if (_pipePaused)
+            {
+                server.Start();
+                _pipePaused = false;
+                _pipePauseButton.Content = "Pause Pipe";
+                _pipePauseButton.Background = new SolidColorBrush(Color.FromRgb(85, 85, 85));
+                _statusText.Text = "Ready";
+                AddAssistantMessage("Pipe resumed. Ready for generation.");
+            }
+            else
+            {
+                server.Stop();
+                _pipePaused = true;
+                _pipePauseButton.Content = "Resume Pipe";
+                _pipePauseButton.Background = new SolidColorBrush(Color.FromRgb(160, 90, 0));
+                _statusText.Text = "Pipe paused — open Revit dialogs now";
+                AddAssistantMessage("Pipe paused. Revit dialogs (VG, Revisions, etc.) are now accessible. Click **Resume Pipe** when done.");
+            }
         }
 
         private string CheckDocumentGuard(string methodName)
