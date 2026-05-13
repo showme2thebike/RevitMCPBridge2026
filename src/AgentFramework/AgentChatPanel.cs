@@ -30,7 +30,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private TextBlock _tokenText;
         private TextBlock _costText;
         private TextBlock _timerText;
-        private FrameworkElement _spinnerText;
+        private TextBlock _spinnerText;
         private int _spinnerFrame;
         private StackPanel _chatHistory;
         private ScrollViewer _chatScrollViewer;
@@ -434,26 +434,15 @@ namespace RevitMCPBridge2026.AgentFramework
                 Margin = new Thickness(0, 0, 6, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
-            // Yellow Canvas banana — emoji color rendering is broken in WPF .NET 4.8
-            var spinnerCanvas = new Canvas
+            _spinnerText = new TextBlock
             {
-                Width = 20,
-                Height = 20,
+                Text = "🍌",
+                FontFamily = new System.Windows.Media.FontFamily("Segoe UI Emoji"),
+                FontSize = 13,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 RenderTransformOrigin = new Point(0.5, 0.85)
             };
-            var bananaBody = new System.Windows.Shapes.Ellipse
-            {
-                Width = 7,
-                Height = 16,
-                Fill = new SolidColorBrush(Color.FromRgb(255, 213, 0)),
-                RenderTransform = new System.Windows.Media.RotateTransform(-20, 3.5, 8)
-            };
-            Canvas.SetLeft(bananaBody, 6);
-            Canvas.SetTop(bananaBody, 2);
-            spinnerCanvas.Children.Add(bananaBody);
-            _spinnerText = spinnerCanvas;
             spinnerContainer.Child = _spinnerText;
             titleRow.Children.Add(spinnerContainer);
 
