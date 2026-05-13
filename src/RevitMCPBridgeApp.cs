@@ -294,59 +294,57 @@ namespace RevitMCPBridge
 
 
             // ── Site Data ─────────────────────────────────────────────────
+            // Panel slideout: Vicinity Map always visible; lookup tools in slideout.
+            // AddSlideOut() makes Revit show "Site Data ▼" on the panel footer title.
             var siteDataPanel = application.CreateRibbonPanel(_tabName, "Site Data");
 
-            // Stacked bar style: Vicinity Map + Site Data dropdown as horizontal text bars
-            var vicinityMapButtonData = new PushButtonData("VicinityMap", "Vicinity Map", asm,
+            var vicinityMapButtonData = new PushButtonData("VicinityMap", "Vicinity\nMap", asm,
                 "RevitMCPBridge2026.AgentFramework.LaunchVicinityMapCommand")
                 { ToolTip = "Generate a vicinity map from live OpenStreetMap data — creates editable street lines and labels in a drafting view, ready to place on your VM sheet" };
+            var vicinityMapButton = siteDataPanel.AddItem(vicinityMapButtonData) as PushButton;
+            vicinityMapButton.LargeImage = CreateButtonIcon("vicinitymap", 32);
+            vicinityMapButton.Image      = CreateButtonIcon("vicinitymap", 16);
+
+            siteDataPanel.AddSlideOut();  // everything below goes in the slideout
+
             var zoningButtonData = new PushButtonData("Zoning", "Zoning", asm,
                 "RevitMCPBridge.Commands.ZoningCommand")
-                { ToolTip = "Look up parcel data for a project address — lot area, zoning, setbacks, FAR, and permit history from county assessor APIs",
-                  LargeImage = CreateButtonIcon("zoning", 32), Image = CreateButtonIcon("zoning", 16) };
+                { ToolTip = "Look up parcel data for a project address — lot area, zoning, setbacks, FAR, and permit history from county assessor APIs" };
             var parcelButtonData = new PushButtonData("Parcel", "Parcel Data", asm,
                 "RevitMCPBridge.Commands.ParcelCommand")
-                { ToolTip = "Look up parcel ID and lot area for a project address via Regrid",
-                  LargeImage = CreateButtonIcon("parcel", 32), Image = CreateButtonIcon("parcel", 16) };
+                { ToolTip = "Look up parcel ID and lot area for a project address via Regrid" };
             var permitsButtonData = new PushButtonData("Permits", "Permit History", asm,
                 "RevitMCPBridge.Commands.PermitsCommand")
-                { ToolTip = "Pull recent building permit history for a project address — 13 cities supported",
-                  LargeImage = CreateButtonIcon("permits", 32), Image = CreateButtonIcon("permits", 16) };
+                { ToolTip = "Pull recent building permit history for a project address — 13 cities supported" };
             var siteClimateButtonData = new PushButtonData("SiteClimate", "Site Climate", asm,
                 "RevitMCPBridge.Commands.SiteClimateCommand")
-                { ToolTip = "Pull ASHRAE climate zone and design conditions for any project address",
-                  LargeImage = CreateButtonIcon("siteclimate", 32), Image = CreateButtonIcon("siteclimate", 16) };
-            var siteLookupsData = new PulldownButtonData("SiteLookups", "Site Data")
-                { ToolTip = "Zoning, parcel data, permit history, and climate data for your project address" };
-            var siteStacked = siteDataPanel.AddStackedItems(vicinityMapButtonData, siteLookupsData);
-            var vicinityMapButton = siteStacked[0] as PushButton;
-            vicinityMapButton.Image = CreateButtonIcon("vicinitymap", 16);
-            var siteLookupsDropdown = siteStacked[1] as PulldownButton;
-            siteLookupsDropdown.Image = CreateButtonIcon("zoning", 16);
-            siteLookupsDropdown.AddPushButton(zoningButtonData);
-            siteLookupsDropdown.AddPushButton(parcelButtonData);
-            siteLookupsDropdown.AddPushButton(permitsButtonData);
-            siteLookupsDropdown.AddPushButton(siteClimateButtonData);
+                { ToolTip = "Pull ASHRAE climate zone and design conditions for any project address" };
+            var siteRow1 = siteDataPanel.AddStackedItems(zoningButtonData, parcelButtonData);
+            (siteRow1[0] as PushButton).Image = CreateButtonIcon("zoning", 16);
+            (siteRow1[1] as PushButton).Image = CreateButtonIcon("parcel", 16);
+            var siteRow2 = siteDataPanel.AddStackedItems(permitsButtonData, siteClimateButtonData);
+            (siteRow2[0] as PushButton).Image = CreateButtonIcon("permits", 16);
+            (siteRow2[1] as PushButton).Image = CreateButtonIcon("siteclimate", 16);
 
             // ── Compliance ───────────────────────────────────────────────
+            // Panel slideout: Code Check always visible; Occupancy in slideout → "Compliance ▼"
             var compliancePanel = application.CreateRibbonPanel(_tabName, "Compliance");
 
-            // Stacked bar style: Code Check + More Checks dropdown
-            var codeCheckButtonData = new PushButtonData("CodeCheck", "Code Check", asm,
+            var codeCheckButtonData = new PushButtonData("CodeCheck", "Code\nCheck", asm,
                 "RevitMCPBridge2026.AgentFramework.LaunchComplianceCommand")
                 { ToolTip = "Run an IBC code compliance check — opens Banana Chat pre-loaded with a compliance prompt covering egress, occupancy loads, fire ratings, and more" };
+            var codeCheckButton = compliancePanel.AddItem(codeCheckButtonData) as PushButton;
+            codeCheckButton.LargeImage = CreateButtonIcon("compliance", 32);
+            codeCheckButton.Image      = CreateButtonIcon("compliance", 16);
+
+            compliancePanel.AddSlideOut();  // everything below goes in the slideout
+
             var occupancyButtonData = new PushButtonData("Occupancy", "Occupancy & Egress", asm,
                 "RevitMCPBridge.Commands.OccupancyCommand")
-                { ToolTip = "Open Banana Chat pre-loaded with an IBC occupancy load and egress analysis — calculates occupant loads, required exits, and egress widths per IBC 2021",
-                  LargeImage = CreateButtonIcon("occupancy", 32), Image = CreateButtonIcon("occupancy", 16) };
-            var complianceMoreData = new PulldownButtonData("ComplianceMore", "More Checks")
-                { ToolTip = "Additional compliance analysis tools" };
-            var compStacked = compliancePanel.AddStackedItems(codeCheckButtonData, complianceMoreData);
-            var codeCheckButton = compStacked[0] as PushButton;
-            codeCheckButton.Image = CreateButtonIcon("compliance", 16);
-            var complianceMoreDropdown = compStacked[1] as PulldownButton;
-            complianceMoreDropdown.Image = CreateButtonIcon("occupancy", 16);
-            complianceMoreDropdown.AddPushButton(occupancyButtonData);
+                { ToolTip = "Open Banana Chat pre-loaded with an IBC occupancy load and egress analysis — calculates occupant loads, required exits, and egress widths per IBC 2021" };
+            var occupancyBtn = compliancePanel.AddItem(occupancyButtonData) as PushButton;
+            occupancyBtn.LargeImage = CreateButtonIcon("occupancy", 32);
+            occupancyBtn.Image      = CreateButtonIcon("occupancy", 16);
 
             // ── Redline Review ─────────────────────────────────────────────
             var redlinePanel = application.CreateRibbonPanel(_tabName, "Redline Review");
@@ -373,9 +371,10 @@ namespace RevitMCPBridge
             redlineClearButton.Image      = CreateButtonIcon("redline-clear", 16);
 
             // ── Additions ─────────────────────────────────────────────────
+            // Panel slideout: Specs & Materials always visible; FAQ in slideout.
+            // AddSlideOut() makes Revit show "Additions ▼" on the panel footer title.
             var additionsPanel = application.CreateRibbonPanel(_tabName, "Additions");
 
-            // Stacked bar style: Specs & Materials dropdown + FAQ as horizontal text bars
             var epdButtonData = new PushButtonData("EC3", "EPDs", asm,
                 "RevitMCPBridge.Commands.EC3Command")
                 { ToolTip = "Search EC3 (Building Transparency) for Environmental Product Declarations — compare embodied carbon (GWP) across products, sorted lowest first",
@@ -384,18 +383,22 @@ namespace RevitMCPBridge
                 "RevitMCPBridge.Commands.ProductDataCommand")
                 { ToolTip = "Coming soon — pick a CSI MasterFormat section and generate a draft 3-part spec section in Banana Chat",
                   LargeImage = CreateButtonIcon("productdata", 32), Image = CreateButtonIcon("productdata", 16) };
-            var specsMoreData = new PulldownButtonData("SpecsMore", "Specs & Materials")
+            var specsMoreData = new PulldownButtonData("SpecsMore", "Specs &\nMaterials")
                 { ToolTip = "EPD lookup and spec writing tools" };
+            var specsMoreDropdown = additionsPanel.AddItem(specsMoreData) as PulldownButton;
+            specsMoreDropdown.LargeImage = CreateButtonIcon("ec3", 32);
+            specsMoreDropdown.Image      = CreateButtonIcon("ec3", 16);
+            specsMoreDropdown.AddPushButton(epdButtonData);
+            specsMoreDropdown.AddPushButton(productDataButtonData);
+
+            additionsPanel.AddSlideOut();  // everything below goes in the slideout
+
             var faqButtonData = new PushButtonData("FAQ", "FAQ", asm,
                 "RevitMCPBridge.Commands.BimMonkeyFaqCommand")
                 { ToolTip = "Frequently asked questions and troubleshooting tips" };
-            var addStacked = additionsPanel.AddStackedItems(specsMoreData, faqButtonData);
-            var specsMoreDropdown = addStacked[0] as PulldownButton;
-            specsMoreDropdown.Image = CreateButtonIcon("ec3", 16);
-            specsMoreDropdown.AddPushButton(epdButtonData);
-            specsMoreDropdown.AddPushButton(productDataButtonData);
-            var faqButton = addStacked[1] as PushButton;
-            faqButton.Image = CreateButtonIcon("faq", 16);
+            var faqButton = additionsPanel.AddItem(faqButtonData) as PushButton;
+            faqButton.LargeImage = CreateButtonIcon("faq", 32);
+            faqButton.Image      = CreateButtonIcon("faq", 16);
 
         }
 
