@@ -434,36 +434,33 @@ namespace RevitMCPBridge2026.AgentFramework
                 Margin = new Thickness(0, 0, 6, 0),
                 VerticalAlignment = VerticalAlignment.Center
             };
-            // WPF .NET 4.8 can't render color emoji — draw banana with WPF primitives
-            // Thick bezier stroke + round caps = crescent silhouette; inner highlight = white face
-            var spinnerCanvas = new Canvas
+            // Render the emoji glyph to bitmap (renders black = correct shape silhouette)
+            // Apply it as an opacity mask over a yellow rectangle = yellow banana, exact emoji shape
+            var emojiSource = new TextBlock
             {
-                Width = 20, Height = 20,
+                Text = "🍌",
+                FontFamily = new System.Windows.Media.FontFamily("Segoe UI Emoji"),
+                FontSize = 16,
+                Padding = new Thickness(0),
+                Margin  = new Thickness(0),
+            };
+            emojiSource.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            emojiSource.Arrange(new Rect(emojiSource.DesiredSize));
+            var bw = Math.Max((int)Math.Ceiling(emojiSource.DesiredSize.Width),  1);
+            var bh = Math.Max((int)Math.Ceiling(emojiSource.DesiredSize.Height), 1);
+            var emojiBitmap = new RenderTargetBitmap(bw, bh, 96, 96, PixelFormats.Pbgra32);
+            emojiBitmap.Render(emojiSource);
+
+            _spinnerText = new System.Windows.Shapes.Rectangle
+            {
+                Width  = 20,
+                Height = 20,
+                Fill   = new SolidColorBrush(Color.FromRgb(255, 213, 0)),
+                OpacityMask = new ImageBrush(emojiBitmap) { Stretch = Stretch.Uniform },
                 HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                RenderTransformOrigin = new Point(0.5, 0.85)
+                VerticalAlignment   = VerticalAlignment.Center,
+                RenderTransformOrigin = new Point(0.5, 0.85),
             };
-            var bananaBody = new System.Windows.Shapes.Path
-            {
-                Stroke = new SolidColorBrush(Color.FromRgb(255, 213, 0)),
-                StrokeThickness = 6,
-                StrokeStartLineCap = PenLineCap.Round,
-                StrokeEndLineCap = PenLineCap.Round,
-                Fill = System.Windows.Media.Brushes.Transparent,
-                Data = Geometry.Parse("M 13 2 Q 2 10 13 18"),
-            };
-            var bananaHighlight = new System.Windows.Shapes.Path
-            {
-                Stroke = new SolidColorBrush(Color.FromArgb(210, 255, 252, 200)),
-                StrokeThickness = 2,
-                StrokeStartLineCap = PenLineCap.Round,
-                StrokeEndLineCap = PenLineCap.Round,
-                Fill = System.Windows.Media.Brushes.Transparent,
-                Data = Geometry.Parse("M 12 4 Q 5 10 12 16"),
-            };
-            spinnerCanvas.Children.Add(bananaBody);
-            spinnerCanvas.Children.Add(bananaHighlight);
-            _spinnerText = spinnerCanvas;
             spinnerContainer.Child = _spinnerText;
             titleRow.Children.Add(spinnerContainer);
 
