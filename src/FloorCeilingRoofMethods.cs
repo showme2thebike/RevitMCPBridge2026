@@ -2425,9 +2425,13 @@ namespace RevitMCPBridge
                                 continue;
                             }
 
-                            // Use Revit 2026 Wall.AddAttachment API
+#if REVIT2026
+                            // Wall.AddAttachment requires Revit 2026 API
                             wall.AddAttachment(roofId, AttachmentLocation.Top);
                             attachedWalls.Add(wallIdInt);
+#else
+                            failedWalls.Add(new { wallId = wallIdInt, reason = "attachWallsToRoof requires Revit 2026 or later" });
+#endif
                         }
                         catch (Exception ex)
                         {

@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Media.Animation;
 using System.IO;
 using System.IO.Pipes;
 using Newtonsoft.Json;
@@ -30,6 +31,10 @@ namespace RevitMCPBridge2026.AgentFramework
         private TextBlock _tokenText;
         private TextBlock _costText;
         private TextBlock _timerText;
+        private System.Windows.Threading.DispatcherTimer _bananaTimer;
+        private RotateTransform _bananaPeel1Rotate;
+        private RotateTransform _bananaPeel2Rotate;
+        private DateTime _bananaStartTime;
         private StackPanel _chatHistory;
         private ScrollViewer _chatScrollViewer;
         private System.Windows.Controls.TextBox _inputTextBox;
@@ -414,12 +419,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 Margin = new Thickness(0, 0, 0, 8)
             };
 
-            var progressBar = new ProgressBar
-            {
-                IsIndeterminate = true,
-                Height = 4,
-                Foreground = new SolidColorBrush(Color.FromRgb(0, 120, 212))
-            };
+            var progressBar = CreateBananaAnimation();
 
             // Detail row: progress detail text + elapsed timer side by side
             var detailRow = new Grid { Margin = new Thickness(0, 8, 0, 0) };
@@ -1684,21 +1684,27 @@ namespace RevitMCPBridge2026.AgentFramework
             _agent.OnThinking += (msg) => Dispatcher.Invoke(() => ShowProgress(msg));
             _agent.OnToolCall += (msg) => Dispatcher.Invoke(() =>
             {
-                _lastToolCall = msg;
-                UpdateProgress(msg);
-                AddToolMessage(msg, false);
-                var toolName = msg.Replace("Calling: ", "");
+                var toolName = msg.Replace("Calling: ", "");    // canonical name — always drive state from this
+                _lastToolCall = toolName;
                 if (IsWriteOperation(toolName))
                 {
                     _correctionTriggerOperation = toolName;
                     _correctionWatchStart = DateTime.Now;
                     _correctionWatchActive = false;
                 }
+                var displayLabel = GetProgressLabel(toolName);
+                UpdateProgress(displayLabel);
+                AddToolMessage(displayLabel, false);
             });
             _agent.OnToolResult += (msg) => Dispatcher.Invoke(() => {
-                UpdateProgress(msg);
-                AddToolMessage(msg, true);
-                // Try to display image if the result contains an image path
+                const string rPrefix = "✓ ";
+                const string rSuffix = " completed";
+                var toolName = (msg.StartsWith(rPrefix) && msg.EndsWith(rSuffix))
+                    ? msg.Substring(rPrefix.Length, msg.Length - rPrefix.Length - rSuffix.Length)
+                    : msg;
+                var displayResult = $"✓ {GetProgressLabel(toolName).TrimEnd('.')}";
+                UpdateProgress(displayResult);
+                AddToolMessage(displayResult, true);
                 TryDisplayImageFromResult(msg);
             });
             _agent.OnChunk += (chunk) => Dispatcher.Invoke(() =>
@@ -3623,6 +3629,129 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private bool IsWriteOperation(string toolName) => _writeOpNames.Contains(toolName);
 
+        private static readonly Dictionary<string, string> _progressLabels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            // Core
+            ["ping"]                          = "Checking connection...",
+            ["callMCPMethod"]                 = "Calling Revit...",
+            // Sheets & views
+            ["createSheet"]                   = "Creating sheet...",
+            ["placeViewOnSheet"]              = "Placing view on sheet...",
+            ["placeViewportOnSheet"]          = "Placing viewport on sheet...",
+            ["placeScheduleOnSheet"]          = "Placing schedule on sheet...",
+            ["getSheets"]                     = "Reading sheets...",
+            ["getViews"]                      = "Reading views...",
+            ["auditSheets"]                   = "Auditing sheets...",
+            ["getViewBoundingBox"]            = "Measuring view...",
+            ["getViewportBoundingBoxes"]      = "Reading layout...",
+            ["getDraftingViewBounds"]         = "Reading drafting view...",
+            ["setViewTemplate"]               = "Applying view template...",
+            ["setSheetRevision"]              = "Setting revision...",
+            ["duplicateView"]                 = "Duplicating view...",
+            // Detail & section views
+            ["createDraftingView"]            = "Creating drafting view...",
+            ["createDetail"]                  = "Creating detail view...",
+            ["createCallout"]                 = "Creating callout...",
+            ["createSection"]                 = "Creating section...",
+            ["createElevation"]               = "Creating elevation...",
+            // Model elements
+            ["createWall"]                    = "Creating wall...",
+            ["createFloor"]                   = "Creating floor...",
+            ["createRoof"]                    = "Creating roof...",
+            ["createCeiling"]                 = "Creating ceiling...",
+            ["placeDoor"]                     = "Placing door...",
+            ["placeWindow"]                   = "Placing window...",
+            ["placeFamilyInstance"]           = "Placing element...",
+            ["moveElement"]                   = "Moving element...",
+            ["deleteElements"]                = "Removing elements...",
+            ["modifyElement"]                 = "Updating element...",
+            ["getElements"]                   = "Reading elements...",
+            ["getWalls"]                      = "Reading walls...",
+            ["getDoors"]                      = "Reading doors...",
+            ["getWindows"]                    = "Reading windows...",
+            ["getRooms"]                      = "Reading rooms...",
+            ["getModelInfo"]                  = "Reading model info...",
+            // Parameters
+            ["setElementParameter"]           = "Setting parameter...",
+            ["setParameters"]                 = "Updating parameters...",
+            ["getParameters"]                 = "Reading parameters...",
+            // Annotations
+            ["placeTextNote"]                 = "Placing text note...",
+            ["createTextNote"]                = "Creating text note...",
+            ["placeKeynote"]                  = "Placing keynote...",
+            ["tagElements"]                   = "Tagging elements...",
+            ["placeAnnotationSymbol"]         = "Placing annotation...",
+            ["placeAnnotationWithLeader"]     = "Placing annotation with leader...",
+            ["batchPlaceKeynotesWithLeaders"] = "Placing keynotes...",
+            ["createRevisionCloud"]           = "Creating revision cloud...",
+            ["createRevision"]                = "Creating revision...",
+            ["modifyRevisionCloud"]           = "Updating revision cloud...",
+            ["getAllRevisions"]               = "Reading revisions...",
+            ["addFloorPlanDimensions"]        = "Adding dimensions...",
+            ["placeAngularDimension"]         = "Adding angular dimension...",
+            ["placeSpotElevation"]            = "Placing spot elevation...",
+            ["createReferencePlane"]          = "Creating reference plane...",
+            ["createMatchline"]               = "Creating matchline...",
+            ["placeLegendComponent"]          = "Placing legend component...",
+            ["addTextToLegend"]               = "Adding legend text...",
+            // Title block & cover sheet
+            ["setTitleblockProjectInfo"]      = "Setting project info...",
+            ["generateCoverSheet"]            = "Generating cover sheet...",
+            ["placeNorthArrow"]               = "Placing north arrow...",
+            // View settings
+            ["setCropRegionsTight"]           = "Setting crop regions...",
+            ["setGridLinesVisible"]           = "Showing grid lines...",
+            ["setLevelMarkersVisible"]        = "Showing level markers...",
+            ["setSectionMarksVisible"]        = "Showing section marks...",
+            ["addDetailCrossReferences"]      = "Adding cross references...",
+            ["runAnnotationSuite"]            = "Running annotation suite...",
+            // Families & schedules
+            ["getSchedules"]                  = "Reading schedules...",
+            ["getFamilies"]                   = "Loading families...",
+            ["searchFamilies"]                = "Searching families...",
+            ["getFamilyInstances"]            = "Reading elements...",
+            ["createKeynoteSchedule"]         = "Creating keynote schedule...",
+            // CD checklist / audit
+            ["runCDChecklist"]                = "Running CD checklist...",
+            ["auditRooms"]                    = "Auditing rooms...",
+            ["auditDoors"]                    = "Auditing doors...",
+            ["runStandardsCheck"]             = "Checking standards...",
+            ["getPurgeable"]                  = "Scanning unused elements...",
+            // Text & batch
+            ["standardizeDocumentText"]       = "Standardizing text...",
+            ["standardizeDimensionText"]      = "Standardizing dimensions...",
+            ["bulkRenameViews"]               = "Renaming views...",
+            ["getTextTypes"]                  = "Reading text types...",
+            ["getTextNotes"]                  = "Reading text notes...",
+            // Ceilings
+            ["getCeilings"]                   = "Reading ceilings...",
+            ["modifyCeilingType"]             = "Updating ceiling type...",
+            ["deleteCeiling"]                 = "Removing ceiling...",
+            ["setCeilingHeight"]              = "Setting ceiling height...",
+            ["batchCreateCeilings"]           = "Creating ceilings...",
+            ["alignCeilingToRoom"]            = "Aligning ceiling to room...",
+            // Memory
+            ["memoryStore"]                   = "Saving to memory...",
+            ["memoryRecall"]                  = "Recalling from memory...",
+            ["memoryDelete"]                  = "Clearing from memory...",
+            // Misc
+            ["generateVicinityMap"]           = "Generating vicinity map...",
+            ["viewCapture"]                   = "Capturing view...",
+        };
+
+        private static string GetProgressLabel(string toolName)
+        {
+            if (_progressLabels.TryGetValue(toolName, out var label)) return label;
+            // Fallback: camelCase → "Create sheet..." style
+            var sb = new System.Text.StringBuilder();
+            foreach (char c in toolName)
+            {
+                if (sb.Length > 0 && char.IsUpper(c)) sb.Append(' ');
+                sb.Append(sb.Length == 0 ? char.ToUpper(c) : char.ToLower(c));
+            }
+            return sb + "...";
+        }
+
         // Sprint 8/9 — session startup intelligence
         private void ShowStartupGreeting()
         {
@@ -4520,7 +4649,7 @@ STYLE:
 
             // Learn from this successful interaction
             // Extract method from last tool call if available
-            var method = _lastToolCall?.Replace("Calling: ", "") ?? "unknown";
+            var method = _lastToolCall ?? "unknown";
             _agent?.ReportSuccess(userMsg, method, null);
         }
 
@@ -4828,6 +4957,7 @@ STYLE:
             if (!alreadyRunning)
             {
                 _thinkingStartTime = DateTime.Now;
+                _bananaStartTime = DateTime.Now;
                 if (_thinkingTimer == null)
                 {
                     _thinkingTimer = new System.Windows.Threading.DispatcherTimer
@@ -4841,9 +4971,24 @@ STYLE:
                         if (_elapsedText != null) _elapsedText.Text = $"{elapsed} s";
                     };
                 }
+                if (_bananaTimer == null)
+                {
+                    _bananaTimer = new System.Windows.Threading.DispatcherTimer
+                    {
+                        Interval = TimeSpan.FromMilliseconds(50)
+                    };
+                    _bananaTimer.Tick += (s, e) =>
+                    {
+                        var t = (DateTime.Now - _bananaStartTime).TotalSeconds;
+                        var angle = 28.0 * Math.Sin(t * 2.4);
+                        if (_bananaPeel1Rotate != null) _bananaPeel1Rotate.Angle = angle;
+                        if (_bananaPeel2Rotate != null) _bananaPeel2Rotate.Angle = -angle;
+                    };
+                }
                 _timerText.Text = "0s";
                 if (_elapsedText != null) _elapsedText.Text = "0 s";
                 _thinkingTimer.Start();
+                _bananaTimer.Start();
             }
         }
 
@@ -4856,9 +5001,65 @@ STYLE:
         {
             _progressPanel.Visibility = Visibility.Collapsed;
             _thinkingTimer?.Stop();
+            _bananaTimer?.Stop();
+            if (_bananaPeel1Rotate != null) _bananaPeel1Rotate.Angle = 0;
+            if (_bananaPeel2Rotate != null) _bananaPeel2Rotate.Angle = 0;
             if (_timerText != null) _timerText.Text = "";
             var elapsed = (int)(DateTime.Now - _thinkingStartTime).TotalSeconds;
             if (_elapsedText != null) _elapsedText.Text = $"{elapsed} s";
+        }
+
+        private Canvas CreateBananaAnimation()
+        {
+            var canvas = new Canvas { Width = 72, Height = 16, Margin = new Thickness(0, 2, 0, 2) };
+
+            // Yellow banana body
+            var body = new System.Windows.Shapes.Ellipse
+            {
+                Width = 56, Height = 12,
+                Fill = new SolidColorBrush(Color.FromRgb(255, 213, 0)),
+                Stroke = new SolidColorBrush(Color.FromRgb(160, 120, 0)),
+                StrokeThickness = 1
+            };
+            Canvas.SetLeft(body, 2);
+            Canvas.SetTop(body, 2);
+            canvas.Children.Add(body);
+
+            // Brown stem at left tip
+            var stem = new System.Windows.Shapes.Ellipse
+            {
+                Width = 6, Height = 6,
+                Fill = new SolidColorBrush(Color.FromRgb(139, 90, 43))
+            };
+            Canvas.SetLeft(stem, 0);
+            Canvas.SetTop(stem, 5);
+            canvas.Children.Add(stem);
+
+            // Peel top — triangle at right tip, pivots upward
+            _bananaPeel1Rotate = new RotateTransform(0, 58, 8);
+            var peel1 = new System.Windows.Shapes.Polygon
+            {
+                Points = new PointCollection { new Point(58, 5), new Point(70, 2), new Point(72, 8) },
+                Fill = new SolidColorBrush(Color.FromRgb(200, 160, 0)),
+                Stroke = new SolidColorBrush(Color.FromRgb(160, 120, 0)),
+                StrokeThickness = 1,
+                RenderTransform = _bananaPeel1Rotate
+            };
+            canvas.Children.Add(peel1);
+
+            // Peel bottom — mirror triangle, pivots downward
+            _bananaPeel2Rotate = new RotateTransform(0, 58, 8);
+            var peel2 = new System.Windows.Shapes.Polygon
+            {
+                Points = new PointCollection { new Point(58, 11), new Point(70, 14), new Point(72, 8) },
+                Fill = new SolidColorBrush(Color.FromRgb(200, 160, 0)),
+                Stroke = new SolidColorBrush(Color.FromRgb(160, 120, 0)),
+                StrokeThickness = 1,
+                RenderTransform = _bananaPeel2Rotate
+            };
+            canvas.Children.Add(peel2);
+
+            return canvas;
         }
 
         private void SetProcessing(bool isProcessing)

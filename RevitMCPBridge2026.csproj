@@ -11,6 +11,10 @@
     <!-- RevitYear is passed by build_plugin_zip.ps1 (-p:RevitYear=2024/2025/2026). Defaults to 2026. -->
     <RevitYear Condition="'$(RevitYear)' == ''">2026</RevitYear>
     <AssemblyName>RevitMCPBridge$(RevitYear)</AssemblyName>
+    <!-- Define per-year compiler constants so #if REVIT2025 / #if REVIT2026 guards work -->
+    <DefineConstants Condition="'$(RevitYear)' == '2024'">$(DefineConstants);REVIT2024;REVIT2025</DefineConstants>
+    <DefineConstants Condition="'$(RevitYear)' == '2025'">$(DefineConstants);REVIT2025</DefineConstants>
+    <DefineConstants Condition="'$(RevitYear)' == '2026'">$(DefineConstants);REVIT2026</DefineConstants>
     <RootNamespace>RevitMCPBridge</RootNamespace>
     <NoWarn>MSB3277</NoWarn>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
