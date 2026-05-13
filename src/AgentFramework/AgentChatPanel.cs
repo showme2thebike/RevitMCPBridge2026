@@ -437,6 +437,7 @@ namespace RevitMCPBridge2026.AgentFramework
             _spinnerText = new TextBlock
             {
                 Text = "🍌",
+                FontFamily = new System.Windows.Media.FontFamily("Segoe UI Emoji"),
                 FontSize = 13,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,

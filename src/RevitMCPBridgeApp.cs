@@ -354,26 +354,6 @@ namespace RevitMCPBridge
             complianceMoreDropdown.Image      = CreateButtonIcon("occupancy", 16);
             complianceMoreDropdown.AddPushButton(occupancyButtonData);
 
-            // ── Specifications ───────────────────────────────────────────
-            var specsPanel = application.CreateRibbonPanel(_tabName, "Specifications");
-
-            // Specs & Materials dropdown — EPDs, Spec Writer
-            var epdButtonData = new PushButtonData("EC3", "EPDs", asm,
-                "RevitMCPBridge.Commands.EC3Command")
-                { ToolTip = "Search EC3 (Building Transparency) for Environmental Product Declarations — compare embodied carbon (GWP) across products, sorted lowest first",
-                  LargeImage = CreateButtonIcon("ec3", 32), Image = CreateButtonIcon("ec3", 16) };
-            var productDataButtonData = new PushButtonData("ProductData", "Spec Writer", asm,
-                "RevitMCPBridge.Commands.ProductDataCommand")
-                { ToolTip = "Coming soon — pick a CSI MasterFormat section and generate a draft 3-part spec section in Banana Chat",
-                  LargeImage = CreateButtonIcon("productdata", 32), Image = CreateButtonIcon("productdata", 16) };
-            var specsMoreData = new PulldownButtonData("SpecsMore", "Specs &\nMaterials")
-                { ToolTip = "EPD lookup and spec writing tools" };
-            var specsMoreDropdown = specsPanel.AddItem(specsMoreData) as PulldownButton;
-            specsMoreDropdown.LargeImage = CreateButtonIcon("ec3", 32);
-            specsMoreDropdown.Image      = CreateButtonIcon("ec3", 16);
-            specsMoreDropdown.AddPushButton(epdButtonData);
-            specsMoreDropdown.AddPushButton(productDataButtonData);
-
             // ── Redline Review ─────────────────────────────────────────────
             var redlinePanel = application.CreateRibbonPanel(_tabName, "Redline Review");
 
@@ -398,8 +378,25 @@ namespace RevitMCPBridge
             redlineClearButton.LargeImage = CreateButtonIcon("redline-clear", 32);
             redlineClearButton.Image      = CreateButtonIcon("redline-clear", 16);
 
-            // ── Additions (FAQ) ────────────────────────────────────────────
+            // ── Additions ─────────────────────────────────────────────────
             var additionsPanel = application.CreateRibbonPanel(_tabName, "Additions");
+
+            // Specs & Materials dropdown — EPDs, Spec Writer
+            var epdButtonData = new PushButtonData("EC3", "EPDs", asm,
+                "RevitMCPBridge.Commands.EC3Command")
+                { ToolTip = "Search EC3 (Building Transparency) for Environmental Product Declarations — compare embodied carbon (GWP) across products, sorted lowest first",
+                  LargeImage = CreateButtonIcon("ec3", 32), Image = CreateButtonIcon("ec3", 16) };
+            var productDataButtonData = new PushButtonData("ProductData", "Spec Writer", asm,
+                "RevitMCPBridge.Commands.ProductDataCommand")
+                { ToolTip = "Coming soon — pick a CSI MasterFormat section and generate a draft 3-part spec section in Banana Chat",
+                  LargeImage = CreateButtonIcon("productdata", 32), Image = CreateButtonIcon("productdata", 16) };
+            var specsMoreData = new PulldownButtonData("SpecsMore", "Specs &\nMaterials")
+                { ToolTip = "EPD lookup and spec writing tools" };
+            var specsMoreDropdown = additionsPanel.AddItem(specsMoreData) as PulldownButton;
+            specsMoreDropdown.LargeImage = CreateButtonIcon("ec3", 32);
+            specsMoreDropdown.Image      = CreateButtonIcon("ec3", 16);
+            specsMoreDropdown.AddPushButton(epdButtonData);
+            specsMoreDropdown.AddPushButton(productDataButtonData);
 
             var faqButtonData = new PushButtonData("FAQ", "FAQ", asm,
                 "RevitMCPBridge.Commands.BimMonkeyFaqCommand")
