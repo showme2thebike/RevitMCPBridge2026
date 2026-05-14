@@ -2107,5 +2107,104 @@ namespace RevitMCPBridge
                 return ResponseBuilder.FromException(ex).Build();
             }
         }
+
+        /// <summary>
+        /// Attach the top or base of one or more walls to a target element (roof, floor, ceiling,
+        /// toposolid, or another wall). Equivalent to the UI Attach Top/Base command.
+        /// Added in Revit 2026 API — not available in 2024/2025.
+        /// </summary>
+        [MCPMethod("attachWallToRoof", Category = "Wall",
+            Description = "Attach wall tops (or bases) to a roof, floor, or ceiling — equivalent to Modify > Attach Top/Base. " +
+                          "Requires Revit 2026. Pass wallIds array and targetId (roof/floor/ceiling element ID). " +
+                          "location: 'Top' (default) or 'Base'.")]
+        public static string AttachWallToRoof(UIApplication uiApp, JObject parameters)
+        {
+#if REVIT2026
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                if (parameters["wallIds"] == null)
+                    return ResponseBuilder.Error("wallIds is required (array of wall element IDs)", "MISSING_PARAMETER").Build();
+                if (parameters["targetId"] == null)
+                    return ResponseBuilder.Error("targetId is required (roof, floor, or ceiling element ID)", "MISSING_PARAMETER").Build();
+
+                var wallIdInts = parameters["wallIds"].ToObject<int[]>();
+                var targetId   = new ElementId(int.Parse(parameters["targetId"].ToString()));
+                var locStr     = parameters["location"]?.ToString() ?? "Top";
+                var location   = locStr.Equals("Base", StringComparison.OrdinalIgnoreCase)
+                    ? AttachmentLocation.Base
+                    : AttachmentLocation.Top;
+
+                // Validate target once before opening a transaction
+                if (!Wall.IsValidTargetAttachment(doc, targetId))
+                    return ResponseBuilder.Error(
+                        $"Element {targetId.Value} is not a valid attachment target. " +
+                        "Valid targets are roofs, floors, ceilings, toposolids, or walls.",
+                        "INVALID_TARGET").Build();
+
+                var attached  = new List<int>();
+                var skipped   = new List<int>();  // already attached
+                var failed    = new List<object>();
+
+                using (var trans = new Transaction(doc, "Attach Walls to Roof"))
+                {
+                    trans.Start();
+
+                    foreach (var wIdInt in wallIdInts)
+                    {
+                        var wallElemId = new ElementId(wIdInt);
+                        var wall = doc.GetElement(wallElemId) as Wall;
+                        if (wall == null)
+                        {
+                            failed.Add(new { wallId = wIdInt, reason = "Wall not found" });
+                            continue;
+                        }
+
+                        // Skip if already attached to this target at this location
+                        var existing = wall.GetAttachmentIds(location);
+                        if (existing != null && existing.Contains(targetId))
+                        {
+                            skipped.Add(wIdInt);
+                            continue;
+                        }
+
+                        try
+                        {
+                            wall.AddAttachment(targetId, location);
+                            attached.Add(wIdInt);
+                        }
+                        catch (Exception ex)
+                        {
+                            failed.Add(new { wallId = wIdInt, reason = ex.Message });
+                        }
+                    }
+
+                    var status = trans.Commit();
+                    if (status != TransactionStatus.Committed)
+                        return ResponseBuilder.Error(
+                            $"Transaction ended with status '{status}'.",
+                            "TRANSACTION_FAILED").Build();
+                }
+
+                return ResponseBuilder.Success()
+                    .With("targetId",      (int)targetId.Value)
+                    .With("location",      locStr)
+                    .With("attached",      attached)
+                    .With("attachedCount", attached.Count)
+                    .With("skipped",       skipped)
+                    .With("failed",        failed)
+                    .Build();
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+#else
+            return ResponseBuilder.Error(
+                "attachWallToRoof requires Revit 2026 — Wall.AddAttachment() is not available in Revit 2024 or 2025.",
+                "NOT_SUPPORTED").Build();
+#endif
+        }
     }
 }

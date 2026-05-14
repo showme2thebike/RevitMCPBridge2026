@@ -3907,7 +3907,11 @@ namespace RevitMCPBridge2026
         /// Skips views that already have dimension elements unless skipIfHasDims=false.
         /// Must run BEFORE setCropRegionsTight so the crop expands to include the strings.
         /// </summary>
-        [MCPMethod("addFloorPlanDimensions", Category = "Annotation", Description = "Adds exterior dimension strings to floor plan views: horizontal string above and vertical string to the right, referencing wall faces")]
+        [MCPMethod("addFloorPlanDimensions", Category = "Annotation",
+            Description = "Adds exterior dimension strings to floor plan views. " +
+                          "useGrids:true (default) references grid centerlines — produces clean grid-to-grid distances. " +
+                          "useGrids:false falls back to wall faces. " +
+                          "dimensionTypeId overrides automatic type selection.")]
         public static string AddFloorPlanDimensions(UIApplication uiApp, JObject parameters)
         {
             try
@@ -3915,22 +3919,36 @@ namespace RevitMCPBridge2026
                 var doc = uiApp.ActiveUIDocument.Document;
                 double offsetFt         = parameters["offsetFt"]?.ToObject<double>() ?? 2.0;
                 bool   skipIfHasDims    = parameters["skipIfHasDims"]?.ToObject<bool>() ?? true;
+                bool   useGrids         = parameters["useGrids"]?.ToObject<bool>() ?? true;
                 int?   specificViewId   = parameters["viewId"]?.ToObject<int?>();
+                int?   dimTypeIdParam   = parameters["dimensionTypeId"]?.ToObject<int?>();
 
-                // ── Find best linear dimension type ───────────────────────────────
-                var dimType = new FilteredElementCollector(doc)
-                    .OfClass(typeof(DimensionType))
-                    .Cast<DimensionType>()
-                    .Where(dt => dt.StyleType == DimensionStyleType.Linear)
-                    .OrderBy(dt =>
-                    {
-                        // Prefer CDC or BM prefixed types (firm standards)
-                        var n = dt.Name;
-                        if (n.StartsWith("CDC", StringComparison.OrdinalIgnoreCase)) return 0;
-                        if (n.StartsWith("BM",  StringComparison.OrdinalIgnoreCase)) return 1;
-                        return 2;
-                    })
-                    .FirstOrDefault();
+                // ── Resolve dimension type ────────────────────────────────────────
+                DimensionType dimType = null;
+                if (dimTypeIdParam.HasValue)
+                {
+                    dimType = doc.GetElement(new ElementId(dimTypeIdParam.Value)) as DimensionType;
+                    if (dimType == null)
+                        return ResponseBuilder.Error(
+                            $"No DimensionType found with ID {dimTypeIdParam.Value}. " +
+                            "Omit dimensionTypeId to use automatic selection.",
+                            "INVALID_TYPE_ID").Build();
+                }
+                else
+                {
+                    dimType = new FilteredElementCollector(doc)
+                        .OfClass(typeof(DimensionType))
+                        .Cast<DimensionType>()
+                        .Where(dt => dt.StyleType == DimensionStyleType.Linear)
+                        .OrderBy(dt =>
+                        {
+                            var n = dt.Name;
+                            if (n.StartsWith("CDC", StringComparison.OrdinalIgnoreCase)) return 0;
+                            if (n.StartsWith("BM",  StringComparison.OrdinalIgnoreCase)) return 1;
+                            return 2;
+                        })
+                        .FirstOrDefault();
+                }
 
                 if (dimType == null)
                     return ResponseBuilder.Error("No linear dimension type found in model").Build();
@@ -4027,68 +4045,148 @@ namespace RevitMCPBridge2026
                         .ToList();
 
                     int dimsCreated = 0;
+                    string refMode  = "wall_faces";
+
+                    // ── Grid reference path (default) ─────────────────────────────
+                    // Grids give clean centerline-to-centerline distances; wall faces give
+                    // fractional offsets from wall face to wall face.
+                    List<Grid> verticalGrids   = null; // N-S grids → horizontal dim string
+                    List<Grid> horizontalGrids = null; // E-W grids → vertical dim string
+
+                    if (useGrids)
+                    {
+                        var grids = new FilteredElementCollector(doc, view.Id)
+                            .OfClass(typeof(Grid))
+                            .Cast<Grid>()
+                            .Where(g => !g.IsCurved && g.Curve is Line)
+                            .ToList();
+
+                        verticalGrids = grids
+                            .Where(g => Math.Abs(((Line)g.Curve).Direction.Y) > 0.7)
+                            .OrderBy(g => ((Line)g.Curve).GetEndPoint(0).X)
+                            .ToList();
+
+                        horizontalGrids = grids
+                            .Where(g => Math.Abs(((Line)g.Curve).Direction.X) > 0.7)
+                            .OrderBy(g => ((Line)g.Curve).GetEndPoint(0).Y)
+                            .ToList();
+
+                        if (verticalGrids.Count >= 2 || horizontalGrids.Count >= 2)
+                            refMode = "grid_centerlines";
+                        else
+                        {
+                            // No usable grids — fall through to wall faces
+                            verticalGrids = null;
+                            horizontalGrids = null;
+                        }
+                    }
 
                     using (var tx = new Transaction(doc, "BM: Add Floor Plan Dimensions"))
                     {
-                        var fho = tx.GetFailureHandlingOptions();
-                        fho.SetFailuresPreprocessor(new WarningSwallower());
-                        tx.SetFailureHandlingOptions(fho);
                         tx.Start();
 
-                        // ── Horizontal string: above building, refs N-S wall faces ──
-                        if (nsWalls.Count >= 2)
+                        if (refMode == "grid_centerlines")
                         {
-                            var refs = new ReferenceArray();
-                            foreach (var w in nsWalls)
+                            // ── Horizontal string: above building, refs N-S (vertical) grids ──
+                            if (verticalGrids != null && verticalGrids.Count >= 2)
                             {
+                                var refs = new ReferenceArray();
+                                foreach (var g in verticalGrids)
+                                    refs.Append(new Reference(g));
+
                                 try
                                 {
-                                    // Exterior face first, then interior — gives both faces of each wall
-                                    foreach (var r in HostObjectUtils.GetSideFaces(w, ShellLayerType.Exterior)
-                                                       .Concat(HostObjectUtils.GetSideFaces(w, ShellLayerType.Interior)))
-                                        refs.Append(r);
-                                }
-                                catch { /* skip walls whose faces can't be extracted */ }
-                            }
-                            if (refs.Size >= 2)
-                            {
-                                try
-                                {
+                                    double gMinX = verticalGrids.Min(g => ((Line)g.Curve).GetEndPoint(0).X);
+                                    double gMaxX = verticalGrids.Max(g => ((Line)g.Curve).GetEndPoint(0).X);
                                     var dimLine = Line.CreateBound(
-                                        new XYZ(minX - 1.0, maxY + offsetFt, levelZ),
-                                        new XYZ(maxX + 1.0, maxY + offsetFt, levelZ));
+                                        new XYZ(gMinX - 1.0, maxY + offsetFt, levelZ),
+                                        new XYZ(gMaxX + 1.0, maxY + offsetFt, levelZ));
                                     doc.Create.NewDimension(view, dimLine, refs, dimType);
                                     dimsCreated++;
                                 }
-                                catch (Exception ex) { errors.Add($"{view.Name} H: {ex.Message}"); }
+                                catch (Exception ex) { errors.Add($"{view.Name} H (grids): {ex.Message}"); }
+                            }
+
+                            // ── Vertical string: right of building, refs E-W (horizontal) grids ──
+                            if (horizontalGrids != null && horizontalGrids.Count >= 2)
+                            {
+                                var refs = new ReferenceArray();
+                                foreach (var g in horizontalGrids)
+                                    refs.Append(new Reference(g));
+
+                                try
+                                {
+                                    double gMinY = horizontalGrids.Min(g => ((Line)g.Curve).GetEndPoint(0).Y);
+                                    double gMaxY = horizontalGrids.Max(g => ((Line)g.Curve).GetEndPoint(0).Y);
+                                    var dimLine = Line.CreateBound(
+                                        new XYZ(maxX + offsetFt, gMinY - 1.0, levelZ),
+                                        new XYZ(maxX + offsetFt, gMaxY + 1.0, levelZ));
+                                    doc.Create.NewDimension(view, dimLine, refs, dimType);
+                                    dimsCreated++;
+                                }
+                                catch (Exception ex) { errors.Add($"{view.Name} V (grids): {ex.Message}"); }
                             }
                         }
-
-                        // ── Vertical string: right of building, refs E-W wall faces ──
-                        if (ewWalls.Count >= 2)
+                        else
                         {
-                            var refs = new ReferenceArray();
-                            foreach (var w in ewWalls)
+                            // ── Wall-face fallback: horizontal string refs N-S wall faces ──
+                            var fho = tx.GetFailureHandlingOptions();
+                            fho.SetFailuresPreprocessor(new WarningSwallower());
+                            tx.SetFailureHandlingOptions(fho);
+
+                            if (nsWalls.Count >= 2)
                             {
-                                try
+                                var refs = new ReferenceArray();
+                                foreach (var w in nsWalls)
                                 {
-                                    foreach (var r in HostObjectUtils.GetSideFaces(w, ShellLayerType.Exterior)
-                                                       .Concat(HostObjectUtils.GetSideFaces(w, ShellLayerType.Interior)))
-                                        refs.Append(r);
+                                    try
+                                    {
+                                        foreach (var r in HostObjectUtils.GetSideFaces(w, ShellLayerType.Exterior)
+                                                           .Concat(HostObjectUtils.GetSideFaces(w, ShellLayerType.Interior)))
+                                            refs.Append(r);
+                                    }
+                                    catch { }
                                 }
-                                catch { }
+                                if (refs.Size >= 2)
+                                {
+                                    try
+                                    {
+                                        var dimLine = Line.CreateBound(
+                                            new XYZ(minX - 1.0, maxY + offsetFt, levelZ),
+                                            new XYZ(maxX + 1.0, maxY + offsetFt, levelZ));
+                                        doc.Create.NewDimension(view, dimLine, refs, dimType);
+                                        dimsCreated++;
+                                    }
+                                    catch (Exception ex) { errors.Add($"{view.Name} H (walls): {ex.Message}"); }
+                                }
                             }
-                            if (refs.Size >= 2)
+
+                            // ── Wall-face fallback: vertical string refs E-W wall faces ──
+                            if (ewWalls.Count >= 2)
                             {
-                                try
+                                var refs = new ReferenceArray();
+                                foreach (var w in ewWalls)
                                 {
-                                    var dimLine = Line.CreateBound(
-                                        new XYZ(maxX + offsetFt, minY - 1.0, levelZ),
-                                        new XYZ(maxX + offsetFt, maxY + 1.0, levelZ));
-                                    doc.Create.NewDimension(view, dimLine, refs, dimType);
-                                    dimsCreated++;
+                                    try
+                                    {
+                                        foreach (var r in HostObjectUtils.GetSideFaces(w, ShellLayerType.Exterior)
+                                                           .Concat(HostObjectUtils.GetSideFaces(w, ShellLayerType.Interior)))
+                                            refs.Append(r);
+                                    }
+                                    catch { }
                                 }
-                                catch (Exception ex) { errors.Add($"{view.Name} V: {ex.Message}"); }
+                                if (refs.Size >= 2)
+                                {
+                                    try
+                                    {
+                                        var dimLine = Line.CreateBound(
+                                            new XYZ(maxX + offsetFt, minY - 1.0, levelZ),
+                                            new XYZ(maxX + offsetFt, maxY + 1.0, levelZ));
+                                        doc.Create.NewDimension(view, dimLine, refs, dimType);
+                                        dimsCreated++;
+                                    }
+                                    catch (Exception ex) { errors.Add($"{view.Name} V (walls): {ex.Message}"); }
+                                }
                             }
                         }
 
@@ -4096,12 +4194,23 @@ namespace RevitMCPBridge2026
                     }
 
                     if (dimsCreated > 0) viewsUpdated++;
-                    log.Add(new { view = view.Name, dimsCreated, nsWalls = nsWalls.Count, ewWalls = ewWalls.Count, status = dimsCreated > 0 ? "ok" : "no_dims_created" });
+                    log.Add(new
+                    {
+                        view        = view.Name,
+                        dimsCreated,
+                        refMode,
+                        vertGrids   = verticalGrids?.Count   ?? 0,
+                        horizGrids  = horizontalGrids?.Count ?? 0,
+                        nsWalls     = nsWalls.Count,
+                        ewWalls     = ewWalls.Count,
+                        status      = dimsCreated > 0 ? "ok" : "no_dims_created"
+                    });
                 }
 
                 return ResponseBuilder.Success()
                     .With("viewsUpdated",  viewsUpdated)
                     .With("dimTypeName",   dimType.Name)
+                    .With("useGrids",      useGrids)
                     .With("log",           log)
                     .With("errors",        errors)
                     .Build();
