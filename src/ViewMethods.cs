@@ -3169,94 +3169,21 @@ namespace RevitMCPBridge
         }
 
         /// <summary>
-        /// Create a new scope box
-        /// Parameters: name, minPoint {x, y, z}, maxPoint {x, y, z}
+        /// Create a new scope box.
+        /// Revit 2026 API does not expose a ScopeBox.Create() method — this always returns
+        /// NOT_SUPPORTED. Draw the scope box manually in Revit, then use applyScopeBoxToView.
         /// </summary>
-        [MCPMethod("createScopeBox", Category = "View", Description = "Create a new scope box with defined extents")]
+        [MCPMethod("createScopeBox", Category = "View", Description = "Create a new scope box — NOTE: Revit 2026 API does not support programmatic scope box creation. Draw manually, then use applyScopeBoxToView.")]
         public static string CreateScopeBox(UIApplication uiApp, JObject parameters)
         {
-            try
-            {
-                var doc = uiApp.ActiveUIDocument.Document;
-                var name = parameters["name"]?.ToString();
-                var minPointObj = parameters["minPoint"]?.ToObject<Dictionary<string, double>>();
-                var maxPointObj = parameters["maxPoint"]?.ToObject<Dictionary<string, double>>();
-
-                if (string.IsNullOrEmpty(name))
-                {
-                    return ResponseBuilder.Error("name is required", "MISSING_PARAMETER").Build();
-                }
-
-                if (minPointObj == null || maxPointObj == null)
-                {
-                    return ResponseBuilder.Error("minPoint and maxPoint are required", "VALIDATION_ERROR").Build();
-                }
-
-                var minPoint = new XYZ(minPointObj["x"], minPointObj["y"], minPointObj["z"]);
-                var maxPoint = new XYZ(maxPointObj["x"], maxPointObj["y"], maxPointObj["z"]);
-
-                using (var trans = new Transaction(doc, "Create Scope Box"))
-                {
-                    trans.Start();
-
-                    // Create scope box using a 3D view
-                    var view3D = new FilteredElementCollector(doc)
-                        .OfClass(typeof(View3D))
-                        .Cast<View3D>()
-                        .FirstOrDefault(v => !v.IsTemplate);
-
-                    if (view3D == null)
-                    {
-                        trans.RollBack();
-                        return ResponseBuilder.Error("No 3D view available to create scope box", "VALIDATION_ERROR").Build();
-                    }
-
-                    // Create outline for the scope box
-                    var outline = new Outline(minPoint, maxPoint);
-                    var boundingBox = new BoundingBoxXYZ
-                    {
-                        Min = minPoint,
-                        Max = maxPoint
-                    };
-
-                    // Use DirectShape to create the scope box
-                    var scopeBox = DirectShape.CreateElement(doc, new ElementId(BuiltInCategory.OST_VolumeOfInterest));
-
-                    // Create geometry for the scope box
-                    var width = maxPoint.X - minPoint.X;
-                    var depth = maxPoint.Y - minPoint.Y;
-                    var height = maxPoint.Z - minPoint.Z;
-
-                    var center = new XYZ((minPoint.X + maxPoint.X) / 2, (minPoint.Y + maxPoint.Y) / 2, (minPoint.Z + maxPoint.Z) / 2);
-
-                    // Create a simple box geometry
-                    var curves = new List<Curve>();
-                    // Bottom rectangle
-                    curves.Add(Line.CreateBound(new XYZ(minPoint.X, minPoint.Y, minPoint.Z), new XYZ(maxPoint.X, minPoint.Y, minPoint.Z)));
-                    curves.Add(Line.CreateBound(new XYZ(maxPoint.X, minPoint.Y, minPoint.Z), new XYZ(maxPoint.X, maxPoint.Y, minPoint.Z)));
-                    curves.Add(Line.CreateBound(new XYZ(maxPoint.X, maxPoint.Y, minPoint.Z), new XYZ(minPoint.X, maxPoint.Y, minPoint.Z)));
-                    curves.Add(Line.CreateBound(new XYZ(minPoint.X, maxPoint.Y, minPoint.Z), new XYZ(minPoint.X, minPoint.Y, minPoint.Z)));
-
-                    var curveLoop = CurveLoop.Create(curves);
-                    var solid = GeometryCreationUtilities.CreateExtrusionGeometry(new List<CurveLoop> { curveLoop }, XYZ.BasisZ, height);
-
-                    scopeBox.SetShape(new GeometryObject[] { solid });
-                    scopeBox.Name = name;
-
-                    trans.Commit();
-
-                    return ResponseBuilder.Success()
-                        .With("scopeBoxId", scopeBox.Id.Value)
-                        .With("name", name)
-                        .With("minPoint", new { x = minPoint.X, y = minPoint.Y, z = minPoint.Z })
-                        .With("maxPoint", new { x = maxPoint.X, y = maxPoint.Y, z = maxPoint.Z })
-                        .Build();
-                }
-            }
-            catch (Exception ex)
-            {
-                return ResponseBuilder.FromException(ex).Build();
-            }
+            // The Revit 2026 public API has no ScopeBox.Create() method (confirmed via RevitAPI.xml).
+            // DirectShape with OST_VolumeOfInterest was previously attempted here — it always threw
+            // "Element id categoryId may not be used as a DirectShape category."
+            return ResponseBuilder.Error(
+                "Scope box creation is not supported by the Revit 2026 API. " +
+                "Draw the scope box manually in Revit (View tab → Scope Box), then retrieve its ID " +
+                "with getScopeBoxes and apply it to views with applyScopeBoxToView.",
+                "NOT_SUPPORTED").Build();
         }
 
         /// <summary>

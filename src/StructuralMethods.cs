@@ -801,6 +801,102 @@ namespace RevitMCPBridge2026
         }
 
         /// <summary>
+        /// List all wall foundation types (continuous strip footings) in the project.
+        /// Use the returned typeId values with createWallFoundation.
+        /// </summary>
+        [MCPMethod("getWallFoundationTypes", Category = "Structural", Description = "List all wall foundation types (continuous strip footings) in the project. Use typeId with createWallFoundation.")]
+        public static string GetWallFoundationTypes(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var types = new FilteredElementCollector(doc)
+                    .OfClass(typeof(WallFoundationType))
+                    .Cast<WallFoundationType>()
+                    .Select(t => new
+                    {
+                        typeId   = (int)t.Id.Value,
+                        name     = t.Name,
+                        family   = t.FamilyName,
+                        width    = t.get_Parameter(BuiltInParameter.WALL_ATTR_WIDTH_PARAM)?.AsDouble() ?? 0,
+                        widthInches = Math.Round((t.get_Parameter(BuiltInParameter.WALL_ATTR_WIDTH_PARAM)?.AsDouble() ?? 0) * 12, 3)
+                    })
+                    .ToList();
+
+                return ResponseBuilder.Success()
+                    .With("count", types.Count)
+                    .With("wallFoundationTypes", types)
+                    .Build();
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Create a continuous strip wall foundation hosted to an existing wall.
+        /// Use getWallFoundationTypes to find valid typeId values.
+        /// Note: createFoundation creates isolated pad footings — use this method for wall footings.
+        /// </summary>
+        [MCPMethod("createWallFoundation", Category = "Structural", Description = "Create a continuous strip footing hosted to a wall. Use getWallFoundationTypes for typeId. Prefer this over createFoundation for wall footings.")]
+        public static string CreateWallFoundation(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                if (parameters["wallId"] == null)
+                    return ResponseBuilder.Error("wallId is required", "MISSING_PARAMETER").Build();
+                if (parameters["typeId"] == null)
+                    return ResponseBuilder.Error("typeId is required — use getWallFoundationTypes to list available types", "MISSING_PARAMETER").Build();
+
+                var wallId  = new ElementId(int.Parse(parameters["wallId"].ToString()));
+                var typeId  = new ElementId(int.Parse(parameters["typeId"].ToString()));
+
+                var wall = doc.GetElement(wallId) as Wall;
+                if (wall == null)
+                    return ResponseBuilder.Error($"Wall not found with ID {wallId.Value}", "ELEMENT_NOT_FOUND").Build();
+
+                var wfType = doc.GetElement(typeId) as WallFoundationType;
+                if (wfType == null)
+                    return ResponseBuilder.Error(
+                        $"No WallFoundationType found with ID {typeId.Value}. Use getWallFoundationTypes to list valid typeIds.",
+                        "INVALID_TYPE_ID").Build();
+
+                using (var trans = new Transaction(doc, "Create Wall Foundation"))
+                {
+                    trans.Start();
+
+                    var foundation = WallFoundation.Create(doc, typeId, wallId);
+
+                    var status = trans.Commit();
+                    if (status != TransactionStatus.Committed)
+                        return ResponseBuilder.Error(
+                            $"Transaction ended with status '{status}' — wall foundation was not created.",
+                            "TRANSACTION_FAILED").Build();
+
+                    if (foundation == null)
+                        return ResponseBuilder.Error(
+                            "WallFoundation.Create returned null — the wall may not support a strip footing (e.g. curtain wall).",
+                            "CREATE_FAILED").Build();
+
+                    return ResponseBuilder.Success()
+                        .With("foundationId", (int)foundation.Id.Value)
+                        .With("wallId",        (int)wallId.Value)
+                        .With("typeId",        (int)typeId.Value)
+                        .With("typeName",      wfType.Name)
+                        .With("wallName",      wall.Name)
+                        .Build();
+                }
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
         /// Gets information about a foundation element
         /// </summary>
         [MCPMethod("getFoundationInfo", Category = "Structural", Description = "Gets detailed information about a structural foundation")]
