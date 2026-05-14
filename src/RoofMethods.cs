@@ -1077,7 +1077,7 @@ namespace RevitMCPBridge
         /// - ridgeStart: [x, y, z] start point of ridge in feet (Z snapped to sketch plane)
         /// - ridgeEnd: [x, y, z] end point of ridge in feet (Z snapped to sketch plane)
         /// </summary>
-        [MCPMethod("defineRoofRidge", Category = "Roof", Description = "Add a ridge line to a footprint roof by editing its sketch. Ridge endpoints must lie inside the roof footprint boundary.")]
+        [MCPMethod("defineRoofRidge", Category = "Roof", Description = "Add a ridge line to a footprint roof by editing its sketch. Only works on footprint roofs whose sketch editing is supported by Revit. Ridge endpoints must lie inside the roof footprint boundary.")]
         public static string DefineRoofRidge(UIApplication uiApp, JObject parameters)
         {
             try
@@ -1107,7 +1107,7 @@ namespace RevitMCPBridge
                 var sketchIds = roof.GetDependentElements(new ElementClassFilter(typeof(Sketch)));
                 if (sketchIds == null || sketchIds.Count == 0)
                     return ResponseBuilder.Error(
-                        "No editable sketch found for this roof. Only footprint roofs created in Revit support sketch editing.",
+                        "No editable sketch found for this roof. Only footprint roofs created natively in Revit support sketch editing.",
                         "NOT_FOUND").Build();
 
                 var sketchId = sketchIds.First();
@@ -1127,9 +1127,17 @@ namespace RevitMCPBridge
                     return ResponseBuilder.Error("ridgeStart and ridgeEnd are too close together (< 0.001 ft).", "INVALID_PARAM").Build();
 
                 // SketchEditScope must be opened outside any transaction
+                // Create scope first so we can validate support before starting
                 ModelCurve ridgeCurve = null;
                 using (var scope = new SketchEditScope(doc, "Define Roof Ridge"))
                 {
+                    if (!scope.IsSketchEditingSupportedForSketchBasedElement(roofId))
+                        return ResponseBuilder.Error(
+                            "This roof's sketch cannot be edited via the API. " +
+                            "Edit the footprint manually in Revit: select the roof → Edit Footprint → draw the ridge line, " +
+                            "then set the two short edges as slope-defining.",
+                            "NOT_SUPPORTED").Build();
+
                     scope.Start(sketchId);
 
                     using (var trans = new Transaction(doc, "Add Ridge Line"))
