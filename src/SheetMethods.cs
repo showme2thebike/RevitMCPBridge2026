@@ -1688,24 +1688,29 @@ namespace RevitMCPBridge
 
                 var viewport = doc.GetElement(viewportId) as Viewport;
                 if (viewport == null)
-                {
-                    return ResponseBuilder.Error("Viewport not found", "ELEMENT_NOT_FOUND").Build();
-                }
+                    return ResponseBuilder.Error($"Viewport not found with ID {viewportId.Value}", "ELEMENT_NOT_FOUND").Build();
+
+                var viewportType = doc.GetElement(typeId) as ElementType;
+                if (viewportType == null)
+                    return ResponseBuilder.Error(
+                        $"No ViewportType found with ID {typeId.Value}. Use getViewportTypes to list valid typeIds.",
+                        "INVALID_TYPE_ID").Build();
 
                 using (var trans = new Transaction(doc, "Set Viewport Type"))
                 {
                     trans.Start();
-                    var failureOptions = trans.GetFailureHandlingOptions();
-                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
-                    trans.SetFailureHandlingOptions(failureOptions);
-
                     viewport.ChangeTypeId(typeId);
+                    var status = trans.Commit();
 
-                    trans.Commit();
+                    if (status != TransactionStatus.Committed)
+                        return ResponseBuilder.Error(
+                            $"Transaction ended with status '{status}' — viewport type was not changed.",
+                            "TRANSACTION_FAILED").Build();
 
                     return ResponseBuilder.Success()
                         .With("viewportId", (int)viewportId.Value)
                         .With("newTypeId", (int)typeId.Value)
+                        .With("newTypeName", viewportType.Name)
                         .Build();
                 }
             }
@@ -2151,28 +2156,46 @@ namespace RevitMCPBridge
                 foreach (var vpId in viewportIds)
                 {
                     var viewport = doc.GetElement(vpId) as Viewport;
-                    if (viewport != null)
+                    if (viewport == null) continue;
+
+                    var view = doc.GetElement(viewport.ViewId) as View;
+                    var outline = viewport.GetBoxOutline();
+                    if (outline == null)
                     {
-                        var view = doc.GetElement(viewport.ViewId) as View;
-                        var outline = viewport.GetBoxOutline();
-                        var center = viewport.GetBoxCenter();
-
-                        var min = outline.MinimumPoint;
-                        var max = outline.MaximumPoint;
-
+                        // Schedule viewports and unplaced viewports return null — skip them
                         viewportData.Add(new
                         {
                             viewportId = (int)viewport.Id.Value,
                             viewId = (int)viewport.ViewId.Value,
                             viewName = view?.Name,
                             viewScale = view?.Scale ?? 0,
-                            center = new[] { center.X, center.Y, center.Z },
-                            minPoint = new[] { min.X, min.Y, min.Z },
-                            maxPoint = new[] { max.X, max.Y, max.Z },
-                            width = max.X - min.X,
-                            height = max.Y - min.Y
+                            center = (object)null,
+                            minPoint = (object)null,
+                            maxPoint = (object)null,
+                            width = (double?)null,
+                            height = (double?)null,
+                            note = "outline unavailable (schedule or unplaced viewport)"
                         });
+                        continue;
                     }
+
+                    var center = viewport.GetBoxCenter();
+                    var min = outline.MinimumPoint;
+                    var max = outline.MaximumPoint;
+
+                    viewportData.Add(new
+                    {
+                        viewportId = (int)viewport.Id.Value,
+                        viewId = (int)viewport.ViewId.Value,
+                        viewName = view?.Name,
+                        viewScale = view?.Scale ?? 0,
+                        center = new[] { center.X, center.Y, center.Z },
+                        minPoint = new[] { min.X, min.Y, min.Z },
+                        maxPoint = new[] { max.X, max.Y, max.Z },
+                        width = max.X - min.X,
+                        height = max.Y - min.Y,
+                        note = (string)null
+                    });
                 }
 
                 return ResponseBuilder.Success()

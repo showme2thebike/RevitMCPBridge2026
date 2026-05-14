@@ -1155,32 +1155,36 @@ namespace RevitMCPBridge
                 using (var trans = new Transaction(doc, "Set Wall Endpoint"))
                 {
                     trans.Start();
-                    var failureOptions = trans.GetFailureHandlingOptions();
-                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
-                    trans.SetFailureHandlingOptions(failureOptions);
 
-                    // Create new line based on which endpoint to move
-                    Line newLine;
-                    if (endIndex == 0)
-                    {
-                        // Move start point
-                        newLine = Line.CreateBound(newXYZ, oldEnd);
-                    }
-                    else
-                    {
-                        // Move end point
-                        newLine = Line.CreateBound(oldStart, newXYZ);
-                    }
+                    Line newLine = endIndex == 0
+                        ? Line.CreateBound(newXYZ, oldEnd)
+                        : Line.CreateBound(oldStart, newXYZ);
 
-                    // Set the new curve
                     locationCurve.Curve = newLine;
 
-                    trans.Commit();
+                    var status = trans.Commit();
 
-                    // Get updated curve
+                    if (status != TransactionStatus.Committed)
+                        return ResponseBuilder.Error(
+                            $"Transaction ended with status '{status}' — wall endpoint was not moved.",
+                            "TRANSACTION_FAILED").Build();
+
+                    // Verify the endpoint actually moved — walls attached to roofs/floors,
+                    // constrained by scope boxes, or joined to other walls can silently reject
+                    // the curve change even after a successful commit.
+                    const double tolerance = 0.001; // ~0.3 mm in feet
                     var updatedCurve = (wall.Location as LocationCurve).Curve;
                     var updatedStart = updatedCurve.GetEndPoint(0);
-                    var updatedEnd = updatedCurve.GetEndPoint(1);
+                    var updatedEnd   = updatedCurve.GetEndPoint(1);
+                    var actualPoint  = endIndex == 0 ? updatedStart : updatedEnd;
+
+                    if (actualPoint.DistanceTo(newXYZ) > tolerance)
+                        return ResponseBuilder.Error(
+                            $"Write verification failed — endpoint reads [{actualPoint.X:F4}, {actualPoint.Y:F4}, {actualPoint.Z:F4}] after commit. " +
+                            $"Expected [{newXYZ.X:F4}, {newXYZ.Y:F4}, {newXYZ.Z:F4}]. " +
+                            "Wall may be attached to a roof/floor, constrained by a scope box, or joined to another wall. " +
+                            "Delete and recreate the wall at the correct position.",
+                            "WRITE_VERIFICATION_FAILED").Build();
 
                     return ResponseBuilder.Success()
                         .With("wallId", (int)wallId.Value)
