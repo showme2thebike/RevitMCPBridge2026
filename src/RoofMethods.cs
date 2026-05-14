@@ -1070,6 +1070,96 @@ namespace RevitMCPBridge
             }
         }
 
+        /// <summary>
+        /// Add a ridge line to an existing footprint roof by editing its sketch.
+        /// Parameters:
+        /// - roofId: ID of the FootPrintRoof element
+        /// - ridgeStart: [x, y, z] start point of ridge in feet (Z snapped to sketch plane)
+        /// - ridgeEnd: [x, y, z] end point of ridge in feet (Z snapped to sketch plane)
+        /// </summary>
+        [MCPMethod("defineRoofRidge", Category = "Roof", Description = "Add a ridge line to a footprint roof by editing its sketch. Ridge endpoints must lie inside the roof footprint boundary.")]
+        public static string DefineRoofRidge(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                if (parameters["roofId"] == null)
+                    return ResponseBuilder.Error("roofId is required", "MISSING_PARAM").Build();
+                if (parameters["ridgeStart"] == null)
+                    return ResponseBuilder.Error("ridgeStart is required as [x, y, z] in feet", "MISSING_PARAM").Build();
+                if (parameters["ridgeEnd"] == null)
+                    return ResponseBuilder.Error("ridgeEnd is required as [x, y, z] in feet", "MISSING_PARAM").Build();
+
+                var roofId = new ElementId(int.Parse(parameters["roofId"].ToString()));
+                var roof = doc.GetElement(roofId) as FootPrintRoof;
+                if (roof == null)
+                    return ResponseBuilder.Error("Roof not found or is not a footprint roof. Use getRoofs to list roofs.", "NOT_FOUND").Build();
+
+                var startArr = parameters["ridgeStart"].ToObject<double[]>();
+                var endArr = parameters["ridgeEnd"].ToObject<double[]>();
+                if (startArr == null || startArr.Length < 3)
+                    return ResponseBuilder.Error("ridgeStart must be [x, y, z]", "INVALID_PARAM").Build();
+                if (endArr == null || endArr.Length < 3)
+                    return ResponseBuilder.Error("ridgeEnd must be [x, y, z]", "INVALID_PARAM").Build();
+
+                // Find the roof's sketch element
+                var sketchIds = roof.GetDependentElements(new ElementClassFilter(typeof(Sketch)));
+                if (sketchIds == null || sketchIds.Count == 0)
+                    return ResponseBuilder.Error(
+                        "No editable sketch found for this roof. Only footprint roofs created in Revit support sketch editing.",
+                        "NOT_FOUND").Build();
+
+                var sketchId = sketchIds.First();
+                var sketch = doc.GetElement(sketchId) as Sketch;
+                if (sketch == null)
+                    return ResponseBuilder.Error("Failed to retrieve sketch element.", "INTERNAL_ERROR").Build();
+
+                // Snap ridge points to sketch plane (footprint sketches are horizontal)
+                var sketchPlane = sketch.SketchPlane;
+                var plane = sketchPlane.GetPlane();
+                double planeZ = plane.Origin.Z;
+
+                var ridgeStart = new XYZ(startArr[0], startArr[1], planeZ);
+                var ridgeEnd = new XYZ(endArr[0], endArr[1], planeZ);
+
+                if (ridgeStart.DistanceTo(ridgeEnd) < 0.001)
+                    return ResponseBuilder.Error("ridgeStart and ridgeEnd are too close together (< 0.001 ft).", "INVALID_PARAM").Build();
+
+                // SketchEditScope must be opened outside any transaction
+                ModelCurve ridgeCurve = null;
+                using (var scope = new SketchEditScope(doc, "Define Roof Ridge"))
+                {
+                    scope.Start(sketchId);
+
+                    using (var trans = new Transaction(doc, "Add Ridge Line"))
+                    {
+                        trans.Start();
+                        var ridgeLine = Line.CreateBound(ridgeStart, ridgeEnd);
+                        ridgeCurve = doc.Create.NewModelCurve(ridgeLine, sketchPlane);
+                        trans.Commit();
+                    }
+
+                    scope.Commit(new WarningSwallower());
+                }
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    roofId = (int)roof.Id.Value,
+                    ridgeCurveId = ridgeCurve != null ? (int)ridgeCurve.Id.Value : -1,
+                    ridgeStart = new { x = ridgeStart.X, y = ridgeStart.Y, z = ridgeStart.Z },
+                    ridgeEnd = new { x = ridgeEnd.X, y = ridgeEnd.Y, z = ridgeEnd.Z },
+                    sketchPlaneZ = planeZ,
+                    message = "Ridge line added to roof sketch. Roof will regenerate with gable ends at the ridge endpoints."
+                });
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
         #endregion
     }
 }
