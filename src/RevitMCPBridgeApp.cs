@@ -121,6 +121,43 @@ namespace RevitMCPBridge
                             Log.Error(restartEx, "Failed to restart MCP Server after document open");
                         }
                     };
+
+                    // Stop the server before a document closes so no in-flight MCP call
+                    // can dereference a null or disposed ActiveUIDocument.
+                    _uiApplication.Application.DocumentClosing += (s, e) =>
+                    {
+                        try
+                        {
+                            _mcpServer?.Stop();
+                            Log.Information($"MCP Server stopped — document closing: {e.Document.Title}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error(ex, "Failed to stop MCP Server on DocumentClosing");
+                        }
+                    };
+
+                    // Restart once the document is gone — but only if Revit still has
+                    // other documents open (ActiveUIDocument would be null otherwise).
+                    _uiApplication.Application.DocumentClosed += (s, e) =>
+                    {
+                        try
+                        {
+                            if (_uiApplication.Application.Documents.Size > 0)
+                            {
+                                _mcpServer?.Start();
+                                Log.Information("MCP Server restarted — other documents still open");
+                            }
+                            else
+                            {
+                                Log.Information("MCP Server remains stopped — no documents open");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error(ex, "Failed to restart MCP Server on DocumentClosed");
+                        }
+                    };
                 };
                 
                 // Initialize logger
