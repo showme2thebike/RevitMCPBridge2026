@@ -188,6 +188,9 @@ namespace RevitMCPBridge2026.AgentFramework
             // Always push model snapshot on load — independent of session/greeting path
             Loaded += (s, e) => TryPushModelSnapshot();
 
+            // Diagnostic: confirm constructor ran and Loaded handler registered
+            try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "snapshot_debug.txt"), $"{DateTime.Now:o} Constructor ran, Loaded handler registered\r\n"); } catch { }
+
             // Ctrl+Shift+K to clear chat from anywhere in the window
             PreviewKeyDown += (s, e) =>
             {
@@ -3875,6 +3878,13 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private void TryPushModelSnapshot()
         {
+            var log = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "snapshot_debug.txt");
+            try
+            {
+                File.AppendAllText(log, $"{DateTime.Now:o} TryPushModelSnapshot called, key={(string.IsNullOrEmpty(_bimMonkeyApiKey) ? "EMPTY" : "SET")}\r\n");
+            }
+            catch { }
+
             if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
             try
             {
@@ -3885,17 +3895,25 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     try
                     {
+                        File.AppendAllText(log, $"{DateTime.Now:o} ThreadPool starting HTTP POST\r\n");
                         using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(20) };
                         client.DefaultRequestHeaders.Add("Authorization", $"Bearer {key}");
                         var content = new System.Net.Http.StringContent(snapshotJson, System.Text.Encoding.UTF8, "application/json");
                         var request = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post,
                             "https://bimmonkey-production.up.railway.app/api/plugin/model-snapshot") { Content = content };
-                        client.Send(request);
+                        var resp = client.Send(request);
+                        File.AppendAllText(log, $"{DateTime.Now:o} HTTP response: {(int)resp.StatusCode}\r\n");
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        try { File.AppendAllText(log, $"{DateTime.Now:o} ThreadPool error: {ex.Message}\r\n"); } catch { }
+                    }
                 });
             }
-            catch { }
+            catch (Exception ex)
+            {
+                try { File.AppendAllText(log, $"{DateTime.Now:o} outer error: {ex.Message}\r\n"); } catch { }
+            }
         }
 
         private JObject BuildSnapshotPayload(StartupSummary summary)
@@ -3929,6 +3947,69 @@ namespace RevitMCPBridge2026.AgentFramework
                         ["address"]     = pi?.Address,
                         ["status"]      = pi?.Status,
                     };
+
+                    // Sheets — full list with number, name, empty flag
+                    try
+                    {
+                        var sheetArr = new JArray();
+                        var allSheets = new Autodesk.Revit.DB.FilteredElementCollector(doc)
+                            .OfClass(typeof(Autodesk.Revit.DB.ViewSheet))
+                            .Cast<Autodesk.Revit.DB.ViewSheet>()
+                            .OrderBy(s => s.SheetNumber)
+                            .ToList();
+                        foreach (var s in allSheets)
+                        {
+                            sheetArr.Add(new JObject
+                            {
+                                ["number"] = s.SheetNumber,
+                                ["name"]   = s.Name,
+                                ["empty"]  = !s.GetAllPlacedViews().Any(),
+                            });
+                        }
+                        snapshot["sheets"] = sheetArr;
+                    }
+                    catch { }
+
+                    // Levels
+                    try
+                    {
+                        var levelArr = new JArray();
+                        var allLevels = new Autodesk.Revit.DB.FilteredElementCollector(doc)
+                            .OfClass(typeof(Autodesk.Revit.DB.Level))
+                            .Cast<Autodesk.Revit.DB.Level>()
+                            .OrderBy(l => l.Elevation)
+                            .ToList();
+                        foreach (var l in allLevels)
+                            levelArr.Add(new JObject { ["name"] = l.Name, ["elevation"] = Math.Round(l.Elevation, 2) });
+                        snapshot["levels"] = levelArr;
+                    }
+                    catch { }
+
+                    // Rooms (placed only, max 200)
+                    try
+                    {
+                        var roomArr = new JArray();
+                        var allRooms = new Autodesk.Revit.DB.FilteredElementCollector(doc)
+                            .OfCategory(Autodesk.Revit.DB.BuiltInCategory.OST_Rooms)
+                            .WhereElementIsNotElementType()
+                            .Cast<Autodesk.Revit.DB.SpatialElement>()
+                            .Where(r => r.Area > 0)
+                            .OrderBy(r => r.get_Parameter(Autodesk.Revit.DB.BuiltInParameter.ROOM_NUMBER)?.AsString() ?? "")
+                            .Take(200)
+                            .ToList();
+                        foreach (var r in allRooms)
+                        {
+                            roomArr.Add(new JObject
+                            {
+                                ["number"] = r.get_Parameter(Autodesk.Revit.DB.BuiltInParameter.ROOM_NUMBER)?.AsString(),
+                                ["name"]   = r.get_Parameter(Autodesk.Revit.DB.BuiltInParameter.ROOM_NAME)?.AsString() ?? r.Name,
+                                ["level"]  = (doc.GetElement(r.LevelId) as Autodesk.Revit.DB.Level)?.Name,
+                                ["areaSF"] = Math.Round(r.Area, 1),
+                            });
+                        }
+                        snapshot["rooms"] = roomArr;
+                    }
+                    catch { }
                 }
             }
             catch { }
