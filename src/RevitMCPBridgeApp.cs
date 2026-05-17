@@ -329,6 +329,22 @@ namespace RevitMCPBridge
             standardsButton.LargeImage = CreateButtonIcon("standards", 32);
             standardsButton.Image      = CreateButtonIcon("standards", 16);
 
+            // Skills — command lives in BimMonkeyPlugin.dll (co-installed in same Addins folder)
+            try
+            {
+                string bmpDir  = System.IO.Path.GetDirectoryName(asm);
+                string bmpPath = System.IO.Path.Combine(bmpDir, "BimMonkeyPlugin.dll");
+                if (System.IO.File.Exists(bmpPath))
+                {
+                    var skillsButtonData = new PushButtonData("SkillsButton", "Skills", bmpPath,
+                        "BimMonkeyPlugin.Commands.SkillsCommand")
+                        { ToolTip = "Create and manage reusable Banana Chat workflow skills" };
+                    var skillsButton = easyPanel.AddItem(skillsButtonData) as PushButton;
+                    skillsButton.LargeImage = CreateButtonIcon("skills", 32);
+                    skillsButton.Image      = CreateButtonIcon("skills", 16);
+                }
+            }
+            catch { /* BimMonkeyPlugin not present — skip Skills button */ }
 
             // ── Site Data ─────────────────────────────────────────────────
             // AddSlideOut() puts ▼ on the "Site Data" panel title (like Revit's "Manage Models ▼").
@@ -783,6 +799,9 @@ namespace RevitMCPBridge
                             break;
                         case "productdata":
                             DrawProductDataIcon(dc, size);
+                            break;
+                        case "skills":
+                            DrawSkillsIcon(dc, size);
                             break;
                     }
                 }
@@ -1582,6 +1601,53 @@ namespace RevitMCPBridge
             dc.DrawLine(linePen, new Point(13*s, 14*s), new Point(12.5*s, 26*s));
             dc.DrawLine(linePen, new Point(16*s,  14*s), new Point(16*s,   26*s));
             dc.DrawLine(linePen, new Point(19*s,  14*s), new Point(19.5*s, 26*s));
+        }
+
+        private void DrawSkillsIcon(DrawingContext dc, int size)
+        {
+            // Document with horizontal list lines + lightning bolt — flat white BIM Monkey style
+            double s    = size / 32.0;
+            var fill    = new SolidColorBrush(Colors.White);
+            var dark    = new SolidColorBrush(Color.FromRgb(60, 60, 60));
+            var pen     = new Pen(dark, Math.Max(1, 1.5 * s));
+            var linePen = new Pen(dark, Math.Max(1, 1.2 * s));
+
+            // Doc body
+            double x = 5 * s, y = 3 * s, w = 16 * s, h = 24 * s, fold = 5 * s;
+            var body = new Rect(x, y + fold, w, h - fold);
+            dc.DrawRectangle(fill, pen, body);
+
+            // Folded corner polygon
+            var corner = new StreamGeometry();
+            using (var ctx = corner.Open())
+            {
+                ctx.BeginFigure(new Point(x, y + fold), true, true);
+                ctx.LineTo(new Point(x + fold, y), true, false);
+                ctx.LineTo(new Point(x + w, y), true, false);
+                ctx.LineTo(new Point(x + w, y + fold), true, false);
+            }
+            dc.DrawGeometry(fill, pen, corner);
+            dc.DrawLine(pen, new Point(x, y + fold), new Point(x + fold, y));
+
+            // List lines
+            double lx1 = x + 2.5 * s, lx2 = x + w - 2 * s, ly1 = y + fold + 4 * s;
+            dc.DrawLine(linePen, new Point(lx1, ly1),            new Point(lx2, ly1));
+            dc.DrawLine(linePen, new Point(lx1, ly1 + 4 * s),    new Point(lx2, ly1 + 4 * s));
+            dc.DrawLine(linePen, new Point(lx1, ly1 + 8 * s),    new Point(lx1 + (lx2 - lx1) * 0.6, ly1 + 8 * s));
+
+            // Lightning bolt (bottom-right overlay)
+            double bx = x + w - 1 * s, by = y + h + 1 * s, bs = 10 * s;
+            var bolt = new StreamGeometry();
+            using (var ctx = bolt.Open())
+            {
+                ctx.BeginFigure(new Point(bx - bs * 0.55, by - bs),      true, true);
+                ctx.LineTo(new Point(bx - bs * 0.10, by - bs * 0.42),    true, false);
+                ctx.LineTo(new Point(bx - bs * 0.30, by - bs * 0.42),    true, false);
+                ctx.LineTo(new Point(bx,              by),                true, false);
+                ctx.LineTo(new Point(bx - bs * 0.45, by - bs * 0.55),    true, false);
+                ctx.LineTo(new Point(bx - bs * 0.25, by - bs * 0.55),    true, false);
+            }
+            dc.DrawGeometry(dark, null, bolt);
         }
 
         private void DrawModelCheckIcon(DrawingContext dc, int size)
