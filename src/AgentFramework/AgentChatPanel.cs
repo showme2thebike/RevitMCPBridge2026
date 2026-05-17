@@ -3865,10 +3865,22 @@ namespace RevitMCPBridge2026.AgentFramework
                 AddAssistantMessage(BuildSmartGreeting(summary));
                 if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
                 {
-                    // Build snapshot on UI thread (safe Revit API access), POST in background
-                    var snapshot = BuildSnapshotPayload(summary);
+                    // Build snapshot on UI thread (safe Revit API access), POST on background thread
+                    var snapshotJson = BuildSnapshotPayload(summary).ToString(Newtonsoft.Json.Formatting.None);
                     var key = _bimMonkeyApiKey;
-                    _ = Task.Run(() => PostSnapshotAsync(snapshot, key));
+                    System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                    {
+                        try
+                        {
+                            using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+                            client.DefaultRequestHeaders.Add("Authorization", $"Bearer {key}");
+                            var content = new System.Net.Http.StringContent(snapshotJson, System.Text.Encoding.UTF8, "application/json");
+                            var request = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post,
+                                "https://bimmonkey-production.up.railway.app/api/plugin/model-snapshot") { Content = content };
+                            client.Send(request);
+                        }
+                        catch { }
+                    });
                 }
             }
             catch
