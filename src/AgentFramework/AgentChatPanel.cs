@@ -185,6 +185,9 @@ namespace RevitMCPBridge2026.AgentFramework
                 Loaded += (s, e) => ShowStartupGreeting();
             }
 
+            // Always push model snapshot on load — independent of session/greeting path
+            Loaded += (s, e) => TryPushModelSnapshot();
+
             // Ctrl+Shift+K to clear chat from anywhere in the window
             PreviewKeyDown += (s, e) =>
             {
@@ -3863,30 +3866,36 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 var summary = IssuanceDateMethods.GetStartupSummary(_uiApp);
                 AddAssistantMessage(BuildSmartGreeting(summary));
-                if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
-                {
-                    // Build snapshot on UI thread (safe Revit API access), POST on background thread
-                    var snapshotJson = BuildSnapshotPayload(summary).ToString(Newtonsoft.Json.Formatting.None);
-                    var key = _bimMonkeyApiKey;
-                    System.Threading.ThreadPool.QueueUserWorkItem(_ =>
-                    {
-                        try
-                        {
-                            using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(20) };
-                            client.DefaultRequestHeaders.Add("Authorization", $"Bearer {key}");
-                            var content = new System.Net.Http.StringContent(snapshotJson, System.Text.Encoding.UTF8, "application/json");
-                            var request = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post,
-                                "https://bimmonkey-production.up.railway.app/api/plugin/model-snapshot") { Content = content };
-                            client.Send(request);
-                        }
-                        catch { }
-                    });
-                }
             }
             catch
             {
                 AddAssistantMessage("Hello! I'm your Revit AI assistant. What would you like to work on today?");
             }
+        }
+
+        private void TryPushModelSnapshot()
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+            try
+            {
+                var summary = IssuanceDateMethods.GetStartupSummary(_uiApp);
+                var snapshotJson = BuildSnapshotPayload(summary).ToString(Newtonsoft.Json.Formatting.None);
+                var key = _bimMonkeyApiKey;
+                System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    try
+                    {
+                        using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+                        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {key}");
+                        var content = new System.Net.Http.StringContent(snapshotJson, System.Text.Encoding.UTF8, "application/json");
+                        var request = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post,
+                            "https://bimmonkey-production.up.railway.app/api/plugin/model-snapshot") { Content = content };
+                        client.Send(request);
+                    }
+                    catch { }
+                });
+            }
+            catch { }
         }
 
         private JObject BuildSnapshotPayload(StartupSummary summary)
