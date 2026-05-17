@@ -3863,11 +3863,62 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 var summary = IssuanceDateMethods.GetStartupSummary(_uiApp);
                 AddAssistantMessage(BuildSmartGreeting(summary));
+                if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
+                    _ = Task.Run(() => PushModelSnapshotAsync(summary));
             }
             catch
             {
                 AddAssistantMessage("Hello! I'm your Revit AI assistant. What would you like to work on today?");
             }
+        }
+
+        private async Task PushModelSnapshotAsync(StartupSummary startupSummary)
+        {
+            try
+            {
+                var doc = _uiApp?.ActiveUIDocument?.Document;
+                if (doc == null) return;
+
+                // Collect lightweight model data in parallel via MCP
+                var levelsTask   = ExecuteMCPMethodAsync("getLevels",   new JObject());
+                var roomsTask    = ExecuteMCPMethodAsync("getRooms",    new JObject());
+                var sheetsTask   = ExecuteMCPMethodAsync("getSheets",   new JObject());
+                var doorsTask    = ExecuteMCPMethodAsync("getDoors",    new JObject());
+                var windowsTask  = ExecuteMCPMethodAsync("getWindows",  new JObject());
+                var docInfoTask  = ExecuteMCPMethodAsync("getDocumentInfo", new JObject());
+                await Task.WhenAll(levelsTask, roomsTask, sheetsTask, doorsTask, windowsTask, docInfoTask);
+
+                JToken Parse(string raw) { try { var o = JObject.Parse(raw); return o["data"] ?? o; } catch { return new JObject(); } }
+
+                var snapshot = new JObject
+                {
+                    ["document"] = Parse(docInfoTask.Result),
+                    ["levels"]   = Parse(levelsTask.Result),
+                    ["rooms"]    = Parse(roomsTask.Result),
+                    ["sheets"]   = Parse(sheetsTask.Result),
+                    ["doors"]    = Parse(doorsTask.Result),
+                    ["windows"]  = Parse(windowsTask.Result),
+                    ["health"]   = new JObject
+                    {
+                        ["totalSheets"]      = startupSummary.TotalSheets,
+                        ["emptySheetCount"]  = startupSummary.EmptySheetCount,
+                        ["hasDoorSchedule"]  = startupSummary.HasDoorSchedule,
+                        ["hasWindowSchedule"] = startupSummary.HasWindowSchedule,
+                        ["issueDate"]        = startupSummary.IssueDate,
+                        ["daysUntilIssue"]   = startupSummary.DaysUntilIssue.HasValue
+                                               ? (JToken)startupSummary.DaysUntilIssue.Value
+                                               : JValue.CreateNull(),
+                    },
+                };
+
+                var body = new System.Net.Http.StringContent(
+                    snapshot.ToString(Newtonsoft.Json.Formatting.None),
+                    System.Text.Encoding.UTF8, "application/json");
+                using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+                client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                await client.PostAsync("https://bimmonkey-production.up.railway.app/api/plugin/model-snapshot", body);
+            }
+            catch { /* fire-and-forget — never surface errors to user */ }
         }
 
         private string BuildSmartGreeting(StartupSummary s)
