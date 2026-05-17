@@ -3864,7 +3864,12 @@ namespace RevitMCPBridge2026.AgentFramework
                 var summary = IssuanceDateMethods.GetStartupSummary(_uiApp);
                 AddAssistantMessage(BuildSmartGreeting(summary));
                 if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
-                    _ = Task.Run(() => PushModelSnapshotAsync(summary));
+                {
+                    // Build snapshot on UI thread (safe Revit API access), POST in background
+                    var snapshot = BuildSnapshotPayload(summary);
+                    var key = _bimMonkeyApiKey;
+                    _ = Task.Run(() => PostSnapshotAsync(snapshot, key));
+                }
             }
             catch
             {
@@ -3872,53 +3877,55 @@ namespace RevitMCPBridge2026.AgentFramework
             }
         }
 
-        private async Task PushModelSnapshotAsync(StartupSummary startupSummary)
+        private JObject BuildSnapshotPayload(StartupSummary summary)
         {
+            var snapshot = new JObject
+            {
+                ["health"] = new JObject
+                {
+                    ["totalSheets"]       = summary.TotalSheets,
+                    ["emptySheetCount"]   = summary.EmptySheetCount,
+                    ["hasDoorSchedule"]   = summary.HasDoorSchedule,
+                    ["hasWindowSchedule"] = summary.HasWindowSchedule,
+                    ["issueDate"]         = summary.IssueDate,
+                    ["daysUntilIssue"]    = summary.DaysUntilIssue.HasValue
+                                           ? (JToken)summary.DaysUntilIssue.Value
+                                           : JValue.CreateNull(),
+                },
+            };
             try
             {
                 var doc = _uiApp?.ActiveUIDocument?.Document;
-                if (doc == null) return;
-
-                // Collect lightweight model data in parallel via MCP
-                var levelsTask   = ExecuteMCPMethodAsync("getLevels",   new JObject());
-                var roomsTask    = ExecuteMCPMethodAsync("getRooms",    new JObject());
-                var sheetsTask   = ExecuteMCPMethodAsync("getSheets",   new JObject());
-                var doorsTask    = ExecuteMCPMethodAsync("getDoors",    new JObject());
-                var windowsTask  = ExecuteMCPMethodAsync("getWindows",  new JObject());
-                var docInfoTask  = ExecuteMCPMethodAsync("getDocumentInfo", new JObject());
-                await Task.WhenAll(levelsTask, roomsTask, sheetsTask, doorsTask, windowsTask, docInfoTask);
-
-                JToken Parse(string raw) { try { var o = JObject.Parse(raw); return o["data"] ?? o; } catch { return new JObject(); } }
-
-                var snapshot = new JObject
+                if (doc != null)
                 {
-                    ["document"] = Parse(docInfoTask.Result),
-                    ["levels"]   = Parse(levelsTask.Result),
-                    ["rooms"]    = Parse(roomsTask.Result),
-                    ["sheets"]   = Parse(sheetsTask.Result),
-                    ["doors"]    = Parse(doorsTask.Result),
-                    ["windows"]  = Parse(windowsTask.Result),
-                    ["health"]   = new JObject
+                    var pi = doc.ProjectInformation;
+                    snapshot["document"] = new JObject
                     {
-                        ["totalSheets"]      = startupSummary.TotalSheets,
-                        ["emptySheetCount"]  = startupSummary.EmptySheetCount,
-                        ["hasDoorSchedule"]  = startupSummary.HasDoorSchedule,
-                        ["hasWindowSchedule"] = startupSummary.HasWindowSchedule,
-                        ["issueDate"]        = startupSummary.IssueDate,
-                        ["daysUntilIssue"]   = startupSummary.DaysUntilIssue.HasValue
-                                               ? (JToken)startupSummary.DaysUntilIssue.Value
-                                               : JValue.CreateNull(),
-                    },
-                };
+                        ["title"]       = doc.Title,
+                        ["name"]        = pi?.Name,
+                        ["number"]      = pi?.Number,
+                        ["clientName"]  = pi?.ClientName,
+                        ["address"]     = pi?.Address,
+                        ["status"]      = pi?.Status,
+                    };
+                }
+            }
+            catch { }
+            return snapshot;
+        }
 
+        private static async Task PostSnapshotAsync(JObject snapshot, string apiKey)
+        {
+            try
+            {
                 var body = new System.Net.Http.StringContent(
                     snapshot.ToString(Newtonsoft.Json.Formatting.None),
                     System.Text.Encoding.UTF8, "application/json");
                 using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(20) };
-                client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                client.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
                 await client.PostAsync("https://bimmonkey-production.up.railway.app/api/plugin/model-snapshot", body);
             }
-            catch { /* fire-and-forget — never surface errors to user */ }
+            catch { }
         }
 
         private string BuildSmartGreeting(StartupSummary s)
