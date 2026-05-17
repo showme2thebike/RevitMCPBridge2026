@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>BIM Monkey</Name>
+    <Assembly>BimMonkeyPlugin.dll</Assembly>
+    <AddInId>A1B2C3D4-E5F6-7890-ABCD-123456789ABC</AddInId>
+    <FullClassName>BimMonkeyPlugin.App</FullClassName>
+    <VendorId>BIMM</VendorId>
+    <VendorDescription>BIM Monkey</VendorDescription>
+  </AddIn>
+</RevitAddIns>
