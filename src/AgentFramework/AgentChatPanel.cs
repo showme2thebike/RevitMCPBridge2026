@@ -1681,50 +1681,13 @@ namespace RevitMCPBridge2026.AgentFramework
                 var filePath = Path.Combine(KnowledgeDir, "cad-visual-rules.md");
                 if (!File.Exists(filePath)) return;
 
-                var full = File.ReadAllText(filePath);
-
-                // Extract sections 1 (weight levels), 4 (scale), 7 (view templates), 8 (renovation)
-                // by grabbing from each ## heading to the next one
-                var sb = new System.Text.StringBuilder();
-                sb.AppendLine("CAD VISUAL RULES - Quick Reference (full doc: getKnowledgeFile 'cad-visual-rules')");
-                sb.AppendLine();
-
-                string[] sectionsToInclude = { "## 1 ", "## 4 ", "## 7 ", "## 8 " };
-                var lines = full.Split('\n');
-                bool capturing = false;
-                string captureUntil = null;
-
-                for (int i = 0; i < lines.Length; i++)
+                // Load the full file — all 10 sections are important.
+                // The file is ~4K tokens, well within context budget.
+                var full = File.ReadAllText(filePath).Trim();
+                if (full.Length > 200)
                 {
-                    var line = lines[i];
-                    bool isH2 = line.StartsWith("## ");
-
-                    if (isH2)
-                    {
-                        capturing = sectionsToInclude.Any(s => line.Contains(s.Trim()));
-                        if (capturing)
-                        {
-                            // find the next ## to know when to stop
-                            captureUntil = null;
-                            for (int j = i + 1; j < lines.Length; j++)
-                            {
-                                if (lines[j].StartsWith("## ")) { captureUntil = lines[j]; break; }
-                            }
-                        }
-                        else
-                        {
-                            capturing = false;
-                        }
-                    }
-
-                    if (capturing) sb.AppendLine(line);
-                }
-
-                var result = sb.ToString().Trim();
-                if (result.Length > 200)
-                {
-                    _cadVisualRulesQuickRef = result;
-                    System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] CAD visual rules loaded ({result.Length} chars)");
+                    _cadVisualRulesQuickRef = full;
+                    System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] CAD visual rules loaded ({full.Length} chars)");
                 }
             }
             catch (Exception ex)
@@ -4582,7 +4545,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
                 var cadVisualBlock = string.IsNullOrWhiteSpace(_cadVisualRulesQuickRef)
                     ? ""
-                    : $"\n\nCAD VISUAL RULES (sections 1,4,7,8 — call getKnowledgeFile 'cad-visual-rules' for full reference):\n{_cadVisualRulesQuickRef}\n";
+                    : $"\n\nCAD VISUAL RULES (full reference — all 10 sections):\n{_cadVisualRulesQuickRef}\n";
 
                 var libraryBlock = string.IsNullOrWhiteSpace(_librarySummary)
                     ? ""
