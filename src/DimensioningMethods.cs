@@ -3298,5 +3298,184 @@ namespace RevitMCPBridge
             catch { }
             return null;
         }
+
+        #region Dimension to Level in Section
+
+        [MCPMethod("dimensionToLevelInSection", Category = "Dimensioning",
+            Description = "Create a vertical dimension chain in a section or elevation view. Pass a mix of Level element IDs and host element IDs (walls, floors) in referenceIds. References are sorted by elevation and chained into one dimension string. dimLineOffset (ft, default 3.0) positions the dimension line horizontally to the right of elements. Returns the created dimension ID and segment values.")]
+        public static string DimensionToLevelInSection(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                if (parameters["viewId"] == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = "viewId is required" });
+
+                var view = doc.GetElement(new ElementId(parameters["viewId"].Value<int>())) as View;
+                if (view == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = "View not found" });
+
+                if (view.ViewType != ViewType.Section && view.ViewType != ViewType.Elevation)
+                    return JsonConvert.SerializeObject(new { success = false, error = $"View must be Section or Elevation — got: {view.ViewType}" });
+
+                var refIds = parameters["referenceIds"]?.ToObject<int[]>();
+                if (refIds == null || refIds.Length < 2)
+                    return JsonConvert.SerializeObject(new { success = false, error = "referenceIds must contain at least 2 element IDs (levels, walls, floors)" });
+
+                double dimLineOffset = parameters["dimLineOffset"]?.Value<double>() ?? 3.0;
+                long? dimTypeIdVal = parameters["dimTypeId"]?.Value<long>();
+
+                var geoOptions = new Options { ComputeReferences = true, View = view };
+                var rightDir = view.RightDirection.Normalize();
+
+                var refPairs = new List<(double Z, Reference Ref, string Label)>();
+
+                foreach (var id in refIds)
+                {
+                    var elem = doc.GetElement(new ElementId(id));
+                    if (elem == null) continue;
+
+                    if (elem is Level level)
+                    {
+                        double z = level.Elevation;
+                        Reference levelRef = null;
+                        try
+                        {
+                            var geo = level.get_Geometry(geoOptions);
+                            if (geo != null)
+                            {
+                                foreach (GeometryObject obj in geo)
+                                {
+                                    if (obj is Line gl && gl.Reference != null)
+                                    {
+                                        levelRef = gl.Reference;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+                        if (levelRef == null) levelRef = new Reference(level);
+                        refPairs.Add((z, levelRef, level.Name));
+                    }
+                    else
+                    {
+                        Reference faceRef = null;
+                        double topZ = double.MinValue;
+                        try
+                        {
+                            var geo = elem.get_Geometry(geoOptions);
+                            if (geo != null)
+                            {
+                                foreach (GeometryObject obj in geo)
+                                {
+                                    var inst = obj as GeometryInstance;
+                                    var objects = inst != null ? (IEnumerable<GeometryObject>)inst.GetInstanceGeometry() : new[] { obj };
+                                    foreach (var gObj in objects)
+                                    {
+                                        if (gObj is Solid solid && solid.Volume > 0)
+                                        {
+                                            foreach (Face face in solid.Faces)
+                                            {
+                                                var bb2 = face.GetBoundingBox();
+                                                var mid = (bb2.Min + bb2.Max) * 0.5;
+                                                var normal = face.ComputeNormal(new UV(mid.U, mid.V));
+                                                if (normal.Z > 0.9 && face.Reference != null)
+                                                {
+                                                    double faceZ = face.Triangulate().Vertices.Max(v => v.Z);
+                                                    if (faceZ > topZ) { topZ = faceZ; faceRef = face.Reference; }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+
+                        if (topZ == double.MinValue)
+                        {
+                            var bb = elem.get_BoundingBox(view) ?? elem.get_BoundingBox(null);
+                            if (bb != null) topZ = bb.Max.Z;
+                        }
+                        if (topZ != double.MinValue)
+                        {
+                            if (faceRef == null) faceRef = new Reference(elem);
+                            refPairs.Add((topZ, faceRef, elem.Name ?? elem.GetType().Name));
+                        }
+                    }
+                }
+
+                if (refPairs.Count < 2)
+                    return JsonConvert.SerializeObject(new { success = false, error = "Could not resolve references for at least 2 elements. Ensure elements are visible in the section view and have geometry." });
+
+                refPairs = refPairs.OrderBy(p => p.Z).ToList();
+                double minZ = refPairs.First().Z;
+                double maxZ = refPairs.Last().Z;
+
+                var refArray = new ReferenceArray();
+                foreach (var (_, r, _) in refPairs) refArray.Append(r);
+
+                // Position dim line to the right of elements in section space
+                double rightExtent = double.MinValue;
+                XYZ pivotPt = view.Origin;
+                foreach (var id in refIds)
+                {
+                    var elem = doc.GetElement(new ElementId(id));
+                    if (elem == null || elem is Level) continue;
+                    var bb = elem.get_BoundingBox(null);
+                    if (bb != null)
+                    {
+                        var center = (bb.Min + bb.Max) * 0.5;
+                        double halfW = Math.Abs((bb.Max - bb.Min).DotProduct(rightDir)) / 2.0;
+                        double proj = center.DotProduct(rightDir) + halfW;
+                        if (proj > rightExtent) { rightExtent = proj; pivotPt = center; }
+                    }
+                }
+                if (rightExtent == double.MinValue) rightExtent = view.Origin.DotProduct(rightDir);
+
+                double dimRightProj = rightExtent + dimLineOffset;
+                double pivotProj    = pivotPt.DotProduct(rightDir);
+                XYZ dimBase   = pivotPt + rightDir.Multiply(dimRightProj - pivotProj);
+                var dimStart  = new XYZ(dimBase.X, dimBase.Y, minZ - 0.5);
+                var dimEnd    = new XYZ(dimBase.X, dimBase.Y, maxZ + 0.5);
+                var dimLine   = Line.CreateBound(dimStart, dimEnd);
+
+                using (var trans = new Transaction(doc, "BM: Dimension to Level in Section"))
+                {
+                    trans.Start();
+                    var fo = trans.GetFailureHandlingOptions();
+                    fo.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(fo);
+
+                    Dimension dim = dimTypeIdVal.HasValue
+                        ? doc.Create.NewDimension(view, dimLine, refArray, doc.GetElement(new ElementId((int)dimTypeIdVal.Value)) as DimensionType)
+                        : doc.Create.NewDimension(view, dimLine, refArray);
+
+                    trans.Commit();
+
+                    var segments = new List<object>();
+                    foreach (DimensionSegment seg in dim.Segments)
+                        segments.Add(new { valueFt = seg.Value.HasValue ? Math.Round(seg.Value.Value, 4) : (double?)null });
+
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success     = true,
+                        dimensionId = (int)dim.Id.Value,
+                        refCount    = refPairs.Count,
+                        sortedRefs  = refPairs.Select(p => new { label = p.Label, elevationFt = Math.Round(p.Z, 4) }).ToList(),
+                        segments
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error in dimensionToLevelInSection");
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        #endregion
     }
 }

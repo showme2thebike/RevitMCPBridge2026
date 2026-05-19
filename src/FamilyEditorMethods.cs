@@ -2311,5 +2311,82 @@ namespace RevitMCPBridge
         }
 
         #endregion
+
+        #region Rename Family
+
+        [MCPMethod("renameFamily", Category = "FamilyEditor",
+            Description = "Rename a loaded family at the family header level. Accepts familyId (int) or familyName (string), plus newName (string). System families and in-place families cannot be renamed. All existing types and instances remain intact. Does NOT rename the original .rfa file on disk — only the in-project name.")]
+        public static string RenameFamily(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument?.Document;
+                if (doc == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = "No active document" });
+
+                string newName = parameters["newName"]?.ToString()?.Trim();
+                if (string.IsNullOrWhiteSpace(newName))
+                    return JsonConvert.SerializeObject(new { success = false, error = "newName is required" });
+
+                Family family = null;
+                if (parameters["familyId"] != null)
+                {
+                    family = doc.GetElement(new ElementId(parameters["familyId"].Value<int>())) as Family;
+                }
+                else if (parameters["familyName"] != null)
+                {
+                    var searchName = parameters["familyName"].ToString();
+                    family = new FilteredElementCollector(doc)
+                        .OfClass(typeof(Family))
+                        .Cast<Family>()
+                        .FirstOrDefault(f => f.Name.Equals(searchName, StringComparison.OrdinalIgnoreCase));
+                }
+
+                if (family == null)
+                    return JsonConvert.SerializeObject(new { success = false, error = "Family not found. Provide familyId or familyName." });
+
+                if (!family.IsEditable)
+                    return JsonConvert.SerializeObject(new { success = false, error = $"'{family.Name}' is a system or in-place family and cannot be renamed." });
+
+                string oldName = family.Name;
+
+                if (oldName.Equals(newName, StringComparison.Ordinal))
+                    return JsonConvert.SerializeObject(new { success = true, familyId = (int)family.Id.Value, oldName, newName, note = "Name unchanged." });
+
+                bool nameConflict = new FilteredElementCollector(doc)
+                    .OfClass(typeof(Family))
+                    .Cast<Family>()
+                    .Any(f => !f.Id.Equals(family.Id) && f.Name.Equals(newName, StringComparison.OrdinalIgnoreCase));
+
+                if (nameConflict)
+                    return JsonConvert.SerializeObject(new { success = false, error = $"A family named '{newName}' already exists in this document." });
+
+                using (var trans = new Transaction(doc, $"BM: Rename Family '{oldName}' → '{newName}'"))
+                {
+                    trans.Start();
+                    family.Name = newName;
+                    trans.Commit();
+                }
+
+                Log.Information("Renamed family '{OldName}' to '{NewName}'", oldName, newName);
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success   = true,
+                    familyId  = (int)family.Id.Value,
+                    oldName,
+                    newName,
+                    category  = family.FamilyCategory?.Name,
+                    typeCount = family.GetFamilySymbolIds().Count
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error renaming family");
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        #endregion
     }
 }
