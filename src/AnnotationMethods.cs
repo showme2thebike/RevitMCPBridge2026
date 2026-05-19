@@ -2484,15 +2484,29 @@ namespace RevitMCPBridge2026
                     });
                 }
 
+                // Wall-hosted families (windows, doors, face-hosted fixtures) cannot be placed
+                // with the 3-param NewFamilyInstance(XYZ, FamilySymbol, View) overload — that
+                // overload only works for view-based and level-based non-hosted families.
+                // Route hosted families to a drafted schematic representation instead.
+                var placementType = symbol.Family?.FamilyPlacementType ?? FamilyPlacementType.Invalid;
+                bool isHostedFamily = placementType == FamilyPlacementType.OneLevelBasedHosted
+                                   || placementType == FamilyPlacementType.TwoLevelsBased
+                                   || placementType == FamilyPlacementType.WorkPlaneBased
+                                   || placementType == FamilyPlacementType.CurveBased
+                                   || placementType == FamilyPlacementType.CurveDrivenStructural;
+
+                if (isHostedFamily)
+                {
+                    return DrawDraftedLegendSymbol(doc, legendView, symbol, x, y, placementType.ToString());
+                }
+
                 using (var trans = new Transaction(doc, "Place Legend Component"))
                 {
                     trans.Start();
 
                     if (!symbol.IsActive) symbol.Activate();
 
-                    // Place in legend view using NewFamilyInstance
-                    var instance = doc.Create.NewFamilyInstance(
-                        position, symbol, legendView);
+                    var instance = doc.Create.NewFamilyInstance(position, symbol, legendView);
 
                     trans.Commit();
 
@@ -2512,6 +2526,111 @@ namespace RevitMCPBridge2026
                 {
                     success = false,
                     error = ex.Message,
+                    stackTrace = ex.StackTrace
+                });
+            }
+        }
+
+        // Draws a schematic legend symbol for wall-hosted families (windows, doors) that cannot
+        // be placed as live legend components. Uses detail lines + a text label.
+        private static string DrawDraftedLegendSymbol(Document doc, View legendView, FamilySymbol symbol, double x, double y, string placementTypeName)
+        {
+            try
+            {
+                double widthFt = symbol.LookupParameter("Width")?.AsDouble()  ?? 3.0;
+                double heightFt = symbol.LookupParameter("Height")?.AsDouble() ?? 6.833;
+                double halfW = widthFt / 2.0;
+
+                var catId = symbol.Family?.FamilyCategory?.Id?.Value;
+                bool isWindow = catId == (long)BuiltInCategory.OST_Windows;
+                bool isDoor   = catId == (long)BuiltInCategory.OST_Doors;
+
+                var textNoteType = new FilteredElementCollector(doc)
+                    .OfClass(typeof(TextNoteType))
+                    .Cast<TextNoteType>()
+                    .OrderBy(t => t.get_Parameter(BuiltInParameter.TEXT_SIZE)?.AsDouble() ?? double.MaxValue)
+                    .FirstOrDefault();
+
+                var createdIds = new List<int>();
+
+                using (var trans = new Transaction(doc, "BM: Drafted Legend Symbol"))
+                {
+                    trans.Start();
+
+                    // Outline rectangle
+                    var bl = new XYZ(x - halfW, y, 0);
+                    var br = new XYZ(x + halfW, y, 0);
+                    var tr = new XYZ(x + halfW, y + heightFt, 0);
+                    var tl = new XYZ(x - halfW, y + heightFt, 0);
+
+                    foreach (var seg in new[] {
+                        Line.CreateBound(bl, br),
+                        Line.CreateBound(br, tr),
+                        Line.CreateBound(tr, tl),
+                        Line.CreateBound(tl, bl)
+                    })
+                    {
+                        createdIds.Add((int)doc.Create.NewDetailCurve(legendView, seg).Id.Value);
+                    }
+
+                    if (isWindow)
+                    {
+                        // Two horizontal glazing rails at 1/3 and 2/3 height
+                        double y1 = y + heightFt * 0.333;
+                        double y2 = y + heightFt * 0.667;
+                        createdIds.Add((int)doc.Create.NewDetailCurve(legendView,
+                            Line.CreateBound(new XYZ(x - halfW, y1, 0), new XYZ(x + halfW, y1, 0))).Id.Value);
+                        createdIds.Add((int)doc.Create.NewDetailCurve(legendView,
+                            Line.CreateBound(new XYZ(x - halfW, y2, 0), new XYZ(x + halfW, y2, 0))).Id.Value);
+                    }
+                    else if (isDoor)
+                    {
+                        // Door panel diagonal (hinge at bottom-left, swings to bottom-right)
+                        var panelTip = new XYZ(x + halfW, y + widthFt, 0);
+                        createdIds.Add((int)doc.Create.NewDetailCurve(legendView,
+                            Line.CreateBound(new XYZ(x - halfW, y, 0), panelTip)).Id.Value);
+                        // Swing arc approximated with two lines
+                        var arcMid = new XYZ(x + halfW, y + widthFt * 0.5, 0);
+                        createdIds.Add((int)doc.Create.NewDetailCurve(legendView,
+                            Line.CreateBound(panelTip, arcMid)).Id.Value);
+                        createdIds.Add((int)doc.Create.NewDetailCurve(legendView,
+                            Line.CreateBound(arcMid, new XYZ(x, y + widthFt, 0))).Id.Value);
+                    }
+
+                    // Label centered below symbol
+                    if (textNoteType != null)
+                    {
+                        var opts = new TextNoteOptions(textNoteType.Id)
+                        {
+                            HorizontalAlignment = HorizontalTextAlignment.Center
+                        };
+                        var label = TextNote.Create(doc, legendView.Id,
+                            new XYZ(x, y - 0.25, 0),
+                            $"{symbol.Family?.Name}\n{symbol.Name}", opts);
+                        createdIds.Add((int)label.Id.Value);
+                    }
+
+                    trans.Commit();
+                }
+
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success       = true,
+                    drafted       = true,
+                    placementType = placementTypeName,
+                    note          = $"'{symbol.Family?.Name}' is a {placementTypeName} family and cannot be placed as a live Revit legend component. Drawn as a drafted schematic (detail lines + label). Edit line weights or swap for a detail component if needed.",
+                    elementIds    = createdIds,
+                    familyName    = symbol.Family?.Name,
+                    typeName      = symbol.Name,
+                    position      = new { x, y }
+                });
+            }
+            catch (Exception ex)
+            {
+                return Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    success    = false,
+                    error      = $"DrawDraftedLegendSymbol failed: {ex.Message}",
                     stackTrace = ex.StackTrace
                 });
             }
