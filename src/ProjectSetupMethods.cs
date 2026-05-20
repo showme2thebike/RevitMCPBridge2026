@@ -1923,6 +1923,56 @@ namespace RevitMCPBridge
                     });
                 }
 
+                // Pre-transfer: copy TextNoteTypes and FilledRegionTypes used in source view
+                // that don't exist in the target. UseDestinationTypes only resolves name conflicts —
+                // if a type is outright missing from the target, elements copy invisible.
+                var existingTargetTypeNames = new FilteredElementCollector(targetDoc)
+                    .OfClass(typeof(ElementType))
+                    .Cast<ElementType>()
+                    .Select(t => t.Name)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                var textNoteTypeIds = new FilteredElementCollector(sourceDoc, sourceViewId)
+                    .OfClass(typeof(TextNote))
+                    .Cast<TextNote>()
+                    .Where(tn => tn.TextNoteType != null)
+                    .Select(tn => tn.TextNoteType.Id)
+                    .Distinct()
+                    .ToList();
+
+                var filledRegionTypeIds = new FilteredElementCollector(sourceDoc, sourceViewId)
+                    .OfClass(typeof(FilledRegion))
+                    .Cast<FilledRegion>()
+                    .Select(fr => fr.GetTypeId())
+                    .Where(id => id != ElementId.InvalidElementId)
+                    .Distinct()
+                    .ToList();
+
+                var typeIdsToPreCopy = textNoteTypeIds.Concat(filledRegionTypeIds)
+                    .Where(id =>
+                    {
+                        var t = sourceDoc.GetElement(id) as ElementType;
+                        return t != null && !existingTargetTypeNames.Contains(t.Name);
+                    })
+                    .ToList();
+
+                var typesTransferred = new List<string>();
+                if (typeIdsToPreCopy.Count > 0)
+                {
+                    var typeCopyOptions = new CopyPasteOptions();
+                    typeCopyOptions.SetDuplicateTypeNamesHandler(new DuplicateTypeNamesHandler());
+                    using (var preTrans = new Transaction(targetDoc, "Pre-transfer Missing Element Types"))
+                    {
+                        preTrans.Start();
+                        ElementTransformUtils.CopyElements(sourceDoc, typeIdsToPreCopy, targetDoc, null, typeCopyOptions);
+                        preTrans.Commit();
+                        typesTransferred = typeIdsToPreCopy
+                            .Select(id => (sourceDoc.GetElement(id) as ElementType)?.Name)
+                            .Where(n => n != null)
+                            .ToList();
+                    }
+                }
+
                 // Set up copy options
                 var copyOptions = new CopyPasteOptions();
                 copyOptions.SetDuplicateTypeNamesHandler(new DuplicateTypeNamesHandler());
@@ -1956,6 +2006,7 @@ namespace RevitMCPBridge
                         targetViewId = targetViewId.Value,
                         elementsFound = elementsToCopy.Count,
                         elementsCopied = copiedIds.Count,
+                        typesPreTransferred = typesTransferred,
                         newElementIds = copiedIds.Select(id => (int)id.Value).ToList()
                     });
                 }

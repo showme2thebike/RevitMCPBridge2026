@@ -187,8 +187,19 @@ namespace RevitMCPBridge
                     });
                 }
 
-                // Get file info
+                // Get file info and ACTUAL dimensions (Revit adjusts height for aspect ratio)
                 var fileInfo = new FileInfo(actualPath);
+                int actualWidth = width;
+                int actualHeight = height;
+                try
+                {
+                    using (var img = System.Drawing.Image.FromFile(actualPath))
+                    {
+                        actualWidth = img.Width;
+                        actualHeight = img.Height;
+                    }
+                }
+                catch { /* fall back to requested dimensions if image read fails */ }
 
                 return JsonConvert.SerializeObject(new
                 {
@@ -199,8 +210,10 @@ namespace RevitMCPBridge
                         viewId = view.Id.Value,
                         viewName = view.Name,
                         viewType = view.ViewType.ToString(),
-                        width = width,
-                        height = height,
+                        width = actualWidth,
+                        height = actualHeight,
+                        requestedWidth = width,
+                        requestedHeight = height,
                         fileSize = fileInfo.Length,
                         format = fileType.ToString()
                     }

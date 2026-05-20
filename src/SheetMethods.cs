@@ -1370,6 +1370,25 @@ namespace RevitMCPBridge
 
                 var sheetId = new ElementId(int.Parse(parameters["sheetId"].ToString()));
 
+                var sheet = doc.GetElement(sheetId) as ViewSheet;
+                if (sheet == null)
+                    return ResponseBuilder.Error($"Sheet {sheetId.Value} not found", "ELEMENT_NOT_FOUND").Build();
+
+                // Pre-check: pinned viewports block deletion with a cryptic Revit error
+                var pinnedViewports = new FilteredElementCollector(doc)
+                    .OfClass(typeof(Viewport))
+                    .Cast<Viewport>()
+                    .Where(vp => vp.SheetId == sheetId && vp.Pinned)
+                    .Select(vp => (int)vp.Id.Value)
+                    .ToList();
+
+                if (pinnedViewports.Count > 0)
+                    return ResponseBuilder.Error(
+                        $"Sheet {sheet.SheetNumber} has {pinnedViewports.Count} pinned viewport(s) — unpin them in Revit first (select viewport → Modify → Unpin)",
+                        "ELEMENT_PINNED")
+                        .With("pinnedViewportIds", pinnedViewports)
+                        .Build();
+
                 using (var trans = new Transaction(doc, "Delete Sheet"))
                 {
                     trans.Start();
