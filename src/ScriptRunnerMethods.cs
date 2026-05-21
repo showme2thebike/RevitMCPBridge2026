@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using Autodesk.Revit.UI;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -41,8 +42,18 @@ namespace RevitMCPBridge
             try
             {
                 var scriptName = parameters["scriptName"]?.ToString();
-                var args       = parameters["args"]?.ToString() ?? "";
                 var timeoutSec = parameters["timeoutSeconds"]?.Value<int>() ?? 120;
+
+                // Claude passes args as either a JSON array or a pre-built string.
+                // JArray.ToString() produces JSON syntax which argparse can't parse,
+                // so expand arrays into properly-quoted shell tokens.
+                string args;
+                var argsToken = parameters["args"];
+                if (argsToken is JArray argsArray)
+                    args = string.Join(" ", argsArray.Select(a =>
+                        "\"" + a.ToString().Replace("\\", "\\\\").Replace("\"", "\\\"") + "\""));
+                else
+                    args = argsToken?.ToString() ?? "";
 
                 if (string.IsNullOrWhiteSpace(scriptName))
                     return ResponseBuilder.Error("scriptName is required").Build();

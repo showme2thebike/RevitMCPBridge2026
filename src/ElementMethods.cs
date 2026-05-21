@@ -882,6 +882,14 @@ namespace RevitMCPBridge
                 bool dryRun = parameters["dryRun"]?.Value<bool>() ?? false;
                 Log.Information("deleteElements: dryRun={DryRun}, requestedCount={Count}", dryRun, elementIds.Count);
 
+                // Warn if caller is trying to delete Level elements — deleteElements verification
+                // is unreliable for levels due to Revit API cache staleness after bulk deletes.
+                // Levels should be deleted one at a time via deleteLevel which uses a fresh collector.
+                var levelIds = elementIds
+                    .Where(id => doc.GetElement(id) is Level)
+                    .Select(id => (int)id.Value)
+                    .ToList();
+
                 // Run inside a transaction whether live or dry — for dryRun we rollback at the end.
                 // doc.Delete() return value is the authoritative list of what was actually removed
                 // (includes all cascade-deleted dependents, not just what was requested).
@@ -930,9 +938,21 @@ namespace RevitMCPBridge
 
                     trans.Commit();
 
-                    // Verify by element existence after commit
-                    var confirmedDeleted = elementIds.Where(id => doc.GetElement(id) == null).Select(id => (int)id.Value).ToList();
-                    var notDeletedIds = elementIds.Where(id => doc.GetElement(id) != null).ToList();
+                    // Use a fresh collector for verification — doc.GetElement() can return stale
+                    // results after bulk deletes (Revit API internal cache issue), causing false
+                    // success reports for elements that were not actually removed (e.g. levels).
+                    var remainingIds = new FilteredElementCollector(doc)
+                        .WhereElementIsNotElementType()
+                        .ToElementIds()
+                        .ToHashSet();
+
+                    var confirmedDeleted = elementIds
+                        .Where(id => !remainingIds.Contains(id))
+                        .Select(id => (int)id.Value)
+                        .ToList();
+                    var notDeletedIds = elementIds
+                        .Where(id => remainingIds.Contains(id))
+                        .ToList();
 
                     var notDeletedDiag = notDeletedIds.Select(id =>
                     {
@@ -940,7 +960,9 @@ namespace RevitMCPBridge
                         string reason = "unknown";
                         try
                         {
-                            if (el.Pinned)
+                            if (el is Level)
+                                reason = "level — use deleteLevel method; deleteElements verification is unreliable for levels";
+                            else if (el.Pinned)
                                 reason = "pinned";
                             else if (el.GroupId != ElementId.InvalidElementId)
                                 reason = $"in group {(int)el.GroupId.Value}";
@@ -962,7 +984,10 @@ namespace RevitMCPBridge
                         cascadeDeletedCount = cascadeManifest.Count(e => e.cascade),
                         deletedIds = confirmedDeleted.ToArray(),
                         cascadeManifest,
-                        notDeleted = notDeletedDiag
+                        notDeleted = notDeletedDiag,
+                        levelWarning = levelIds.Any()
+                            ? $"Level IDs detected: [{string.Join(", ", levelIds)}]. Use deleteLevel for levels — deleteElements verification is unreliable for Level elements."
+                            : null
                     });
                 }
             }

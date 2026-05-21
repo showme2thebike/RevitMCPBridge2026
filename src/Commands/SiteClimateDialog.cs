@@ -25,8 +25,9 @@ namespace RevitMCPBridge.Commands
         public double? SummerMax       { get; set; }
         public int?    AnnualHDD       { get; set; }
         public int?    AnnualCDD       { get; set; }
-        public double? AnnualPrecipIn  { get; set; }
-        public double? AvgWindMph      { get; set; }
+        public double? AnnualPrecipIn    { get; set; }
+        public double? AnnualSnowfallIn  { get; set; }
+        public double? AvgWindMph        { get; set; }
         public string  PeakSolarMonth  { get; set; }
         public int?    DataYear        { get; set; }
         public string  Source          { get; set; }
@@ -44,7 +45,8 @@ namespace RevitMCPBridge.Commands
             if (SummerMax      != null) sb.AppendLine($"Record Summer High ({DataYear}): {SummerMax}°F");
             if (AnnualHDD      != null) sb.AppendLine($"Annual HDD (65°F base): {AnnualHDD:N0}");
             if (AnnualCDD      != null) sb.AppendLine($"Annual CDD (65°F base): {AnnualCDD:N0}");
-            if (AnnualPrecipIn != null) sb.AppendLine($"Annual Precipitation: {AnnualPrecipIn}\"");
+            if (AnnualPrecipIn    != null) sb.AppendLine($"Annual Precipitation: {AnnualPrecipIn}\"");
+            if (AnnualSnowfallIn  != null) sb.AppendLine($"Annual Snowfall: {AnnualSnowfallIn}\"");
             if (AvgWindMph     != null) sb.AppendLine($"Avg Max Wind Speed: {AvgWindMph} mph");
             if (PeakSolarMonth != null) sb.AppendLine($"Peak Solar Month: {PeakSolarMonth}");
             if (AshraeNote     != null) sb.AppendLine($"Note: {AshraeNote}");
@@ -184,7 +186,7 @@ namespace RevitMCPBridge.Commands
             };
             _cancelBtn.Click += (s, e) => { DialogResult = false; Close(); };
             root.Children.Add(_cancelBtn);
-            Content = root;
+            Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         }
 
         private async void OnLookup(object sender, RoutedEventArgs e)
@@ -244,8 +246,9 @@ namespace RevitMCPBridge.Commands
                     SummerMax      = obj["summerMax"]?.ToObject<double?>(),
                     AnnualHDD      = obj["annualHDD"]?.ToObject<int?>(),
                     AnnualCDD      = obj["annualCDD"]?.ToObject<int?>(),
-                    AnnualPrecipIn = obj["annualPrecipIn"]?.ToObject<double?>(),
-                    AvgWindMph     = obj["avgWindMph"]?.ToObject<double?>(),
+                    AnnualPrecipIn   = obj["annualPrecipIn"]?.ToObject<double?>(),
+                    AnnualSnowfallIn = obj["annualSnowfallIn"]?.ToObject<double?>(),
+                    AvgWindMph       = obj["avgWindMph"]?.ToObject<double?>(),
                     PeakSolarMonth = obj["peakSolarMonth"]?.ToString(),
                     DataYear       = obj["dataYear"]?.ToObject<int?>(),
                     Source         = obj["source"]?.ToString(),
@@ -254,8 +257,6 @@ namespace RevitMCPBridge.Commands
                 _statusBlock.Visibility = Visibility.Collapsed;
                 _resultBlock.Text = Result.FormatForPrompt();
                 _resultPanel.Visibility = Visibility.Visible;
-                _resultBlock.Focus();
-                _resultBlock.SelectAll();
             }
             catch (Exception ex)
             {

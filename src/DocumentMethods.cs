@@ -252,17 +252,32 @@ namespace RevitMCPBridge
                     return JsonConvert.SerializeObject(new { success = false, error = "No active document" });
                 }
 
-                var saveAsPath = parameters["saveAsPath"]?.ToString();
+                // Accept both "saveAsPath" and "path" — Banana Chat historically used both
+                var saveAsPath = parameters["saveAsPath"]?.ToString()
+                              ?? parameters["path"]?.ToString();
                 var compact = parameters["compact"]?.Value<bool>() ?? false;
 
                 if (!string.IsNullOrEmpty(saveAsPath))
                 {
-                    // Save As
+                    // Workshared models cannot be SaveAs'd via API — Revit requires the UI flow
+                    if (doc.IsWorkshared)
+                        return JsonConvert.SerializeObject(new
+                        {
+                            success = false,
+                            requiresManualSaveAs = true,
+                            error = "Workshared models must be saved to a new path via File → Save As in the Revit UI. The API cannot perform Save As on a workshared document."
+                        });
+
+                    var dir = Path.GetDirectoryName(saveAsPath);
+                    if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                        return JsonConvert.SerializeObject(new
+                        {
+                            success = false,
+                            error = $"Directory does not exist: {dir}"
+                        });
+
                     var saveAsOptions = new SaveAsOptions { OverwriteExistingFile = true };
-                    if (compact)
-                    {
-                        saveAsOptions.Compact = true;
-                    }
+                    if (compact) saveAsOptions.Compact = true;
 
                     doc.SaveAs(saveAsPath, saveAsOptions);
 
@@ -990,11 +1005,24 @@ namespace RevitMCPBridge
                 {
                     trans.Start();
 
+                    bool nameParamUpdated = false, numberParamUpdated = false;
+
                     if (parameters["name"] != null)
-                        projectInfo.Name = parameters["name"].ToString();
+                    {
+                        var val = parameters["name"].ToString();
+                        projectInfo.Name = val;
+                        // Title blocks often bind to the shared parameter, not the built-in property
+                        var p = projectInfo.LookupParameter("Project Name");
+                        if (p != null && !p.IsReadOnly) { p.Set(val); nameParamUpdated = true; }
+                    }
 
                     if (parameters["number"] != null)
-                        projectInfo.Number = parameters["number"].ToString();
+                    {
+                        var val = parameters["number"].ToString();
+                        projectInfo.Number = val;
+                        var p = projectInfo.LookupParameter("Project Number");
+                        if (p != null && !p.IsReadOnly) { p.Set(val); numberParamUpdated = true; }
+                    }
 
                     if (parameters["clientName"] != null)
                         projectInfo.ClientName = parameters["clientName"].ToString();
@@ -1026,6 +1054,8 @@ namespace RevitMCPBridge
                             status = projectInfo.Status,
                             author = projectInfo.Author
                         },
+                        nameParamUpdated,
+                        numberParamUpdated,
                         message = "Project information updated"
                     });
                 }

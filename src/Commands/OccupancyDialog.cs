@@ -138,10 +138,8 @@ namespace RevitMCPBridge.Commands
 
     public class OccupancyDialog : Window
     {
-        private StackPanel _tablePanel;
-        private TextBlock  _totalBlock;
-        private Button     _openChatBtn;
-        private Button     _cancelBtn;
+        private Button _openChatBtn;
+        private Button _cancelBtn;
 
         public OccupancyAnalysis Analysis { get; }
 
@@ -159,15 +157,8 @@ namespace RevitMCPBridge.Commands
 
         private void BuildUI()
         {
-            var outerScroll = new ScrollViewer
-            {
-                VerticalScrollBarVisibility   = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            };
             var root = new StackPanel { Margin = new Thickness(20) };
-            outerScroll.Content = root;
 
-            // Header
             root.Children.Add(new TextBlock
             {
                 Text = $"Occupant Load Analysis — {Analysis.ProjectName}",
@@ -179,54 +170,38 @@ namespace RevitMCPBridge.Commands
             {
                 Text = $"IBC 2021 Table 1004.5  ·  {Analysis.Records.Count} rooms  ·  {DateTime.Today:MMM d, yyyy}",
                 Foreground = new SolidColorBrush(Color.FromRgb(130, 130, 130)),
-                FontSize = 11, Margin = new Thickness(0, 0, 0, 16)
+                FontSize = 11, Margin = new Thickness(0, 0, 0, 12)
             });
 
-            // Table by level
-            _tablePanel = new StackPanel();
-            var byLevel = Analysis.Records.GroupBy(r => r.Level).OrderBy(g => g.Key);
-            foreach (var level in byLevel)
+            var border = new Border
             {
-                // Level header
-                _tablePanel.Children.Add(new TextBlock
-                {
-                    Text = level.Key,
-                    Foreground = new SolidColorBrush(Color.FromRgb(160, 200, 255)),
-                    FontSize = 12, FontWeight = FontWeights.SemiBold,
-                    Margin = new Thickness(0, 8, 0, 4)
-                });
-
-                // Column headers
-                _tablePanel.Children.Add(BuildHeaderRow());
-
-                foreach (var r in level.OrderBy(r => r.RoomName))
-                    _tablePanel.Children.Add(BuildDataRow(r));
-
-                // Level total
-                var levelLoad = level.Sum(r => r.OccupantLoad);
-                var exits = levelLoad <= 0 ? 0 : levelLoad <= 499 ? 2 : levelLoad <= 999 ? 3 : 4;
-                _tablePanel.Children.Add(BuildTotalRow(
-                    $"Level total: {levelLoad} occupants  ·  Min exits required (IBC §1006): {exits}",
-                    levelLoad));
-            }
-            root.Children.Add(_tablePanel);
-
-            // Building total
-            _totalBlock = new TextBlock
-            {
-                Text = $"Building total: {Analysis.TotalOccupants} occupants",
-                Foreground = new SolidColorBrush(Colors.White),
-                FontSize = 13, FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 16, 0, 4)
+                Background = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
+                BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(12), Margin = new Thickness(0, 0, 0, 12)
             };
-            root.Children.Add(_totalBlock);
+            var resultBox = new TextBox
+            {
+                IsReadOnly      = true,
+                IsTabStop       = false,
+                Text            = Analysis.FormatForPrompt(),
+                FontSize        = 11,
+                FontFamily      = new FontFamily("Consolas"),
+                Foreground      = new SolidColorBrush(Colors.White),
+                Background      = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding         = new Thickness(0),
+                TextWrapping    = TextWrapping.NoWrap,
+            };
+            border.Child = resultBox;
+            root.Children.Add(border);
 
             root.Children.Add(new TextBlock
             {
                 Text = "Room-to-IBC-category matching is based on room names. Rooms marked \"(default)\" defaulted to Business — verify these.",
                 Foreground = new SolidColorBrush(Color.FromRgb(150, 130, 80)),
                 FontSize = 10, TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 16)
+                Margin = new Thickness(0, 0, 0, 12)
             });
 
             _openChatBtn = new Button
@@ -254,86 +229,8 @@ namespace RevitMCPBridge.Commands
             _cancelBtn.Click += (s, e) => { DialogResult = false; Close(); };
             root.Children.Add(_cancelBtn);
 
-            Content = outerScroll;
-        }
-
-        private Grid BuildHeaderRow()
-        {
-            var g = MakeRowGrid();
-            void Col(int i, string t) => AddCell(g, i, t, Color.FromRgb(120, 120, 120), 10, FontWeights.Normal);
-            Col(0, "Room");
-            Col(1, "Area (sf)");
-            Col(2, "IBC Category");
-            Col(3, "Factor");
-            Col(4, "Load");
-            g.Margin = new Thickness(0, 0, 0, 2);
-            return g;
-        }
-
-        private Grid BuildDataRow(OccupancyRecord r)
-        {
-            var g = MakeRowGrid();
-            bool isDefault = r.IbcCategory.Contains("default");
-            bool noLoad    = r.LoadType == "N/A";
-
-            var nameColor = isDefault
-                ? Color.FromRgb(200, 170, 80)
-                : noLoad ? Color.FromRgb(100, 100, 100) : Colors.White;
-
-            AddCell(g, 0, r.RoomName,    nameColor, 11);
-            AddCell(g, 1, r.AreaSqFt.ToString("N0"), Color.FromRgb(160, 160, 160), 11);
-            AddCell(g, 2, r.IbcCategory, nameColor,  11);
-            AddCell(g, 3, r.LoadType == "N/A" ? "—" : $"{r.LoadFactor:0}", Color.FromRgb(160, 160, 160), 11);
-            AddCell(g, 4, r.OccupantLoad > 0 ? r.OccupantLoad.ToString() : "—",
-                r.OccupantLoad > 0 ? Color.FromRgb(140, 210, 160) : Color.FromRgb(80, 80, 80), 11,
-                r.OccupantLoad > 0 ? FontWeights.SemiBold : FontWeights.Normal);
-            g.Margin = new Thickness(0, 0, 0, 1);
-            return g;
-        }
-
-        private Border BuildTotalRow(string text, int load)
-        {
-            var b = new Border
-            {
-                BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
-                BorderThickness = new Thickness(0, 1, 0, 0),
-                Padding = new Thickness(0, 4, 0, 0),
-                Margin  = new Thickness(0, 2, 0, 4)
-            };
-            b.Child = new TextBlock
-            {
-                Text = text,
-                Foreground = new SolidColorBrush(Color.FromRgb(160, 200, 255)),
-                FontSize = 11, FontWeight = FontWeights.SemiBold
-            };
-            return b;
-        }
-
-        private static Grid MakeRowGrid()
-        {
-            var g = new Grid();
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2.2, GridUnitType.Star) });
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.7, GridUnitType.Star) });
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2.0, GridUnitType.Star) });
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.5, GridUnitType.Star) });
-            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.4, GridUnitType.Star) });
-            return g;
-        }
-
-        private static void AddCell(Grid g, int col, string text, Color color, double fontSize,
-            FontWeight? weight = null)
-        {
-            var tb = new TextBlock
-            {
-                Text = text,
-                Foreground = new SolidColorBrush(color),
-                FontSize = fontSize,
-                FontWeight = weight ?? FontWeights.Normal,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(col == 0 ? 0 : 4, 0, 0, 0)
-            };
-            Grid.SetColumn(tb, col);
-            g.Children.Add(tb);
+            Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto };
         }
     }
 }

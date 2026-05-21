@@ -138,7 +138,7 @@ namespace RevitMCPBridge.Commands
             };
             _cancelBtn.Click += (s, e) => { DialogResult = false; Close(); };
             root.Children.Add(_cancelBtn);
-            Content = root;
+            Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         }
 
         private async void OnLookup(object sender, RoutedEventArgs e)
@@ -201,28 +201,43 @@ namespace RevitMCPBridge.Commands
                     PropType       = obj["propType"]?.ToString(),
                     Zoning         = obj["zoning"]?.ToString(),
                     Source         = obj["source"]?.ToString(),
+                    Bedrooms       = obj["bedrooms"]?.ToObject<int?>(),
+                    Bathrooms      = obj["bathrooms"]?.ToObject<int?>(),
+                    BathsPartial   = obj["bathsPartial"]?.ToObject<int?>(),
+                    Stories        = obj["stories"]?.ToObject<int?>(),
+                    SalePrice      = obj["salePrice"]?.ToObject<long?>(),
+                    SaleDate       = obj["saleDate"]?.ToString(),
+                    TaxAmt         = obj["taxAmt"]?.ToObject<double?>(),
+                    TaxYear        = obj["taxYear"]?.ToString(),
                 };
 
                 var sb = new System.Text.StringBuilder();
                 sb.AppendLine($"Address:    {Result.MatchedAddress ?? Result.Address}");
-                if (Result.ParcelId     != null) sb.AppendLine($"Parcel ID:  {Result.ParcelId}");
-                if (Result.LotArea      != null) sb.AppendLine($"Lot Area:   {Result.LotArea:N0} sq ft  ({Result.LotAreaAcres:0.000} acres)");
-                if (Result.BuildingArea != null) sb.AppendLine($"Bldg Area:  {Result.BuildingArea:N0} sq ft (footprint)");
-                if (Result.Owner        != null) sb.AppendLine($"Owner:      {Result.Owner}");
-                if (Result.YearBuilt    != null) sb.AppendLine($"Year Built: {Result.YearBuilt}");
+                if (Result.ParcelId      != null) sb.AppendLine($"Parcel ID:  {Result.ParcelId}");
+                if (Result.LotArea       != null) sb.AppendLine($"Lot Area:   {Result.LotArea:N0} sq ft  ({Result.LotAreaAcres:0.000} acres)");
+                if (Result.BuildingArea  != null) sb.AppendLine($"Bldg Area:  {Result.BuildingArea:N0} sq ft");
+                if (!string.IsNullOrWhiteSpace(Result.PropType)) sb.AppendLine($"Use:        {Result.PropType}");
+                if (Result.Stories       != null) sb.AppendLine($"Stories:    {Result.Stories}");
+                if (Result.Bedrooms      != null)
+                {
+                    var bathStr = Result.Bathrooms?.ToString() ?? "—";
+                    if (Result.BathsPartial > 0) bathStr += $" + {Result.BathsPartial} half";
+                    sb.AppendLine($"Bed/Bath:   {Result.Bedrooms} bed / {bathStr} bath");
+                }
+                if (Result.Owner         != null) sb.AppendLine($"Owner:      {Result.Owner}");
+                if (Result.YearBuilt     != null) sb.AppendLine($"Year Built: {Result.YearBuilt}");
                 if (Result.AssessedValue != null) sb.AppendLine($"Assessed:   ${Result.AssessedValue:N0}");
-                if (Result.LandValue    != null) sb.AppendLine($"Land Val:   ${Result.LandValue:N0}");
-                if (Result.ImprovValue  != null) sb.AppendLine($"Bldg Val:   ${Result.ImprovValue:N0}");
-                if (!string.IsNullOrWhiteSpace(Result.PropType)) sb.AppendLine($"Prop Type:  {Result.PropType}");
-                if (!string.IsNullOrWhiteSpace(Result.Zoning))   sb.AppendLine($"Zone Code:  {Result.Zoning}");
-                if (Result.Lat != null) sb.AppendLine($"Coords:     {Result.Lat:0.0000}, {Result.Lng:0.0000}");
-                if (!string.IsNullOrWhiteSpace(Result.Source))   sb.AppendLine($"Source:     {Result.Source}");
+                if (Result.LandValue     != null) sb.AppendLine($"Land Val:   ${Result.LandValue:N0}");
+                if (Result.ImprovValue   != null) sb.AppendLine($"Bldg Val:   ${Result.ImprovValue:N0}");
+                if (Result.TaxAmt        != null) sb.AppendLine($"Tax ({Result.TaxYear}): ${Result.TaxAmt:N0}/yr");
+                if (Result.SalePrice     != null) sb.AppendLine($"Last Sale:  ${Result.SalePrice:N0}  ({Result.SaleDate})");
+                if (!string.IsNullOrWhiteSpace(Result.Zoning))  sb.AppendLine($"Zone:       {Result.Zoning}");
+                if (Result.Lat           != null) sb.AppendLine($"Coords:     {Result.Lat:0.0000}, {Result.Lng:0.0000}");
+                if (!string.IsNullOrWhiteSpace(Result.Source))  sb.AppendLine($"Source:     {Result.Source}");
 
                 _statusBlock.Visibility = Visibility.Collapsed;
                 _resultBlock.Text = sb.ToString().Trim();
                 _resultPanel.Visibility = Visibility.Visible;
-                _resultBlock.Focus();
-                _resultBlock.SelectAll();
             }
             catch (Exception ex)
             {

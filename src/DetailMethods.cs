@@ -9437,10 +9437,10 @@ namespace RevitMCPBridge2026
                     .GroupBy(gs => gs.Name, StringComparer.OrdinalIgnoreCase)
                     .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
-                // Collect all detail curves in the view
+                // Collect all curve elements in the view (CurveElement is the correct base class)
                 var detailCurves = new FilteredElementCollector(doc, view.Id)
-                    .OfClass(typeof(DetailCurve))
-                    .Cast<DetailCurve>()
+                    .OfClass(typeof(CurveElement))
+                    .Cast<CurveElement>()
                     .ToList();
 
                 var remapped = new List<object>();
@@ -9511,8 +9511,8 @@ namespace RevitMCPBridge2026
                 var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
                 var detailCurves = new FilteredElementCollector(doc, view.Id)
-                    .OfClass(typeof(DetailCurve))
-                    .Cast<DetailCurve>();
+                    .OfClass(typeof(CurveElement))
+                    .Cast<CurveElement>();
 
                 foreach (var curve in detailCurves)
                 {

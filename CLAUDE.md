@@ -17,6 +17,9 @@ cp "C:/Users/echra/.bimmonkey/RevitMCPBridge2026/bin/Release/publish/RevitMCPBri
 # Knowledge files — must live alongside the DLL for Banana Chat to find them
 cp -r "C:/Users/echra/.bimmonkey/RevitMCPBridge2026/knowledge" \
    "C:/Users/echra/AppData/Roaming/Autodesk/Revit/Addins/2026/knowledge"
+# *** WRAPPER SCRIPTS — copy to OneDrive path (NOT C:/Users/echra/Documents — those are different on this machine) ***
+cp "C:/Users/echra/.bimmonkey/bimmonkey-ai-git/scripts/generate_vicinity_map.py" \
+   "C:/Users/echra/OneDrive/Documents/BIM Monkey/wrapper/generate_vicinity_map.py"
 
 # 3. Build installer (Inno Setup)
 powershell.exe -Command "& 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' 'C:\Users\echra\.bimmonkey\bimmonkey-ai-git\scripts\BimMonkeySetup.iss'"

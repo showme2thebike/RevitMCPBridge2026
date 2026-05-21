@@ -42,6 +42,17 @@ namespace RevitMCPBridge.Commands
         public long?    ImprovValue      { get; set; }
         public string   Parking          { get; set; }
         public string   Density          { get; set; }
+        public int?     Bedrooms         { get; set; }
+        public int?     Bathrooms        { get; set; }
+        public int?     BathsPartial     { get; set; }
+        public int?     Stories          { get; set; }
+        public long?    SalePrice        { get; set; }
+        public string   SaleDate         { get; set; }
+        public double?  TaxAmt           { get; set; }
+        public string   TaxYear          { get; set; }
+        public string   ZoningSubType    { get; set; }
+        public string   ZoningGuide      { get; set; }
+        public string   ZoningLink       { get; set; }
 
         public string FormatForPrompt()
         {
@@ -249,7 +260,7 @@ namespace RevitMCPBridge.Commands
             _cancelBtn.Click += (s, e) => { DialogResult = false; Close(); };
             root.Children.Add(_cancelBtn);
 
-            Content = root;
+            Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         }
 
         private async void OnLookup(object sender, RoutedEventArgs e)
@@ -301,6 +312,9 @@ namespace RevitMCPBridge.Commands
                     Zoning           = obj["zoning"]?.ToString(),
                     ZoningDescription = obj["zoningDescription"]?.ToString(),
                     ZoningCategory   = obj["zoningCategory"]?.ToString(),
+                    ZoningSubType    = obj["zoningSubType"]?.ToString(),
+                    ZoningGuide      = obj["zoningGuide"]?.ToString(),
+                    ZoningLink       = obj["zoningLink"]?.ToString(),
                     Setbacks         = obj["setbacks"] as JObject,
                     Far              = obj["far"]?.ToObject<double?>(),
                     MaxHeight        = obj["maxHeight"]?.ToObject<double?>(),
@@ -315,8 +329,6 @@ namespace RevitMCPBridge.Commands
                     Coverage         = obj["coverage"]?.ToString()
                 };
 
-                // Zoning dialog shows code-relevant data only
-                // (Parcel ID, lot area, owner, permits → those live in their own dialogs)
                 var disp = new System.Text.StringBuilder();
                 disp.AppendLine($"Address:  {Result.MatchedAddress ?? Result.Address}");
                 if (!string.IsNullOrWhiteSpace(Result.Zoning))
@@ -324,6 +336,7 @@ namespace RevitMCPBridge.Commands
                     var z = Result.Zoning;
                     if (!string.IsNullOrWhiteSpace(Result.ZoningDescription)) z += $" — {Result.ZoningDescription}";
                     if (!string.IsNullOrWhiteSpace(Result.ZoningCategory))    z += $" ({Result.ZoningCategory})";
+                    if (!string.IsNullOrWhiteSpace(Result.ZoningSubType))     z += $" / {Result.ZoningSubType}";
                     disp.AppendLine($"Zoning:   {z}");
                 }
                 if (Result.Setbacks != null)
@@ -344,13 +357,13 @@ namespace RevitMCPBridge.Commands
                 if (Result.Overlays        != null && Result.Overlays.Count        > 0) disp.AppendLine($"Overlays: {string.Join(", ", Result.Overlays)}");
                 if (Result.Notes != null)
                     foreach (var n in Result.Notes) if (!string.IsNullOrWhiteSpace(n?.ToString())) disp.AppendLine($"Note: {n}");
-                if (!string.IsNullOrWhiteSpace(Result.Source)) disp.AppendLine($"Source:   {Result.Source}");
+                if (!string.IsNullOrWhiteSpace(Result.ZoningGuide)) disp.AppendLine($"Intent:   {Result.ZoningGuide}");
+                if (!string.IsNullOrWhiteSpace(Result.ZoningLink))  disp.AppendLine($"Code:     {Result.ZoningLink}");
+                if (!string.IsNullOrWhiteSpace(Result.Source))      disp.AppendLine($"Source:   {Result.Source}");
 
                 _statusBlock.Visibility = Visibility.Collapsed;
                 _resultBlock.Text       = disp.ToString().Trim();
                 _resultPanel.Visibility = Visibility.Visible;
-                _resultBlock.Focus();
-                _resultBlock.SelectAll();
             }
             catch (Exception ex)
             {

@@ -103,8 +103,7 @@ namespace RevitMCPBridge.Commands
                 Background = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
                 BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(12), Margin = new Thickness(0, 0, 0, 16),
-                MaxHeight = 240
+                Padding = new Thickness(12), Margin = new Thickness(0, 0, 0, 16)
             };
             _resultBlock = new TextBox
             {
@@ -117,9 +116,6 @@ namespace RevitMCPBridge.Commands
                 Background      = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 Padding         = new Thickness(0),
-                MaxHeight       = 216,
-                VerticalScrollBarVisibility   = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             };
             border.Child = _resultBlock;
             _resultPanel.Children.Add(border);
@@ -149,7 +145,7 @@ namespace RevitMCPBridge.Commands
             };
             _cancelBtn.Click += (s, e) => { DialogResult = false; Close(); };
             root.Children.Add(_cancelBtn);
-            Content = root;
+            Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         }
 
         private async void OnLookup(object sender, RoutedEventArgs e)
@@ -212,13 +208,20 @@ namespace RevitMCPBridge.Commands
                     sb.AppendLine($"Recent Permits ({Result.PermitHistory.Count} found):");
                     foreach (JObject p in Result.PermitHistory)
                     {
-                        var date = p["applicationDate"]?.ToString() ?? p["date"]?.ToString() ?? "—";
-                        var type = p["type"]?.ToString() ?? "—";
-                        var desc = p["description"]?.ToString() ?? "";
-                        var stat = p["status"]?.ToString() ?? "";
-                        sb.AppendLine($"  {date}  {type}");
+                        var date   = p["applicationDate"]?.ToString() ?? p["date"]?.ToString() ?? "—";
+                        var num    = p["permitNumber"]?.ToString();
+                        var type   = p["type"]?.ToString() ?? "—";
+                        var action = p["action"]?.ToString();
+                        var desc   = p["description"]?.ToString() ?? "";
+                        var stat   = p["status"]?.ToString() ?? "";
+                        var val    = p["value"]?.ToString();
+                        var header = $"  {date}  {type}";
+                        if (!string.IsNullOrEmpty(action)) header += $" / {action}";
+                        if (!string.IsNullOrEmpty(num))    header += $"  #{num}";
+                        sb.AppendLine(header);
                         if (!string.IsNullOrEmpty(desc)) sb.AppendLine($"  {desc}");
                         if (!string.IsNullOrEmpty(stat)) sb.AppendLine($"  Status: {stat}");
+                        if (!string.IsNullOrEmpty(val) && decimal.TryParse(val, out var valDec)) sb.AppendLine($"  Value:  ${valDec:N0}");
                         sb.AppendLine();
                     }
                 }
@@ -232,8 +235,6 @@ namespace RevitMCPBridge.Commands
                 _statusBlock.Visibility = Visibility.Collapsed;
                 _resultBlock.Text = sb.ToString().Trim();
                 _resultPanel.Visibility = Visibility.Visible;
-                _resultBlock.Focus();
-                _resultBlock.SelectAll();
             }
             catch (Exception ex)
             {

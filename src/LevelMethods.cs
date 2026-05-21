@@ -265,6 +265,19 @@ namespace RevitMCPBridge
                     doc.Delete(new ElementId(levelId.Value));
                     trans.Commit();
 
+                    // doc.GetElement() can return stale results after delete — use a fresh collector
+                    bool stillExists = new FilteredElementCollector(doc)
+                        .OfClass(typeof(Level))
+                        .Any(e => e.Id.Value == levelId.Value);
+
+                    if (stillExists)
+                        return JsonConvert.SerializeObject(new
+                        {
+                            success = false,
+                            levelId = levelId.Value,
+                            error = "Level still exists after delete. It may have dependent elements (views, rooms, hosted elements) that must be deleted first."
+                        });
+
                     return JsonConvert.SerializeObject(new { success = true, deletedLevelId = levelId.Value });
                 }
             }
