@@ -1415,6 +1415,76 @@ namespace RevitMCPBridge
         /// <summary>
         /// Remove viewport from sheet
         /// </summary>
+        [MCPMethod("pinElements", Category = "Sheet", Description = "Pin one or more elements (viewports, detail items, etc.) so they cannot be accidentally moved or deleted")]
+        public static string PinElements(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var ids = parameters["elementIds"]?.ToObject<int[]>();
+                if (ids == null || ids.Length == 0)
+                    return ResponseBuilder.Error("elementIds array is required", "MISSING_PARAMETER").Build();
+
+                var pinned = new List<int>();
+                var notFound = new List<int>();
+
+                using (var trans = new Transaction(doc, "Pin Elements"))
+                {
+                    trans.Start();
+                    foreach (var id in ids)
+                    {
+                        var elem = doc.GetElement(new ElementId(id));
+                        if (elem == null) { notFound.Add(id); continue; }
+                        elem.Pinned = true;
+                        pinned.Add(id);
+                    }
+                    trans.Commit();
+                }
+
+                return ResponseBuilder.Success()
+                    .With("pinned", pinned)
+                    .With("notFound", notFound)
+                    .WithMessage($"Pinned {pinned.Count} element(s)")
+                    .Build();
+            }
+            catch (Exception ex) { return ResponseBuilder.FromException(ex).Build(); }
+        }
+
+        [MCPMethod("unpinElements", Category = "Sheet", Description = "Unpin one or more elements so they can be moved or deleted")]
+        public static string UnpinElements(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var ids = parameters["elementIds"]?.ToObject<int[]>();
+                if (ids == null || ids.Length == 0)
+                    return ResponseBuilder.Error("elementIds array is required", "MISSING_PARAMETER").Build();
+
+                var unpinned = new List<int>();
+                var notFound = new List<int>();
+
+                using (var trans = new Transaction(doc, "Unpin Elements"))
+                {
+                    trans.Start();
+                    foreach (var id in ids)
+                    {
+                        var elem = doc.GetElement(new ElementId(id));
+                        if (elem == null) { notFound.Add(id); continue; }
+                        elem.Pinned = false;
+                        unpinned.Add(id);
+                    }
+                    trans.Commit();
+                }
+
+                return ResponseBuilder.Success()
+                    .With("unpinned", unpinned)
+                    .With("notFound", notFound)
+                    .WithMessage($"Unpinned {unpinned.Count} element(s)")
+                    .Build();
+            }
+            catch (Exception ex) { return ResponseBuilder.FromException(ex).Build(); }
+        }
+
         [MCPMethod("removeViewport", Category = "Sheet", Description = "Remove a viewport from a sheet")]
         public static string RemoveViewport(UIApplication uiApp, JObject parameters)
         {

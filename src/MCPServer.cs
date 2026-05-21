@@ -2266,6 +2266,12 @@ namespace RevitMCPBridge
                     case "deleteSheet":
                         return await ExecuteInRevitContext(uiApp => SheetMethods.DeleteSheet(uiApp, parameters));
 
+                    case "pinElements":
+                        return await ExecuteInRevitContext(uiApp => SheetMethods.PinElements(uiApp, parameters));
+
+                    case "unpinElements":
+                        return await ExecuteInRevitContext(uiApp => SheetMethods.UnpinElements(uiApp, parameters));
+
                     case "removeViewport":
                         return await ExecuteInRevitContext(uiApp => SheetMethods.RemoveViewport(uiApp, parameters));
 
