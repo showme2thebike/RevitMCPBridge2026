@@ -628,8 +628,10 @@ namespace RevitMCPBridge2026.AgentFramework
                         outcome = "completed",
                         stage = _currentStage,
                         last_tool = _lastToolName,
-                        input_tokens = _sessionInputTokens,
+                        input_tokens = _sessionInputTokens + _sessionCacheReadTokens + _sessionCacheCreationTokens,
                         output_tokens = _sessionOutputTokens,
+                        cache_read_tokens = _sessionCacheReadTokens,
+                        cache_creation_tokens = _sessionCacheCreationTokens,
                         model = _model,
                         durationMs
                     }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
@@ -653,8 +655,10 @@ namespace RevitMCPBridge2026.AgentFramework
                         outcome = "interrupted",
                         stage = _currentStage,
                         last_tool = _lastToolName,
-                        input_tokens = _sessionInputTokens,
+                        input_tokens = _sessionInputTokens + _sessionCacheReadTokens + _sessionCacheCreationTokens,
                         output_tokens = _sessionOutputTokens,
+                        cache_read_tokens = _sessionCacheReadTokens,
+                        cache_creation_tokens = _sessionCacheCreationTokens,
                         model = _model,
                         durationMs
                     }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
@@ -672,8 +676,10 @@ namespace RevitMCPBridge2026.AgentFramework
                         outcome = "error",
                         stage = _currentStage,
                         last_tool = _lastToolName,
-                        input_tokens = _sessionInputTokens,
+                        input_tokens = _sessionInputTokens + _sessionCacheReadTokens + _sessionCacheCreationTokens,
                         output_tokens = _sessionOutputTokens,
+                        cache_read_tokens = _sessionCacheReadTokens,
+                        cache_creation_tokens = _sessionCacheCreationTokens,
                         model = _model,
                         durationMs
                     }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
