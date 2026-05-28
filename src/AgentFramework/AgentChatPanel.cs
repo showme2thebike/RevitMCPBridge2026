@@ -3500,6 +3500,34 @@ namespace RevitMCPBridge2026.AgentFramework
         }
 
         /// <summary>
+        /// POST a firm-wide memory note to /api/firms/memory and update the in-session cache.
+        /// Called by /remember --firm from the chat input.
+        /// </summary>
+        private async Task HandleFirmMemoryStoreAsync(string note)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    client.Timeout = TimeSpan.FromSeconds(10);
+                    var body = JsonConvert.SerializeObject(new { note });
+                    var content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
+                    var resp = await client.PostAsync(
+                        "https://bimmonkey-production.up.railway.app/api/firms/memory", content);
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        _firmMemory = string.IsNullOrWhiteSpace(_firmMemory)
+                            ? note
+                            : _firmMemory + "\n- " + note;
+                    }
+                }
+            }
+            catch { /* fire and forget */ }
+        }
+
+        /// <summary>
         /// POST a firm-level memory note to /api/firms/memory.
         /// Called automatically when memoryStore is used with memoryType "firm" or importance >= 8.
         /// </summary>
@@ -4566,6 +4594,19 @@ namespace RevitMCPBridge2026.AgentFramework
             var message = _inputTextBox.Text.Trim();
             if (string.IsNullOrEmpty(message) || _isProcessing || _subscriptionBlocked) return;
 
+            // /remember --firm <text> — save to firm-wide memory (all projects)
+            if (message.StartsWith("/remember --firm ", StringComparison.OrdinalIgnoreCase))
+            {
+                var noteText = message.Substring("/remember --firm ".Length).Trim();
+                _inputTextBox.Text = "";
+                if (!string.IsNullOrEmpty(noteText))
+                {
+                    await HandleFirmMemoryStoreAsync(noteText);
+                    AddSystemMessage("💾 Saved to firm-wide memory (applies to all projects).");
+                }
+                return;
+            }
+
             // /remember <text> — save directly to project notes without sending to AI
             if (message.StartsWith("/remember ", StringComparison.OrdinalIgnoreCase))
             {
@@ -4631,9 +4672,23 @@ namespace RevitMCPBridge2026.AgentFramework
                 // Agent can use getKnowledgeFile tool to load additional files on demand
                 var knowledgeBase = LoadCoreKnowledge();
 
-                var firmBlock = string.IsNullOrWhiteSpace(_firmStandardsDoc)
-                    ? ""
-                    : $"\n\nFIRM STANDARDS (learned from this firm's history — follow these closely):\n{_firmStandardsDoc}\n";
+                // Merge synthesized standards + manually saved firm notes into one block
+                string firmBlock;
+                {
+                    var hasStandards = !string.IsNullOrWhiteSpace(_firmStandardsDoc);
+                    var hasMemory    = !string.IsNullOrWhiteSpace(_firmMemory);
+                    if (!hasStandards && !hasMemory)
+                    {
+                        firmBlock = "";
+                    }
+                    else
+                    {
+                        var sb = new System.Text.StringBuilder("\n\nFIRM KNOWLEDGE (follow these closely — learned from corrections and what you've been told):\n");
+                        if (hasStandards) sb.Append(_firmStandardsDoc).AppendLine();
+                        if (hasMemory)    sb.AppendLine("\n[Manually saved facts and preferences:]\n" + _firmMemory);
+                        firmBlock = sb.ToString();
+                    }
+                }
 
                 var correctionsBlock = string.IsNullOrWhiteSpace(_correctionsKnowledge)
                     ? ""
@@ -4650,10 +4705,6 @@ namespace RevitMCPBridge2026.AgentFramework
                 var memoryBlock = string.IsNullOrWhiteSpace(_memoryContext)
                     ? ""
                     : $"\n\nMEMORY FROM PREVIOUS SESSIONS (what you learned and did last time):\n{_memoryContext}\n";
-
-                var firmMemoryBlock = string.IsNullOrWhiteSpace(_firmMemory)
-                    ? ""
-                    : $"\n\nFIRM MEMORY (persistent facts and preferences stored for this firm):\n{_firmMemory}\n";
 
                 var projectNotesBlock = string.IsNullOrWhiteSpace(_projectNotes)
                     ? ""
@@ -4708,7 +4759,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     startupBlock = sb.ToString();
                 }
 
-                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{userNameBlock}{startupBlock}{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{memoryBlock}{firmMemoryBlock}{projectNotesBlock}{persistentIntelBlock}
+                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{userNameBlock}{startupBlock}{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{memoryBlock}{projectNotesBlock}{persistentIntelBlock}
 
 CURRENT PROJECT: {projectName}
 
