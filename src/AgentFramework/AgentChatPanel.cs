@@ -95,6 +95,9 @@ namespace RevitMCPBridge2026.AgentFramework
         [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
         [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
         [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+        [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct RECT { public int Left, Top, Right, Bottom; }
         private const int    HOTKEY_ID  = 9001;
         private const uint   MOD_CTRL   = 0x0002;
         private const uint   VK_B       = 0x42;
@@ -264,12 +267,34 @@ namespace RevitMCPBridge2026.AgentFramework
             var helper = new WindowInteropHelper(this);
 
             // Parent to Revit's main window — panel stays above Revit, never gets buried behind it
-            helper.Owner = System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle;
+            var revitHwnd = System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle;
+            helper.Owner = revitHwnd;
 
-            // Position to right edge of work area on first show
-            var work = SystemParameters.WorkArea;
-            Left = work.Right - Width - 20;
-            Top  = work.Top + (work.Height - Height) / 2;
+            // Size and snap to the right edge of the Revit window at full height
+            if (revitHwnd != IntPtr.Zero && GetWindowRect(revitHwnd, out var revitRect))
+            {
+                var src = PresentationSource.FromVisual(this);
+                double sx = src?.CompositionTarget?.TransformFromDevice.M11 ?? 1.0;
+                double sy = src?.CompositionTarget?.TransformFromDevice.M22 ?? 1.0;
+
+                double rLeft   = revitRect.Left   * sx;
+                double rTop    = revitRect.Top    * sy;
+                double rRight  = revitRect.Right  * sx;
+                double rBottom = revitRect.Bottom * sy;
+
+                const double chatWidth = 440;
+                Width  = chatWidth;
+                Height = rBottom - rTop;
+                Left   = rRight - chatWidth;
+                Top    = rTop;
+            }
+            else
+            {
+                // Fallback: right edge of work area, vertically centered
+                var work = SystemParameters.WorkArea;
+                Left = work.Right - Width - 20;
+                Top  = work.Top + (work.Height - Height) / 2;
+            }
 
             _hwndSource = HwndSource.FromHwnd(helper.Handle);
             _hwndSource?.AddHook(WndProc);
