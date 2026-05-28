@@ -72,6 +72,10 @@ namespace RevitMCPBridge2026.AgentFramework
         private List<AttachedImage> _pendingAttachments = new List<AttachedImage>();
         private StackPanel _attachmentPreviewPanel;
 
+        // Paste-to-memory banner
+        private Border _pasteBanner;
+        private string _pendingPasteText;
+
         // Document lock (Sprint 4)
         private string _lockedDocTitle;
         private TextBlock _lockedDocLabel;
@@ -581,6 +585,71 @@ namespace RevitMCPBridge2026.AgentFramework
                 Visibility = Visibility.Collapsed
             };
             outerStack.Children.Add(_attachmentPreviewPanel);
+
+            // Paste-save banner — collapses until a large text paste is detected
+            _pasteBanner = new Border
+            {
+                Background  = new SolidColorBrush(Color.FromRgb(30, 55, 30)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(60, 110, 60)),
+                BorderThickness = new Thickness(0, 1, 0, 1),
+                Padding    = new Thickness(10, 7, 10, 7),
+                Margin     = new Thickness(0, 0, 0, 6),
+                Visibility = Visibility.Collapsed
+            };
+            var bannerRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var bannerLabel = new TextBlock
+            {
+                Text = "Large paste detected — save to project memory?",
+                Foreground = new SolidColorBrush(Color.FromRgb(160, 220, 160)),
+                FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 12, 0)
+            };
+            var bannerSaveBtn = new Button
+            {
+                Content = "💾 Save",
+                Background  = new SolidColorBrush(Color.FromRgb(50, 110, 50)),
+                Foreground  = Brushes.White,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(10, 3, 10, 3),
+                Margin  = new Thickness(0, 0, 6, 0),
+                FontSize = 11,
+                Cursor  = System.Windows.Input.Cursors.Hand
+            };
+            bannerSaveBtn.Click += async (s, e) =>
+            {
+                _pasteBanner.Visibility = Visibility.Collapsed;
+                var pasteText = _pendingPasteText;
+                _pendingPasteText = null;
+                if (!string.IsNullOrWhiteSpace(pasteText))
+                {
+                    await HandleProjectNoteStoreAsync(JObject.FromObject(new
+                    {
+                        note = pasteText.Length > 1000 ? pasteText.Substring(0, 1000).TrimEnd() + "…" : pasteText.Trim(),
+                        project_name = _sessionProjectName ?? "Unknown"
+                    }));
+                    AddSystemMessage($"💾 Saved to project memory for \"{_sessionProjectName}\".");
+                }
+            };
+            var bannerDismissBtn = new Button
+            {
+                Content = "Dismiss",
+                Background  = Brushes.Transparent,
+                Foreground  = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(6, 3, 6, 3),
+                FontSize = 11,
+                Cursor  = System.Windows.Input.Cursors.Hand
+            };
+            bannerDismissBtn.Click += (s, e) =>
+            {
+                _pasteBanner.Visibility = Visibility.Collapsed;
+                _pendingPasteText = null;
+            };
+            bannerRow.Children.Add(bannerLabel);
+            bannerRow.Children.Add(bannerSaveBtn);
+            bannerRow.Children.Add(bannerDismissBtn);
+            _pasteBanner.Child = bannerRow;
+            outerStack.Children.Add(_pasteBanner);
 
             var grid = new Grid();
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -4400,6 +4469,16 @@ namespace RevitMCPBridge2026.AgentFramework
                             e.Handled = true;
                             return;
                         }
+                        // Offer to save large text pastes to project memory
+                        if (System.Windows.Clipboard.ContainsText())
+                        {
+                            var clipText = System.Windows.Clipboard.GetText();
+                            if (clipText.Length > 300 && _pasteBanner != null)
+                            {
+                                _pendingPasteText = clipText;
+                                _pasteBanner.Visibility = Visibility.Visible;
+                            }
+                        }
                         _inputTextBox.Paste();
                         e.Handled = true;
                         return;
@@ -4486,6 +4565,23 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             var message = _inputTextBox.Text.Trim();
             if (string.IsNullOrEmpty(message) || _isProcessing || _subscriptionBlocked) return;
+
+            // /remember <text> — save directly to project notes without sending to AI
+            if (message.StartsWith("/remember ", StringComparison.OrdinalIgnoreCase))
+            {
+                var noteText = message.Substring("/remember ".Length).Trim();
+                _inputTextBox.Text = "";
+                if (!string.IsNullOrEmpty(noteText))
+                {
+                    await HandleProjectNoteStoreAsync(JObject.FromObject(new
+                    {
+                        note = noteText,
+                        project_name = _sessionProjectName ?? "Unknown"
+                    }));
+                    AddSystemMessage($"💾 Saved to project memory for \"{_sessionProjectName}\".");
+                }
+                return;
+            }
 
             // Intercept "done" while correction watcher is active
             if (_correctionWatchActive && IsDoneSignal(message))
