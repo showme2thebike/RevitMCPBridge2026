@@ -88,6 +88,9 @@ namespace RevitMCPBridge2026.AgentFramework
         private Button _pipePauseButton;
         private bool _pipePaused;
 
+        // Conversational memory — when user types bare /remember (or alias), next message is the note
+        private bool _pendingRememberMode;
+
         // Streaming bubble state
         private System.Windows.Controls.TextBox _streamingTextBox;
         private StackPanel _streamingContainer;
@@ -248,14 +251,23 @@ namespace RevitMCPBridge2026.AgentFramework
                 }
                 e.Handled = true;
             };
-            Drop += async (s, e) =>
+            Drop += (s, e) =>
             {
                 if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
                 var files = e.Data.GetData(DataFormats.FileDrop) as string[];
                 var pdf = files?.FirstOrDefault(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
                 if (pdf == null) return;
                 e.Handled = true;
-                await HandleTrainUploadAsync(pdf, null);
+
+                var fileName = Path.GetFileNameWithoutExtension(pdf);
+                var sizeMB   = new FileInfo(pdf).Length / (1024.0 * 1024.0);
+                var captured = pdf;
+
+                AddConfirmMessage(
+                    $"Upload \"{fileName}\" ({sizeMB:F1} MB) to your Training Library?",
+                    ("Upload", async () => await HandleTrainUploadAsync(captured, null)),
+                    ("Never mind", () => Task.CompletedTask)
+                );
             };
         }
 
@@ -737,7 +749,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
             // Paperclip button (Sprint 2B/5)
             var attachButton = CreateButton("📎", false);
-            attachButton.ToolTip = "Attach image (or Ctrl+V to paste from clipboard)";
+            attachButton.ToolTip = "Attach image (context for Claude) or PDF (upload to Training Library)";
             attachButton.Click += (s, e) => BrowseAndAttachImage();
             buttonStack.Children.Add(attachButton);
 
@@ -1077,28 +1089,44 @@ namespace RevitMCPBridge2026.AgentFramework
             }
         }
 
-        // Sprint 2B — file browse to attach an image
+        // Attach image → context for Claude; attach PDF → Training Library upload confirmation
         private void BrowseAndAttachImage()
         {
-            var dlg = new Microsoft.Win32.OpenFileDialog
+            var dlg = new OpenFileDialog
             {
-                Title = "Attach Image",
-                Filter = "Images (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg",
-                Multiselect = false
+                Title       = "Attach file",
+                Filter      = "All supported (*.png;*.jpg;*.jpeg;*.pdf)|*.png;*.jpg;*.jpeg;*.pdf|Images (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg|PDF files (*.pdf)|*.pdf",
+                Multiselect = false,
             };
             if (dlg.ShowDialog() != true) return;
 
-            try
+            var ext = Path.GetExtension(dlg.FileName).ToLowerInvariant();
+
+            if (ext == ".pdf")
             {
-                var bytes = System.IO.File.ReadAllBytes(dlg.FileName);
-                var ext = System.IO.Path.GetExtension(dlg.FileName).ToLower();
-                var mediaType = ext == ".jpg" || ext == ".jpeg" ? "image/jpeg" : "image/png";
-                var label = System.IO.Path.GetFileName(dlg.FileName);
-                AddAttachment(new AttachedImage { Base64Data = Convert.ToBase64String(bytes), MediaType = mediaType, Label = label });
+                // Route PDFs to Training Library upload (same flow as drag-and-drop)
+                var fileName = Path.GetFileNameWithoutExtension(dlg.FileName);
+                var sizeMB   = new FileInfo(dlg.FileName).Length / (1024.0 * 1024.0);
+                var captured = dlg.FileName;
+                AddConfirmMessage(
+                    $"Upload \"{fileName}\" ({sizeMB:F1} MB) to your Training Library?",
+                    ("Upload", async () => await HandleTrainUploadAsync(captured, null)),
+                    ("Never mind", () => Task.CompletedTask)
+                );
             }
-            catch (Exception ex)
+            else
             {
-                System.Diagnostics.Debug.WriteLine($"Attach file failed: {ex.Message}");
+                try
+                {
+                    var bytes     = File.ReadAllBytes(dlg.FileName);
+                    var mediaType = ext == ".jpg" || ext == ".jpeg" ? "image/jpeg" : "image/png";
+                    var label     = Path.GetFileName(dlg.FileName);
+                    AddAttachment(new AttachedImage { Base64Data = Convert.ToBase64String(bytes), MediaType = mediaType, Label = label });
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Attach file failed: {ex.Message}");
+                }
             }
         }
 
@@ -4722,50 +4750,73 @@ namespace RevitMCPBridge2026.AgentFramework
             var message = _inputTextBox.Text.Trim();
             if (string.IsNullOrEmpty(message) || _isProcessing || _subscriptionBlocked) return;
 
-            // /train [project name] — pick a PDF and upload it to the Training Library
-            if (message.Equals("/train", StringComparison.OrdinalIgnoreCase) ||
-                message.StartsWith("/train ", StringComparison.OrdinalIgnoreCase))
+            // ── If previous message was a bare memory command, treat this as the note ──
+            if (_pendingRememberMode && !message.StartsWith("/"))
             {
-                var customName = message.Length > 6 ? message.Substring(6).Trim() : null;
+                _pendingRememberMode = false;
                 _inputTextBox.Text = "";
+                AddUserMessage(message);
+                ShowRememberScopePicker(message);
+                return;
+            }
+            _pendingRememberMode = false;
+
+            // ── Memory commands: /remember /save /note /mem /keep (+ text) ───────────
+            var _rememberAliases = new[] { "/remember", "/save", "/note", "/mem", "/keep" };
+            var _matchedRemember = _rememberAliases.FirstOrDefault(a =>
+                message.Equals(a, StringComparison.OrdinalIgnoreCase) ||
+                message.StartsWith(a + " ", StringComparison.OrdinalIgnoreCase));
+
+            if (_matchedRemember != null)
+            {
+                _inputTextBox.Text = "";
+                var noteText = message.Length > _matchedRemember.Length
+                    ? message.Substring(_matchedRemember.Length).Trim()
+                    : "";
+
+                if (string.IsNullOrWhiteSpace(noteText))
+                {
+                    AddSystemMessage("What should I remember? Type it and I'll ask where to save it.");
+                    _pendingRememberMode = true;
+                    return;
+                }
+
+                ShowRememberScopePicker(noteText);
+                return;
+            }
+
+            // ── Training upload: /train /upload /training ────────────────────────────
+            var _trainAliases = new[] { "/train", "/upload", "/training" };
+            var _matchedTrain = _trainAliases.FirstOrDefault(a =>
+                message.Equals(a, StringComparison.OrdinalIgnoreCase) ||
+                message.StartsWith(a + " ", StringComparison.OrdinalIgnoreCase));
+
+            if (_matchedTrain != null)
+            {
+                var customName = message.Length > _matchedTrain.Length
+                    ? message.Substring(_matchedTrain.Length).Trim()
+                    : null;
+                _inputTextBox.Text = "";
+
                 var dlg = new OpenFileDialog
                 {
                     Title       = "Select permit set PDF to upload to Training Library",
                     Filter      = "PDF files (*.pdf)|*.pdf",
                     Multiselect = false,
                 };
-                if (dlg.ShowDialog() == true)
-                    await HandleTrainUploadAsync(dlg.FileName, customName);
-                return;
-            }
+                if (dlg.ShowDialog() != true) return;
 
-            // /remember --firm <text> — save to firm-wide memory (all projects)
-            if (message.StartsWith("/remember --firm ", StringComparison.OrdinalIgnoreCase))
-            {
-                var noteText = message.Substring("/remember --firm ".Length).Trim();
-                _inputTextBox.Text = "";
-                if (!string.IsNullOrEmpty(noteText))
-                {
-                    await HandleFirmMemoryStoreAsync(noteText);
-                    AddSystemMessage("💾 Saved to firm-wide memory (applies to all projects).");
-                }
-                return;
-            }
+                var filePath    = dlg.FileName;
+                var fileName    = Path.GetFileNameWithoutExtension(filePath);
+                var projectName = string.IsNullOrWhiteSpace(customName) ? fileName : customName;
+                var sizeMB      = new FileInfo(filePath).Length / (1024.0 * 1024.0);
+                var captured    = filePath;
 
-            // /remember <text> — save directly to project notes without sending to AI
-            if (message.StartsWith("/remember ", StringComparison.OrdinalIgnoreCase))
-            {
-                var noteText = message.Substring("/remember ".Length).Trim();
-                _inputTextBox.Text = "";
-                if (!string.IsNullOrEmpty(noteText))
-                {
-                    await HandleProjectNoteStoreAsync(JObject.FromObject(new
-                    {
-                        note = noteText,
-                        project_name = _sessionProjectName ?? "Unknown"
-                    }));
-                    AddSystemMessage($"💾 Saved to project memory for \"{_sessionProjectName}\".");
-                }
+                AddConfirmMessage(
+                    $"Upload \"{projectName}\" ({sizeMB:F1} MB) to your Training Library?",
+                    ("Upload", async () => await HandleTrainUploadAsync(captured, projectName)),
+                    ("Never mind", () => Task.CompletedTask)
+                );
                 return;
             }
 
@@ -5366,6 +5417,96 @@ STYLE:
                 HorizontalAlignment = HorizontalAlignment.Center
             });
             ScrollToBottom();
+        }
+
+        /// <summary>
+        /// Render a prompt with inline action buttons. Buttons collapse themselves on click.
+        /// </summary>
+        private void AddConfirmMessage(string prompt, params (string Label, Func<Task> Action)[] choices)
+        {
+            var outer = new Border
+            {
+                Background      = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
+                BorderBrush     = new SolidColorBrush(Color.FromRgb(75, 75, 75)),
+                BorderThickness = new Thickness(1),
+                CornerRadius    = new CornerRadius(8),
+                Padding         = new Thickness(14, 10, 14, 10),
+                Margin          = new Thickness(16, 6, 16, 6),
+            };
+
+            var stack = new StackPanel();
+            stack.Children.Add(new TextBlock
+            {
+                Text                = prompt,
+                Foreground          = new SolidColorBrush(Color.FromRgb(210, 210, 210)),
+                TextWrapping        = TextWrapping.Wrap,
+                FontSize            = 13,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                TextAlignment       = TextAlignment.Center,
+                Margin              = new Thickness(0, 0, 0, 10),
+            });
+
+            var buttonRow = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Center };
+
+            foreach (var (label, action) in choices)
+            {
+                var isCancel = label.Equals("Never mind", StringComparison.OrdinalIgnoreCase)
+                            || label.Equals("Cancel",     StringComparison.OrdinalIgnoreCase);
+                var btn = new Button
+                {
+                    Content         = label,
+                    Margin          = new Thickness(5, 3, 5, 3),
+                    Padding         = new Thickness(16, 7, 16, 7),
+                    FontSize        = 12,
+                    Background      = isCancel
+                        ? new SolidColorBrush(Color.FromRgb(55, 55, 55))
+                        : new SolidColorBrush(Color.FromRgb(0, 100, 175)),
+                    Foreground      = Brushes.White,
+                    BorderThickness = new Thickness(0),
+                };
+                var capturedAction = action;
+                var capturedRow    = buttonRow;
+                btn.Click += async (s, e) =>
+                {
+                    capturedRow.IsEnabled   = false;
+                    capturedRow.Opacity     = 0.4;
+                    await capturedAction();
+                };
+                buttonRow.Children.Add(btn);
+            }
+
+            stack.Children.Add(buttonRow);
+            outer.Child = stack;
+            _chatHistory.Children.Add(outer);
+            ScrollToBottom();
+        }
+
+        /// <summary>
+        /// Show the "save to project vs. firm-wide" scope picker for a note.
+        /// </summary>
+        private void ShowRememberScopePicker(string note)
+        {
+            var preview     = note.Length > 80 ? note.Substring(0, 80) + "…" : note;
+            var projectName = _sessionProjectName ?? "this project";
+
+            AddConfirmMessage(
+                $"Got it. Where should I save \"{preview}\"?",
+                ($"Just {projectName}", async () =>
+                {
+                    await HandleProjectNoteStoreAsync(JObject.FromObject(new
+                    {
+                        note,
+                        project_name = _sessionProjectName ?? "Unknown"
+                    }));
+                    AddSystemMessage($"Saved to {projectName}.");
+                }),
+                ("All my projects", async () =>
+                {
+                    await HandleFirmMemoryStoreAsync(note);
+                    AddSystemMessage("Saved firm-wide — applies to all your projects.");
+                }),
+                ("Never mind", () => Task.CompletedTask)
+            );
         }
 
         /// <summary>
