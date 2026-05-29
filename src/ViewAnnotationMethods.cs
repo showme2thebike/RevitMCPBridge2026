@@ -4924,7 +4924,7 @@ namespace RevitMCPBridge
         /// Replace all instances of one element type with another type.
         /// Example: Swap all "Door-Single-Panel" with "Door-Single-Glass"
         /// </summary>
-        [MCPMethod("batchSwapTypes", Category = "ViewAnnotation", Description = "Replace all instances of one element type with another type")]
+        [MCPMethod("batchSwapTypes", Category = "ViewAnnotation", Description = "Replace instances of one element type with another. Always pass viewId to scope to a view — omitting it swaps across the entire project.")]
         public static string BatchSwapTypes(UIApplication uiApp, JObject parameters)
         {
             try
@@ -4932,7 +4932,7 @@ namespace RevitMCPBridge
                 var doc = uiApp.ActiveUIDocument.Document;
                 var sourceTypeIdParam = parameters?["sourceTypeId"];
                 var targetTypeIdParam = parameters?["targetTypeId"];
-                var categoryName = parameters?["category"]?.ToString();
+                var viewIdParam       = parameters?["viewId"];
 
                 if (sourceTypeIdParam == null || targetTypeIdParam == null)
                 {
@@ -4958,8 +4958,22 @@ namespace RevitMCPBridge
                     });
                 }
 
-                // Find all instances of source type
-                var instances = new FilteredElementCollector(doc)
+                // Scope to view if provided — omitting viewId hits the entire project
+                FilteredElementCollector collector;
+                string scopeLabel;
+                if (viewIdParam != null)
+                {
+                    var viewId = new ElementId(viewIdParam.ToObject<int>());
+                    collector  = new FilteredElementCollector(doc, viewId);
+                    scopeLabel = $"view {viewId.Value}";
+                }
+                else
+                {
+                    collector  = new FilteredElementCollector(doc);
+                    scopeLabel = "entire project";
+                }
+
+                var instances = collector
                     .WhereElementIsNotElementType()
                     .Where(e => e.GetTypeId() == sourceTypeId)
                     .ToList();
@@ -5011,9 +5025,10 @@ namespace RevitMCPBridge
                     {
                         sourceTypeName = sourceType.Name,
                         targetTypeName = targetType.Name,
+                        scope          = scopeLabel,
                         instancesFound = instances.Count,
-                        swapped = swappedCount,
-                        errors = errors.Count > 0 ? errors.Take(10).ToList() : null
+                        swapped        = swappedCount,
+                        errors         = errors.Count > 0 ? errors.Take(10).ToList() : null
                     }
                 });
             }

@@ -362,4 +362,26 @@ For each workflow track:
 
 ---
 
+---
+
+## Confirmed Gotchas (from live sessions)
+
+### `batchSwapTypes` — always pass `viewId` or it hits the entire project
+```json
+{ "method": "batchSwapTypes", "params": { "sourceTypeId": 123, "targetTypeId": 456, "viewId": 789 } }
+```
+Without `viewId`, swaps **every instance** of that type across the entire document. The response now includes `"scope"` so you can confirm what was actually touched.
+
+### `executeRevitScript` — C# only, no language parameter needed
+The method is hardcoded C#. Do not pass `"language": "csharp"` — it doesn't exist as a parameter and is silently ignored. Just pass `code` (required) and optionally `usings` (array of namespace strings).
+```json
+{ "method": "executeRevitScript", "params": { "code": "return doc.Title;" } }
+```
+
+### `ElementId` in Revit 2026 — use `.Value` not `.IntegerValue`
+`IntegerValue` was removed in Revit 2026. Use `element.Id.Value` (returns `long`).
+
+### `ChangeTypeId` is the clean way to swap a CurveBasedDetail component type
+No delete/replace cycle needed. Call `element.ChangeTypeId(newTypeId)` directly inside a transaction.
+
 *This document consolidates 90 days of learning from 549 memories. Update as new patterns are discovered.*
