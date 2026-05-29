@@ -251,7 +251,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 }
                 e.Handled = true;
             };
-            Drop += (s, e) =>
+            Drop += async (s, e) =>
             {
                 if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
                 var files = e.Data.GetData(DataFormats.FileDrop) as string[];
@@ -261,13 +261,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
                 var fileName = Path.GetFileNameWithoutExtension(pdf);
                 var sizeMB   = new FileInfo(pdf).Length / (1024.0 * 1024.0);
-                var captured = pdf;
-
-                AddConfirmMessage(
-                    $"Upload \"{fileName}\" ({sizeMB:F1} MB) to your Training Library?",
-                    ("Upload", async () => await HandleTrainUploadAsync(captured, null)),
-                    ("Never mind", () => Task.CompletedTask)
-                );
+                await ShowTrainConfirmAsync(pdf, fileName, sizeMB);
             };
         }
 
@@ -750,7 +744,7 @@ namespace RevitMCPBridge2026.AgentFramework
             // Paperclip button (Sprint 2B/5)
             var attachButton = CreateButton("📎", false);
             attachButton.ToolTip = "Attach image (context for Claude) or PDF (upload to Training Library)";
-            attachButton.Click += (s, e) => BrowseAndAttachImage();
+            attachButton.Click += async (s, e) => await BrowseAndAttachImageAsync();
             buttonStack.Children.Add(attachButton);
 
             // Snap View button (Sprint 5) — captures current Revit viewport and attaches as image
@@ -1090,7 +1084,7 @@ namespace RevitMCPBridge2026.AgentFramework
         }
 
         // Attach image → context for Claude; attach PDF → Training Library upload confirmation
-        private void BrowseAndAttachImage()
+        private async Task BrowseAndAttachImageAsync()
         {
             var dlg = new OpenFileDialog
             {
@@ -1107,12 +1101,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 // Route PDFs to Training Library upload (same flow as drag-and-drop)
                 var fileName = Path.GetFileNameWithoutExtension(dlg.FileName);
                 var sizeMB   = new FileInfo(dlg.FileName).Length / (1024.0 * 1024.0);
-                var captured = dlg.FileName;
-                AddConfirmMessage(
-                    $"Upload \"{fileName}\" ({sizeMB:F1} MB) to your Training Library?",
-                    ("Upload", async () => await HandleTrainUploadAsync(captured, null)),
-                    ("Never mind", () => Task.CompletedTask)
-                );
+                await ShowTrainConfirmAsync(dlg.FileName, fileName, sizeMB);
             }
             else
             {
@@ -3613,6 +3602,59 @@ namespace RevitMCPBridge2026.AgentFramework
         /// Upload a local PDF to the Training Library via /api/training/upload-pdf-raw.
         /// Called by drag-and-drop or the /train command.
         /// </summary>
+        private async Task ShowTrainConfirmAsync(string filePath, string projectName, double sizeMB)
+        {
+            // Quick duplicate check before showing the confirm dialog
+            bool isDuplicate = false;
+            string duplicateDetail = null;
+            if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
+            {
+                try
+                {
+                    using (var c = new System.Net.Http.HttpClient())
+                    {
+                        c.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                        c.Timeout = TimeSpan.FromSeconds(8);
+                        var payload = new System.Net.Http.StringContent(
+                            Newtonsoft.Json.JsonConvert.SerializeObject(new { names = new[] { projectName } }),
+                            System.Text.Encoding.UTF8, "application/json");
+                        var r = await c.PostAsync(
+                            "https://bimmonkey-production.up.railway.app/api/training/check-duplicates", payload);
+                        if (r.IsSuccessStatusCode)
+                        {
+                            var obj = JObject.Parse(await r.Content.ReadAsStringAsync());
+                            var dups = obj["duplicates"] as Newtonsoft.Json.Linq.JArray;
+                            if (dups != null && dups.Count > 0)
+                            {
+                                isDuplicate = true;
+                                duplicateDetail = $"\"{projectName}\" is already in your Training Library.";
+                            }
+                        }
+                    }
+                }
+                catch { /* non-fatal — fall through to normal confirm */ }
+            }
+
+            var captured = filePath;
+            var name     = projectName;
+            if (isDuplicate)
+            {
+                AddConfirmMessage(
+                    $"{duplicateDetail} Upload again anyway?",
+                    ("Upload anyway", async () => await HandleTrainUploadAsync(captured, name)),
+                    ("Never mind",    () => Task.CompletedTask)
+                );
+            }
+            else
+            {
+                AddConfirmMessage(
+                    $"Upload \"{name}\" ({sizeMB:F1} MB) to your Training Library?",
+                    ("Upload",     async () => await HandleTrainUploadAsync(captured, name)),
+                    ("Never mind", () => Task.CompletedTask)
+                );
+            }
+        }
+
         private async Task HandleTrainUploadAsync(string filePath, string overrideName)
         {
             if (string.IsNullOrEmpty(_bimMonkeyApiKey))
@@ -4809,11 +4851,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 var fn2 = Path.GetFileNameWithoutExtension(fp2);
                 var sz2 = new FileInfo(fp2).Length / (1024.0 * 1024.0);
                 AddUserMessage(message);
-                AddConfirmMessage(
-                    $"Upload \"{fn2}\" ({sz2:F1} MB) to your Training Library?",
-                    ("Upload", async () => await HandleTrainUploadAsync(fp2, fn2)),
-                    ("Never mind", () => Task.CompletedTask)
-                );
+                await ShowTrainConfirmAsync(fp2, fn2, sz2);
                 return;
             }
 
@@ -4842,12 +4880,8 @@ namespace RevitMCPBridge2026.AgentFramework
                 var fileName    = Path.GetFileNameWithoutExtension(filePath);
                 var projectName = string.IsNullOrWhiteSpace(customName) ? fileName : customName;
                 var sizeMB      = new FileInfo(filePath).Length / (1024.0 * 1024.0);
-                var captured    = filePath;
 
-                AddConfirmMessage(
-                    $"Upload \"{projectName}\" ({sizeMB:F1} MB) to your Training Library?",
-                    ("Upload", async () => await HandleTrainUploadAsync(captured, projectName)),
-                    ("Never mind", () => Task.CompletedTask)
+                await ShowTrainConfirmAsync(filePath, projectName, sizeMB
                 );
                 return;
             }
