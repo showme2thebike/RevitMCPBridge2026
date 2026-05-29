@@ -17,10 +17,19 @@ namespace RevitMCPBridge2026
     {
         [MCPMethod("executeRevitScript", Category = "Script",
             Description = "Compile and run an ad-hoc C# snippet against the live Revit document. " +
-                          "The snippet is the body of a method with signature " +
-                          "Execute(UIApplication uiApp, Document doc). " +
+                          "The snippet is the body of Execute(UIApplication uiApp, Document doc). " +
                           "Return any value — it will be JSON-serialized in the result field. " +
-                          "Wrap any document mutations in a Transaction block.")]
+                          "Wrap all document mutations in a Transaction block. " +
+                          "REVIT 2026 API — CRITICAL RULES: " +
+                          "(1) Use GroupTypeId.IdentityData NOT BuiltInParameterGroup (removed in 2026). " +
+                          "(2) Use element.LookupParameter(\"name\") NOT get_Parameter(new ElementId(id)) — ElementId overload is invalid for user-defined params. " +
+                          "(3) Always check param.StorageType before calling Set(): StorageType.String→p.Set(string), StorageType.Integer→p.Set(int), StorageType.Double→p.Set(double). " +
+                          "(4) For sort-order string params, zero-pad: \"01\",\"02\",...\"30\" — alpha sort is only correct with consistent width. " +
+                          "(5) ElementId always: new ElementId(int) — no implicit int conversion. " +
+                          "(6) doc.Export() for PDF is synchronous and may take 60-300s for large sheet sets — MCP may time out but Revit will finish. " +
+                          "(7) PDF export individual sheets: Revit may ignore PDFExportOptions.FileName on Desktop/profile paths — export to C:\\Temp then copy. " +
+                          "(8) ScheduleSheetInstance.Create() for schedules on sheets — NOT Viewport.Create(). " +
+                          "(9) Shared param binding: doc.ParameterBindings.Insert(definition, binding, GroupTypeId.IdentityData).")]
         public static string ExecuteRevitScript(UIApplication uiApp, JObject parameters)
         {
             try

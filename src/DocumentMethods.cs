@@ -2198,32 +2198,58 @@ namespace RevitMCPBridge
                 }
                 else
                 {
-                    // Export each sheet individually
-                    foreach (var sheet in sheetsToExport)
+                    // Export each sheet individually via a temp dir, then rename+move.
+                    // Revit 2026 ignores PDFExportOptions.FileName for individual-sheet exports
+                    // on Desktop/user-profile paths, producing "SheetName.pdf" only and causing
+                    // overwrites when two sheets share a name. Temp dir reliably gets "Num - Name.pdf".
+                    var batchTempDir = Path.Combine(Path.GetTempPath(), "BimMonkeyPDF_" + Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(batchTempDir);
+                    try
                     {
-                        try
+                        foreach (var sheet in sheetsToExport)
                         {
-                            var fileName = fileNamePattern
-                                .Replace("{SheetNumber}", SanitizeFileName(sheet.SheetNumber))
-                                .Replace("{SheetName}", SanitizeFileName(sheet.Name));
-
-                            pdfOptions.FileName = fileName;
-                            var sheetList = new List<ElementId> { sheet.Id };
-                            doc.Export(outputFolder, sheetList, pdfOptions);
-
-                            exportedFiles.Add(new
+                            try
                             {
-                                sheetId = sheet.Id.Value,
-                                sheetNumber = sheet.SheetNumber,
-                                sheetName = sheet.Name,
-                                fileName = fileName + ".pdf",
-                                fullPath = Path.Combine(outputFolder, fileName + ".pdf")
-                            });
+                                var desiredFileName = fileNamePattern
+                                    .Replace("{SheetNumber}", SanitizeFileName(sheet.SheetNumber))
+                                    .Replace("{SheetName}", SanitizeFileName(sheet.Name));
+                                var destPath = Path.Combine(outputFolder, desiredFileName + ".pdf");
+
+                                var before = new HashSet<string>(Directory.GetFiles(batchTempDir, "*.pdf"));
+                                pdfOptions.FileName = desiredFileName;
+                                doc.Export(batchTempDir, new List<ElementId> { sheet.Id }, pdfOptions);
+
+                                var created = Directory.GetFiles(batchTempDir, "*.pdf")
+                                    .Where(f => !before.Contains(f))
+                                    .ToList();
+
+                                if (created.Count >= 1)
+                                {
+                                    File.Copy(created[0], destPath, overwrite: true);
+                                    File.Delete(created[0]);
+                                    exportedFiles.Add(new
+                                    {
+                                        sheetId = sheet.Id.Value,
+                                        sheetNumber = sheet.SheetNumber,
+                                        sheetName = sheet.Name,
+                                        fileName = desiredFileName + ".pdf",
+                                        fullPath = destPath
+                                    });
+                                }
+                                else
+                                {
+                                    failedSheets.Add(new { sheetId = sheet.Id.Value, sheetNumber = sheet.SheetNumber, error = "No PDF file created" });
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                failedSheets.Add(new { sheetId = sheet.Id.Value, sheetNumber = sheet.SheetNumber, error = ex.Message });
+                            }
                         }
-                        catch (Exception ex)
-                        {
-                            failedSheets.Add(new { sheetId = sheet.Id.Value, sheetNumber = sheet.SheetNumber, error = ex.Message });
-                        }
+                    }
+                    finally
+                    {
+                        try { Directory.Delete(batchTempDir, recursive: true); } catch { }
                     }
                 }
 

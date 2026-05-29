@@ -3831,7 +3831,9 @@ namespace RevitMCPBridge
                             // Heavy batch operations need more than the default 5 minutes
                             var methodTimeoutMs = method == "executePlan" || method == "runFinishingPhase"
                                 ? 1_800_000   // 30 minutes
-                                : 300_000;    // 5 minutes (default)
+                                : method == "exportSheetsToPDF" || method == "batchExportPDF" || method == "executeRevitScript"
+                                    ? 600_000 // 10 minutes — PDF export and scripts can run long ops
+                                    : 300_000;    // 5 minutes (default)
                             return await ExecuteInRevitContext(uiApp =>
                                 Helpers.MethodDispatchWrapper.Execute(method, registeredMethod, uiApp, parameters),
                                 methodTimeoutMs);
