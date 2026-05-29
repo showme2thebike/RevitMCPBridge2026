@@ -4785,6 +4785,38 @@ namespace RevitMCPBridge2026.AgentFramework
                 return;
             }
 
+            // ── Training upload: conversational intent ───────────────────────────────
+            // Catches phrases like "upload this PDF", "add to training", "let's train on this"
+            var _msgLower = message.ToLowerInvariant();
+            var _trainIntent =
+                (_msgLower.Contains("upload") && (_msgLower.Contains("pdf") || _msgLower.Contains("plan") || _msgLower.Contains("permit") || _msgLower.Contains("set") || _msgLower.Contains("drawing"))) ||
+                (_msgLower.Contains("add") && (_msgLower.Contains("train") || _msgLower.Contains("library"))) ||
+                (_msgLower.Contains("train") && (_msgLower.Contains("this") || _msgLower.Contains("on") || _msgLower.Contains("with"))) ||
+                (_msgLower.Contains("upload") && _msgLower.Contains("train")) ||
+                _msgLower == "upload" || _msgLower == "train";
+
+            if (_trainIntent && !message.StartsWith("/"))
+            {
+                _inputTextBox.Text = "";
+                var dlg2 = new OpenFileDialog
+                {
+                    Title       = "Select permit set PDF to upload to Training Library",
+                    Filter      = "PDF files (*.pdf)|*.pdf",
+                    Multiselect = false,
+                };
+                if (dlg2.ShowDialog() != true) return;
+                var fp2 = dlg2.FileName;
+                var fn2 = Path.GetFileNameWithoutExtension(fp2);
+                var sz2 = new FileInfo(fp2).Length / (1024.0 * 1024.0);
+                AddUserMessage(message);
+                AddConfirmMessage(
+                    $"Upload \"{fn2}\" ({sz2:F1} MB) to your Training Library?",
+                    ("Upload", async () => await HandleTrainUploadAsync(fp2, fn2)),
+                    ("Never mind", () => Task.CompletedTask)
+                );
+                return;
+            }
+
             // ── Training upload: /train /upload /training ────────────────────────────
             var _trainAliases = new[] { "/train", "/upload", "/training" };
             var _matchedTrain = _trainAliases.FirstOrDefault(a =>
