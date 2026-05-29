@@ -365,22 +365,61 @@ namespace RevitMCPBridge2026.AgentFramework
             var border = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
-                Padding = new Thickness(16)
+                Padding = new Thickness(14, 10, 14, 10)
             };
 
-            var grid = new Grid();
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            // Outer stack: [title row] then [status rows]
+            var outer = new StackPanel();
 
-            // Title and status
-            var titleStack = new StackPanel();
+            // ── Row 1: title + compact icon buttons ──────────────────────────────
+            var titleRow = new Grid();
+            titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
             var title = new TextBlock
             {
                 Text = "BIM Monkey - Banana Chat",
                 Foreground = Brushes.White,
-                FontSize = 18,
-                FontWeight = FontWeights.SemiBold
+                FontSize = 16,
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
             };
+            Grid.SetColumn(title, 0);
+            titleRow.Children.Add(title);
+
+            // Compact icon buttons — small padding so they don't crowd the text
+            Button MakeIconBtn(string icon, string tip, Action onClick)
+            {
+                var b = new Button
+                {
+                    Content = icon,
+                    ToolTip = tip,
+                    Padding = new Thickness(7, 3, 7, 3),
+                    Margin = new Thickness(4, 0, 0, 0),
+                    FontSize = 13,
+                    Background = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
+                    Foreground = Brushes.White,
+                    BorderThickness = new Thickness(0),
+                    Cursor = System.Windows.Input.Cursors.Hand,
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                b.Click += (s, e) => onClick();
+                return b;
+            }
+
+            var btnRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var clearButton = MakeIconBtn("✕", "Clear chat history", ClearChat);
+            btnRow.Children.Add(clearButton);
+            btnRow.Children.Add(MakeIconBtn("⚙", "Settings — API keys, model selection", ShowSettingsDialog));
+            btnRow.Children.Add(MakeIconBtn("⊞", "Relock — lock Banana Chat to the currently active Revit document", RelockDocument));
+            _pipePauseButton = MakeIconBtn("⏸", "Pause Pipe — temporarily stops the MCP connection so Revit dialogs (VG, Revisions, etc.) can open. Click ▶ to resume.", TogglePipe);
+            btnRow.Children.Add(_pipePauseButton);
+            Grid.SetColumn(btnRow, 1);
+            titleRow.Children.Add(btnRow);
+
+            outer.Children.Add(titleRow);
+
+            // ── Row 2: status + stats + model (full width, no buttons competing) ─
             _statusText = new TextBlock
             {
                 Text = "Ready",
@@ -388,71 +427,28 @@ namespace RevitMCPBridge2026.AgentFramework
                 FontSize = 12,
                 Margin = new Thickness(0, 4, 0, 0)
             };
-            _elapsedText = new TextBlock
-            {
-                Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
-                FontSize = 11,
-            };
-            _tokenText = new TextBlock
-            {
-                Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
-                FontSize = 11,
-                Margin = new Thickness(10, 0, 0, 0)
-            };
-            _costText = new TextBlock
-            {
-                Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
-                FontSize = 11,
-                Margin = new Thickness(10, 0, 0, 0)
-            };
+            outer.Children.Add(_statusText);
+
+            _elapsedText = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)), FontSize = 11 };
+            _tokenText   = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)), FontSize = 11, Margin = new Thickness(10, 0, 0, 0) };
+            _costText    = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)), FontSize = 11, Margin = new Thickness(10, 0, 0, 0) };
             var statsRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 0) };
             statsRow.Children.Add(_elapsedText);
             statsRow.Children.Add(_tokenText);
             statsRow.Children.Add(_costText);
-            titleStack.Children.Add(title);
-            titleStack.Children.Add(_statusText);
-            titleStack.Children.Add(statsRow);
+            outer.Children.Add(statsRow);
+
             _lockedDocLabel = new TextBlock
             {
                 Text = string.IsNullOrEmpty(_lockedDocTitle) ? "Model: none" : $"Model: {_lockedDocTitle}",
                 Foreground = new SolidColorBrush(Color.FromRgb(100, 180, 100)),
                 FontSize = 11,
-                Margin = new Thickness(0, 2, 0, 0)
+                Margin = new Thickness(0, 2, 0, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis,
             };
-            titleStack.Children.Add(_lockedDocLabel);
-            Grid.SetColumn(titleStack, 0);
-            grid.Children.Add(titleStack);
+            outer.Children.Add(_lockedDocLabel);
 
-            // Buttons
-            var buttonStack = new StackPanel { Orientation = Orientation.Horizontal };
-
-            var clearButton = CreateButton("✕", false);
-            clearButton.ToolTip = "Clear chat history";
-            clearButton.Click += (s, e) => ClearChat();
-            buttonStack.Children.Add(clearButton);
-
-            var settingsButton = CreateButton("⚙", false);
-            settingsButton.Margin = new Thickness(8, 0, 0, 0);
-            settingsButton.ToolTip = "Settings — API keys, model selection";
-            settingsButton.Click += (s, e) => ShowSettingsDialog();
-            buttonStack.Children.Add(settingsButton);
-
-            var relockButton = CreateButton("⊞", false);
-            relockButton.Margin = new Thickness(8, 0, 0, 0);
-            relockButton.ToolTip = "Relock — lock Banana Chat to the currently active Revit document";
-            relockButton.Click += (s, e) => RelockDocument();
-            buttonStack.Children.Add(relockButton);
-
-            _pipePauseButton = CreateButton("⏸", false);
-            _pipePauseButton.Margin = new Thickness(8, 0, 0, 0);
-            _pipePauseButton.ToolTip = "Pause Pipe — temporarily stops the MCP connection so Revit dialogs (VG, Revisions, etc.) can open. Click ▶ to resume.";
-            _pipePauseButton.Click += (s, e) => TogglePipe();
-            buttonStack.Children.Add(_pipePauseButton);
-
-            Grid.SetColumn(buttonStack, 1);
-            grid.Children.Add(buttonStack);
-
-            border.Child = grid;
+            border.Child = outer;
             return border;
         }
 
