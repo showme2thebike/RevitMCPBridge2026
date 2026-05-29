@@ -132,23 +132,12 @@ ElementTransformUtils.CopyElements(sourceView, elementIds, targetView, Transform
 - Revit **will complete** the export even after MCP times out — check the output folder
 - `executeRevitScript` and `exportSheetsToPDF` now have 600s timeout in wrapper
 
-### Combined PDF via doc.Export()
-```csharp
-var pdfOptions = new PDFExportOptions
-{
-    FileName = "CombinedOutput",  // no extension
-    Combine = true,
-    PaperFormat = ExportPaperFormat.Default,
-    ZoomType = ZoomType.Zoom,
-    ZoomPercentage = 100,
-    ExportQuality = PDFExportQualityType.DPI300,
-    ColorDepth = ColorDepthType.Color,
-    RasterQuality = RasterQualityType.High
-};
-var sheetIds = sheets.Select(s => s.Id).ToList();
-doc.Export(outputFolder, sheetIds, pdfOptions);
-// File lands at: outputFolder\CombinedOutput.pdf
-```
+### Combined PDF — BROKEN in Revit 2026
+- `PDFExportOptions.Combine = true` does **not** produce a multi-page PDF when multiple sheet IDs are passed
+- Revit 2026 exports each sheet individually, overwriting the same filename each time — result is a 1-page PDF of the last sheet only
+- **Do not use `combineIntoSingle:true`** in `exportSheetsToPDF` — it will silently produce garbage
+- `exportSheetsToPDF` now returns an error if `combineIntoSingle:true` is requested
+- **Workaround**: export individual PDFs (`combineIntoSingle:false`), then merge with a PDF utility outside Revit
 
 ## Sheet Parameters and Scheduling
 

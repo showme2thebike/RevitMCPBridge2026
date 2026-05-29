@@ -2176,25 +2176,17 @@ namespace RevitMCPBridge
 
                 if (combineIntoSingle)
                 {
-                    // Export all sheets to a single PDF
-                    var sheetIds = sheetsToExport.Select(s => s.Id).ToList();
-
-                    try
-                    {
-                        pdfOptions.FileName = combinedFileName;
-                        doc.Export(outputFolder, sheetIds, pdfOptions);
-
-                        exportedFiles.Add(new
-                        {
-                            fileName = combinedFileName + ".pdf",
-                            fullPath = Path.Combine(outputFolder, combinedFileName + ".pdf"),
-                            sheetCount = sheetsToExport.Count
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        return ResponseBuilder.FromException(ex).Build();
-                    }
+                    // Revit 2026 bug: PDFExportOptions.Combine=true does NOT produce a multi-page
+                    // PDF when multiple sheet IDs are passed. It exports each sheet individually,
+                    // overwriting the same filename each time — result is a 1-page file of the
+                    // last sheet. Return an actionable error rather than silently produce garbage.
+                    return ResponseBuilder.Error(
+                        "combineIntoSingle is not supported in Revit 2026 — PDFExportOptions.Combine " +
+                        "overwrites the output file for each sheet, leaving only the last sheet. " +
+                        "Use combineIntoSingle:false to export individual PDFs per sheet instead. " +
+                        "To merge them into one file afterward, use a PDF utility outside Revit.")
+                        .With("workaround", "Set combineIntoSingle to false. Individual PDFs will be named {SheetNumber} - {SheetName}.pdf.")
+                        .Build();
                 }
                 else
                 {
