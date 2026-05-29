@@ -10,6 +10,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.IO;
 using System.IO.Pipes;
+using Microsoft.Win32;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Autodesk.Revit.UI;
@@ -227,6 +228,34 @@ namespace RevitMCPBridge2026.AgentFramework
                 SaveSession();
                 DisconnectMCP();
                 _thinkingTimer?.Stop();
+            };
+
+            // Drag-and-drop PDF files directly into Banana Chat → upload to Training Library
+            AllowDrop = true;
+            DragEnter += (s, e) =>
+            {
+                if (e.Data.GetDataPresent(DataFormats.FileDrop))
+                {
+                    var files = e.Data.GetData(DataFormats.FileDrop) as string[];
+                    if (files != null && files.Any(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)))
+                        e.Effects = DragDropEffects.Copy;
+                    else
+                        e.Effects = DragDropEffects.None;
+                }
+                else
+                {
+                    e.Effects = DragDropEffects.None;
+                }
+                e.Handled = true;
+            };
+            Drop += async (s, e) =>
+            {
+                if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+                var files = e.Data.GetData(DataFormats.FileDrop) as string[];
+                var pdf = files?.FirstOrDefault(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
+                if (pdf == null) return;
+                e.Handled = true;
+                await HandleTrainUploadAsync(pdf, null);
             };
         }
 
@@ -3553,6 +3582,80 @@ namespace RevitMCPBridge2026.AgentFramework
         }
 
         /// <summary>
+        /// Upload a local PDF to the Training Library via /api/training/upload-pdf-raw.
+        /// Called by drag-and-drop or the /train command.
+        /// </summary>
+        private async Task HandleTrainUploadAsync(string filePath, string overrideName)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+            {
+                AddSystemMessage("No BIM Monkey API key configured — cannot upload to Training Library.");
+                return;
+            }
+            if (!File.Exists(filePath))
+            {
+                AddSystemMessage($"File not found: {filePath}");
+                return;
+            }
+
+            var fileName  = Path.GetFileNameWithoutExtension(filePath);
+            var projectName = string.IsNullOrWhiteSpace(overrideName) ? fileName : overrideName.Trim();
+            var fileSizeMB = new FileInfo(filePath).Length / (1024.0 * 1024.0);
+
+            AddSystemMessage($"Uploading \"{projectName}\" ({fileSizeMB:F1} MB) to Training Library…");
+
+            try
+            {
+                byte[] pdfBytes;
+                try { pdfBytes = File.ReadAllBytes(filePath); }
+                catch (Exception ex) { AddSystemMessage($"Could not read file: {ex.Message}"); return; }
+
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    client.Timeout = TimeSpan.FromMinutes(5); // rendering 25 pages takes time
+
+                    var form = new System.Net.Http.MultipartFormDataContent();
+                    form.Add(new System.Net.Http.ByteArrayContent(pdfBytes)
+                    {
+                        Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/pdf") }
+                    }, "file", Path.GetFileName(filePath));
+                    form.Add(new System.Net.Http.StringContent(projectName),    "projectName");
+                    form.Add(new System.Net.Http.StringContent("residential"),  "buildingType");
+
+                    var resp = await client.PostAsync(
+                        "https://bimmonkey-production.up.railway.app/api/training/upload-pdf-raw", form);
+
+                    var body = await resp.Content.ReadAsStringAsync();
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        JObject result;
+                        try { result = JObject.Parse(body); } catch { result = null; }
+                        var pageCount = result?["pageCount"]?.Value<int>() ?? 0;
+                        var jobId     = result?["jobId"]?.ToString() ?? "?";
+                        AddSystemMessage(
+                            $"Uploaded {pageCount} pages to Training Library (job {jobId}). " +
+                            "Check the Training tab in the web app to review and approve sheets.");
+                    }
+                    else if (resp.StatusCode == System.Net.HttpStatusCode.Conflict)
+                    {
+                        var err = JObject.Parse(body)?["error"]?.ToString() ?? body;
+                        AddSystemMessage($"Already uploaded: {err}");
+                    }
+                    else
+                    {
+                        var err = JObject.Parse(body)?["error"]?.ToString() ?? body;
+                        AddSystemMessage($"Upload failed ({(int)resp.StatusCode}): {err}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AddSystemMessage($"Upload error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// POST a firm-level memory note to /api/firms/memory.
         /// Called automatically when memoryStore is used with memoryType "firm" or importance >= 8.
         /// </summary>
@@ -4618,6 +4721,23 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             var message = _inputTextBox.Text.Trim();
             if (string.IsNullOrEmpty(message) || _isProcessing || _subscriptionBlocked) return;
+
+            // /train [project name] — pick a PDF and upload it to the Training Library
+            if (message.Equals("/train", StringComparison.OrdinalIgnoreCase) ||
+                message.StartsWith("/train ", StringComparison.OrdinalIgnoreCase))
+            {
+                var customName = message.Length > 6 ? message.Substring(6).Trim() : null;
+                _inputTextBox.Text = "";
+                var dlg = new OpenFileDialog
+                {
+                    Title       = "Select permit set PDF to upload to Training Library",
+                    Filter      = "PDF files (*.pdf)|*.pdf",
+                    Multiselect = false,
+                };
+                if (dlg.ShowDialog() == true)
+                    await HandleTrainUploadAsync(dlg.FileName, customName);
+                return;
+            }
 
             // /remember --firm <text> — save to firm-wide memory (all projects)
             if (message.StartsWith("/remember --firm ", StringComparison.OrdinalIgnoreCase))
