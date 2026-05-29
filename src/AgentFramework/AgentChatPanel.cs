@@ -251,17 +251,14 @@ namespace RevitMCPBridge2026.AgentFramework
                 }
                 e.Handled = true;
             };
-            Drop += async (s, e) =>
+            Drop += (s, e) =>
             {
                 if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
                 var files = e.Data.GetData(DataFormats.FileDrop) as string[];
                 var pdf = files?.FirstOrDefault(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
                 if (pdf == null) return;
                 e.Handled = true;
-
-                var fileName = Path.GetFileNameWithoutExtension(pdf);
-                var sizeMB   = new FileInfo(pdf).Length / (1024.0 * 1024.0);
-                await ShowTrainConfirmAsync(pdf, fileName, sizeMB);
+                ShowPdfChoiceDialog(pdf);
             };
         }
 
@@ -1099,9 +1096,7 @@ namespace RevitMCPBridge2026.AgentFramework
             if (ext == ".pdf")
             {
                 // Route PDFs to Training Library upload (same flow as drag-and-drop)
-                var fileName = Path.GetFileNameWithoutExtension(dlg.FileName);
-                var sizeMB   = new FileInfo(dlg.FileName).Length / (1024.0 * 1024.0);
-                await ShowTrainConfirmAsync(dlg.FileName, fileName, sizeMB);
+                ShowPdfChoiceDialog(dlg.FileName);
             }
             else
             {
@@ -3602,6 +3597,90 @@ namespace RevitMCPBridge2026.AgentFramework
         /// Upload a local PDF to the Training Library via /api/training/upload-pdf-raw.
         /// Called by drag-and-drop or the /train command.
         /// </summary>
+        // Shows 3-way choice: reference in chat / upload to training / never mind
+        private void ShowPdfChoiceDialog(string filePath)
+        {
+            var name   = Path.GetFileNameWithoutExtension(filePath);
+            var sizeMB = new FileInfo(filePath).Length / (1024.0 * 1024.0);
+            var cap    = filePath;
+            AddConfirmMessage(
+                $"What do you want to do with \"{name}\" ({sizeMB:F1} MB)?",
+                ("Reference in chat",  async () => await HandlePdfReferenceAsync(cap)),
+                ("Upload to Training", async () => await ShowTrainConfirmAsync(cap, name, sizeMB)),
+                ("Never mind",         () => Task.CompletedTask)
+            );
+        }
+
+        // Renders PDF via backend and attaches pages as images to the Claude context
+        private async Task HandlePdfReferenceAsync(string filePath)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+            {
+                AddSystemMessage("No BIM Monkey API key — cannot render PDF.");
+                return;
+            }
+            var name = Path.GetFileNameWithoutExtension(filePath);
+            AddSystemMessage($"Rendering \"{name}\"…");
+            try
+            {
+                byte[] pdfBytes;
+                try { pdfBytes = File.ReadAllBytes(filePath); }
+                catch (Exception ex) { AddSystemMessage($"Could not read file: {ex.Message}"); return; }
+
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    client.Timeout = TimeSpan.FromMinutes(3);
+
+                    var form = new System.Net.Http.MultipartFormDataContent();
+                    form.Add(new System.Net.Http.ByteArrayContent(pdfBytes)
+                    {
+                        Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/pdf") }
+                    }, "file", Path.GetFileName(filePath));
+
+                    var resp = await client.PostAsync(
+                        "https://bimmonkey-production.up.railway.app/api/pdf/render", form);
+
+                    var body = await resp.Content.ReadAsStringAsync();
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        var result    = JObject.Parse(body);
+                        var pages     = result["pages"] as Newtonsoft.Json.Linq.JArray;
+                        var pageCount = result["pageCount"]?.Value<int>() ?? 0;
+                        var returned  = result["returned"]?.Value<int>() ?? pages?.Count ?? 0;
+
+                        if (pages != null && pages.Count > 0)
+                        {
+                            for (int i = 0; i < pages.Count; i++)
+                                AddAttachment(new AttachedImage
+                                {
+                                    Base64Data = pages[i].ToString(),
+                                    MediaType  = "image/png",
+                                    Label      = $"{name} p{i + 1}",
+                                });
+                            var suffix = returned < pageCount
+                                ? $" (first {returned} of {pageCount} pages attached)"
+                                : $" ({pageCount} page{(pageCount == 1 ? "" : "s")} attached)";
+                            AddSystemMessage($"\"{name}\"{suffix} — Claude can see it. Ask away.");
+                        }
+                        else
+                        {
+                            AddSystemMessage("PDF rendered but contained no pages.");
+                        }
+                    }
+                    else
+                    {
+                        var err = JObject.Parse(body)?["error"]?.ToString() ?? body;
+                        AddSystemMessage($"PDF render failed: {err}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AddSystemMessage($"Reference error: {ex.Message}");
+            }
+        }
+
         private async Task ShowTrainConfirmAsync(string filePath, string projectName, double sizeMB)
         {
             // Quick duplicate check before showing the confirm dialog
@@ -4851,7 +4930,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 var fn2 = Path.GetFileNameWithoutExtension(fp2);
                 var sz2 = new FileInfo(fp2).Length / (1024.0 * 1024.0);
                 AddUserMessage(message);
-                await ShowTrainConfirmAsync(fp2, fn2, sz2);
+                ShowPdfChoiceDialog(fp2);
                 return;
             }
 
