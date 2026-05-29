@@ -946,6 +946,9 @@ namespace RevitMCPBridge
 
                 var point = new XYZ(x, y, 0);
 
+                bool switchToSched = parameters["switchTo"]?.Value<bool>() ?? true;
+                if (switchToSched) SwitchToView(uiApp.ActiveUIDocument, sheet);
+
                 using (var trans = new Transaction(doc, "Place Schedule on Sheet"))
                 {
                     trans.Start();
@@ -5022,6 +5025,9 @@ namespace RevitMCPBridge
                     sheet.Name = sheetName;
 
                     trans.Commit();
+
+                    bool switchToAuto = parameters["switchTo"]?.Value<bool>() ?? true;
+                    if (switchToAuto) SwitchToView(uiApp.ActiveUIDocument, sheet);
 
                     // Get sheet dimensions
                     var titleblockInstance = new FilteredElementCollector(doc, sheet.Id)
