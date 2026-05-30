@@ -29,7 +29,11 @@ namespace RevitMCPBridge2026
                           "(6) doc.Export() for PDF is synchronous and may take 60-300s for large sheet sets — MCP may time out but Revit will finish. " +
                           "(7) PDF export individual sheets: Revit may ignore PDFExportOptions.FileName on Desktop/profile paths — export to C:\\Temp then copy. " +
                           "(8) ScheduleSheetInstance.Create() for schedules on sheets — NOT Viewport.Create(). " +
-                          "(9) Shared param binding: doc.ParameterBindings.Insert(definition, binding, GroupTypeId.IdentityData).")]
+                          "(9) Shared param binding: doc.ParameterBindings.Insert(definition, binding, GroupTypeId.IdentityData). " +
+                          "(10) LinePattern: always call SetSegments() to persist a new dash pattern — GetSegments().Add() alone has no effect. " +
+                          "(11) LinePattern segment lengths are paper-space INCHES, NOT model-space feet — for a 1/8\" dash, pass 0.125 regardless of view scale. " +
+                          "(12) TextNote.Create signature: (doc, viewId, XYZ, text, TextNoteOptions) — set opts.TypeId to specify the text type; the type is NOT a separate argument. " +
+                          "(13) No local functions inside Execute() — nested method definitions cause null-reference exceptions at runtime; use inline loops or lambdas instead.")]
         public static string ExecuteRevitScript(UIApplication uiApp, JObject parameters)
         {
             try

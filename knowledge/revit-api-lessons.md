@@ -150,6 +150,30 @@ ElementTransformUtils.CopyElements(sourceView, elementIds, targetView, Transform
 - To sort by a custom string field: set all values to zero-padded strings of equal width
 - `"01"` through `"30"` sorts correctly; `"1"` through `"30"` does not (`"2"` > `"10"` alphabetically)
 
+## executeRevitScript — C# Scripting Constraints
+
+### LinePattern — SetSegments() Required
+- `LinePattern.SetSegments(segments)` is required to persist a new dash pattern
+- `linePattern.GetSegments().Add(segment)` alone has **no effect** — changes are discarded
+- Always call `SetSegments()` with the full list after building the segment array
+
+### LinePattern — Segment Lengths Are Paper-Space
+- Segment lengths are in **paper-space inches**, NOT model-space feet
+- For a 1/8" dash: pass `0.125` regardless of view scale
+- This is the opposite of model geometry (walls, floors) which use feet
+- Critical: using model-space values produces dashes that are 96× too large at 1"=8' scale
+
+### TextNote.Create() Signature
+- Correct: `TextNote.Create(doc, viewId, XYZ position, string text, TextNoteOptions opts)`
+- Set `opts.TypeId = textNoteTypeElementId` to specify the text type
+- The text type is NOT a separate argument — it is always passed via `TextNoteOptions`
+- Passing it as a 6th argument causes a compile error (overload does not exist)
+
+### No Local Functions Inside Execute()
+- Nested method definitions (C# local functions) inside `Execute()` cause null-reference exceptions at runtime in the Roslyn host
+- Use inline loops, lambdas, or `Func<>` delegates instead
+- If reuse is needed, duplicate the logic inline — do NOT define a local `void Helper(...)` function
+
 ## Best Practices
 
 1. Always verify element placement with screenshots
