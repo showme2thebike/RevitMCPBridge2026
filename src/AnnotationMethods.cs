@@ -491,6 +491,18 @@ namespace RevitMCPBridge2026
 
                 // Parse boundary points
                 var boundaryPointsArray = parameters["boundaryPoints"].ToObject<double[][]>();
+
+                // Ensure CCW winding — Revit needs CCW for outward-pointing bumps
+                double signedArea = 0;
+                for (int i = 0; i < boundaryPointsArray.Length; i++)
+                {
+                    var p1 = boundaryPointsArray[i];
+                    var p2 = boundaryPointsArray[(i + 1) % boundaryPointsArray.Length];
+                    signedArea += (p1[0] * p2[1]) - (p2[0] * p1[1]);
+                }
+                if (signedArea < 0)
+                    Array.Reverse(boundaryPointsArray);
+
                 var curveList = new List<Curve>();
 
                 for (int i = 0; i < boundaryPointsArray.Length; i++)
@@ -661,6 +673,18 @@ namespace RevitMCPBridge2026
 
                 // Parse new boundary points
                 var boundaryPointsArray = parameters["newBoundaryPoints"].ToObject<double[][]>();
+
+                // Ensure CCW winding — Revit needs CCW for outward-pointing bumps
+                double signedArea = 0;
+                for (int i = 0; i < boundaryPointsArray.Length; i++)
+                {
+                    var p1 = boundaryPointsArray[i];
+                    var p2 = boundaryPointsArray[(i + 1) % boundaryPointsArray.Length];
+                    signedArea += (p1[0] * p2[1]) - (p2[0] * p1[1]);
+                }
+                if (signedArea < 0)
+                    Array.Reverse(boundaryPointsArray);
+
                 var curveList = new List<Curve>();
 
                 for (int i = 0; i < boundaryPointsArray.Length; i++)

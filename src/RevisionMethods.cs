@@ -340,6 +340,17 @@ namespace RevitMCPBridge
                     failureOptions.SetFailuresPreprocessor(new WarningSwallower());
                     trans.SetFailureHandlingOptions(failureOptions);
 
+                    // Ensure CCW winding — Revit needs CCW for outward-pointing bumps
+                    double signedArea = 0;
+                    for (int i = 0; i < points.Length; i++)
+                    {
+                        var p1 = points[i];
+                        var p2 = points[(i + 1) % points.Length];
+                        signedArea += (p1[0] * p2[1]) - (p2[0] * p1[1]);
+                    }
+                    if (signedArea < 0)
+                        Array.Reverse(points);
+
                     // Create list of curves from points
                     var curves = new List<Curve>();
                     for (int i = 0; i < points.Length; i++)

@@ -1908,6 +1908,17 @@ namespace RevitMCPBridge
                 {
                     trans.Start();
 
+                    // Ensure CCW winding — Revit needs CCW for outward-pointing bumps
+                    double signedArea = 0;
+                    for (int i = 0; i < pointsArray.Count; i++)
+                    {
+                        var p1 = pointsArray[i];
+                        var p2 = pointsArray[(i + 1) % pointsArray.Count];
+                        signedArea += (p1["x"] * p2["y"]) - (p2["x"] * p1["y"]);
+                    }
+                    if (signedArea < 0)
+                        pointsArray.Reverse();
+
                     // Create curves from points
                     var curves = new List<Curve>();
                     for (int i = 0; i < pointsArray.Count; i++)
