@@ -1916,7 +1916,7 @@ namespace RevitMCPBridge
                         var p2 = pointsArray[(i + 1) % pointsArray.Count];
                         signedArea += (p1["x"] * p2["y"]) - (p2["x"] * p1["y"]);
                     }
-                    if (signedArea < 0)
+                    if (signedArea > 0)
                         pointsArray.Reverse();
 
                     // Create curves from points

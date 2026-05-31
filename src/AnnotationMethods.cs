@@ -500,7 +500,7 @@ namespace RevitMCPBridge2026
                     var p2 = boundaryPointsArray[(i + 1) % boundaryPointsArray.Length];
                     signedArea += (p1[0] * p2[1]) - (p2[0] * p1[1]);
                 }
-                if (signedArea < 0)
+                if (signedArea > 0)
                     Array.Reverse(boundaryPointsArray);
 
                 var curveList = new List<Curve>();
@@ -682,7 +682,7 @@ namespace RevitMCPBridge2026
                     var p2 = boundaryPointsArray[(i + 1) % boundaryPointsArray.Length];
                     signedArea += (p1[0] * p2[1]) - (p2[0] * p1[1]);
                 }
-                if (signedArea < 0)
+                if (signedArea > 0)
                     Array.Reverse(boundaryPointsArray);
 
                 var curveList = new List<Curve>();
