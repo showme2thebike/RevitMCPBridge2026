@@ -21,7 +21,9 @@ namespace RevitMCPBridge
         private CancellationTokenSource _cancellationTokenSource;
         private Task _serverTask;
         private bool _isRunning;
-#if REVIT2025
+#if REVIT2024
+        private readonly string _pipeName = "RevitMCPBridge2024";
+#elif REVIT2025
         private readonly string _pipeName = "RevitMCPBridge2025";
 #else
         private readonly string _pipeName = "RevitMCPBridge2026";
