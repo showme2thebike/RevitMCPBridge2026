@@ -174,6 +174,45 @@ ElementTransformUtils.CopyElements(sourceView, elementIds, targetView, Transform
 - Use inline loops, lambdas, or `Func<>` delegates instead
 - If reuse is needed, duplicate the logic inline — do NOT define a local `void Helper(...)` function
 
+### Parameter Name Is `"code"` Not `"script"`
+- Correct: `executeRevitScript({ code: "..." })`
+- `"script"` returns an immediate error — confirmed Revit 2026
+
+### `doc` Is Pre-Injected — Do Not Redeclare
+- `doc` and `uiApp` are available without declaration
+- `using (var doc = ...)` causes a scope conflict and compile error
+- `RevitApp` does not exist in the script context — never reference it
+
+### `ElementId.IntegerValue` Removed in Revit 2026
+- `.IntegerValue` no longer exists on `ElementId`
+- Use `.ToString()` for logging/display
+- For numeric comparisons, cast: `(long)(object)elementId` or compare ElementIds directly
+
+### Active View — Always Confirm ID First
+- `getViews` may return `activeView: null` — do not rely on it
+- Always identify the target view ID from a prior `getViews`, `analyzeView`, or context before passing into a script
+
+### Text Type Selection — Query by Name
+- `.FirstElement()` returns whatever type happens to be first — unreliable in multi-type models
+- Preferred pattern:
+  ```csharp
+  var textType = new FilteredElementCollector(doc)
+      .OfClass(typeof(TextNoteType))
+      .Cast<TextNoteType>()
+      .FirstOrDefault(t => t.Name.Contains("3/32"));
+  ```
+
+### Multi-Step Scripts — Use TransactionGroup
+- Two separate transactions create two undo steps in Revit history
+- Wrap related transactions in a `TransactionGroup` for a single undo step:
+  ```csharp
+  using (var tg = new TransactionGroup(doc, "Grouped Operation")) {
+      tg.Start();
+      // ... multiple transactions ...
+      tg.Assimilate();
+  }
+  ```
+
 ## Best Practices
 
 1. Always verify element placement with screenshots

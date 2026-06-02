@@ -197,7 +197,7 @@ namespace RevitMCPBridge2026.AgentFramework
             }
 
             // Always push model snapshot on load — independent of session/greeting path
-            Loaded += (s, e) => TryPushModelSnapshot();
+            Loaded += (s, e) => { TryPushModelSnapshot(); TrySyncKnowledgeFiles(); };
 
             // Diagnostic: confirm constructor ran and Loaded handler registered
             try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "snapshot_debug.txt"), $"{DateTime.Now:o} Constructor ran, Loaded handler registered\r\n"); } catch { }
@@ -4244,6 +4244,43 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 try { File.AppendAllText(log, $"{DateTime.Now:o} outer error: {ex.Message}\r\n"); } catch { }
             }
+        }
+
+        private void TrySyncKnowledgeFiles()
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+            System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    var manifestJson = await client.GetStringAsync("https://bimmonkey-production.up.railway.app/api/plugin/knowledge/manifest");
+                    var manifest = JObject.Parse(manifestJson);
+                    var files = manifest["files"] as JObject;
+                    if (files == null) return;
+                    var knowledgeDir = KnowledgeDir;
+                    if (!Directory.Exists(knowledgeDir)) return;
+                    foreach (var entry in files)
+                    {
+                        var fileName = entry.Key;
+                        var remoteHash = entry.Value?.ToString();
+                        var localPath = Path.Combine(knowledgeDir, fileName);
+                        string localHash = null;
+                        if (File.Exists(localPath))
+                        {
+                            using var sha = System.Security.Cryptography.SHA256.Create();
+                            var bytes = File.ReadAllBytes(localPath);
+                            localHash = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
+                        }
+                        if (localHash == remoteHash) continue;
+                        var content = await client.GetStringAsync(
+                            $"https://bimmonkey-production.up.railway.app/api/plugin/knowledge/{Uri.EscapeDataString(fileName)}");
+                        File.WriteAllText(localPath, content, System.Text.Encoding.UTF8);
+                    }
+                }
+                catch { /* fire and forget */ }
+            });
         }
 
         private JObject BuildSnapshotPayload(StartupSummary summary)
