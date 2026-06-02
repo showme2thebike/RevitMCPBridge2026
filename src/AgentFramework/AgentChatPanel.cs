@@ -5133,7 +5133,7 @@ HALLUCINATION PREVENTION — MANDATORY:
 
 SHEET PLACEMENT WORKFLOW — always follow this order:
 0. START HERE: callMCPMethod with method=""classifyAndPackViews"" — runs the full NCS/UDS classification pipeline and returns a pre-assigned sheet layout. The promptBlock is authoritative — do not deviate from definite assignments, only the ambiguous views are yours to place.
-1. After classifyAndPackViews, create each sheet in the order shown in promptBlock (G0.1, G1.1, A0.1, A1.1...). Use the sheetId from promptBlock as the sheet number.
+1. After classifyAndPackViews, create each sheet in the order shown in promptBlock (G0.1, G1.1, A0.1, A1.1...). Use the sheetId from promptBlock as the sheet number. When creating multiple sheets in sequence, always pass switchTo: false on every createSheet/createSheetAuto call — Revit redraws the UI on every view switch, causing visible lag for each sheet. Only switch to the final sheet when all sheets are created.
 2. For each sheet, call getSheetLayoutRecommendation passing the sheet number AND the viewIds for THAT sheet's viewports only — never pass the same view list to multiple sheets.
 3. Use the returned XY coordinates in placeViewOnSheet — do not guess positions.
 4. Call analyzeView after placement to verify — 'Is the viewport visible and correctly positioned?'
