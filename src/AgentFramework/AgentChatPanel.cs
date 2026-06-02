@@ -2472,7 +2472,11 @@ namespace RevitMCPBridge2026.AgentFramework
                 try { _mcpReader?.Dispose(); } catch { }
                 try { _mcpPipe?.Dispose();   } catch { }
 
+#if REVIT2025
+                _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2025", PipeDirection.InOut);
+#else
                 _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2026", PipeDirection.InOut);
+#endif
                 _mcpPipe.Connect(5000);
                 _mcpWriter = new StreamWriter(_mcpPipe) { AutoFlush = true };
                 _mcpReader = new StreamReader(_mcpPipe);
