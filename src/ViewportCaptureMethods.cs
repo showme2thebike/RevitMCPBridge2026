@@ -777,16 +777,16 @@ namespace RevitMCPBridge
         /// - question: What to look for or analyze in the view.
         /// </param>
         /// <param name="apiKey">Anthropic API key for Claude</param>
-        public static string AnalyzeView(UIApplication uiApp, JObject parameters, string apiKey)
+        public static string AnalyzeView(UIApplication uiApp, JObject parameters, string apiKey, string bimMonkeyApiKey = null)
         {
             try
             {
-                if (string.IsNullOrEmpty(apiKey))
+                if (string.IsNullOrEmpty(apiKey) && string.IsNullOrEmpty(bimMonkeyApiKey))
                 {
                     return JsonConvert.SerializeObject(new
                     {
                         success = false,
-                        error = "API key required for vision analysis"
+                        error = "Vision analysis requires an API key. Configure your BIM Monkey API key in Settings."
                     });
                 }
 
@@ -796,26 +796,25 @@ namespace RevitMCPBridge
                 // Capture view to base64
                 var captureParams = new JObject();
                 if (parameters["viewId"] != null)
-                {
                     captureParams["viewId"] = parameters["viewId"];
-                }
-                captureParams["width"] = 1200;  // Good resolution for analysis
+                captureParams["width"] = 1200;
                 captureParams["height"] = 800;
 
                 var captureResult = CaptureViewportToBase64(uiApp, captureParams);
                 var capture = JObject.Parse(captureResult);
 
                 if (capture["success"]?.ToObject<bool>() != true)
-                {
                     return captureResult;
-                }
 
                 var base64Image = capture["result"]["base64"].ToString();
                 var viewName = capture["result"]["viewName"]?.ToString() ?? "Unknown View";
                 var viewId = capture["result"]["viewId"]?.ToObject<int>() ?? 0;
 
-                // Call Claude's vision API
-                var analysisResult = CallClaudeVision(apiKey, base64Image, question, viewName, model);
+                string analysisResult;
+                if (!string.IsNullOrEmpty(apiKey))
+                    analysisResult = CallClaudeVision(apiKey, base64Image, question, viewName, model);
+                else
+                    analysisResult = CallViaRailwayProxy(bimMonkeyApiKey, base64Image, question, viewName, model);
 
                 return JsonConvert.SerializeObject(new
                 {
@@ -833,6 +832,29 @@ namespace RevitMCPBridge
             catch (Exception ex)
             {
                 return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        private static string CallViaRailwayProxy(string bimMonkeyApiKey, string base64Image, string question, string viewName, string model)
+        {
+            using (var client = new System.Net.Http.HttpClient())
+            {
+                client.Timeout = TimeSpan.FromSeconds(60);
+                client.DefaultRequestHeaders.Add("Authorization", $"Bearer {bimMonkeyApiKey}");
+                var payload = new JObject
+                {
+                    ["image"]    = base64Image,
+                    ["question"] = question,
+                    ["viewName"] = viewName,
+                    ["model"]    = model
+                };
+                var content = new System.Net.Http.StringContent(payload.ToString(Newtonsoft.Json.Formatting.None), System.Text.Encoding.UTF8, "application/json");
+                var response = client.PostAsync("https://bimmonkey-production.up.railway.app/api/plugin/analyze-view", content).Result;
+                var body = response.Content.ReadAsStringAsync().Result;
+                if (!response.IsSuccessStatusCode)
+                    throw new Exception($"Railway proxy error {(int)response.StatusCode}: {body}");
+                var result = JObject.Parse(body);
+                return result["analysis"]?.ToString() ?? "No analysis available";
             }
         }
 

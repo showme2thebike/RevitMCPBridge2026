@@ -2792,20 +2792,17 @@ namespace RevitMCPBridge2026.AgentFramework
             if (methodName == "compareViewToLibrary")
                 return await HandleCompareViewToLibraryAsync(parameters);
 
-            // Handle vision analysis - needs API key which we have locally
+            // Handle vision analysis — inject whichever key is available
             if (methodName == "analyzeView")
             {
-                // First capture the view via MCP, then analyze with Claude vision
                 parameters = parameters ?? new JObject();
-                parameters["apiKey"] = _apiKey;
                 parameters["model"] = _selectedModel;
-
-                // Call MCP to execute the analysis in Revit context
-                var mcpRequest = new JObject
-                {
-                    ["method"] = "analyzeView",
-                    ["params"] = parameters
-                };
+                if (!string.IsNullOrEmpty(_apiKey))
+                    parameters["apiKey"] = _apiKey;
+                else if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
+                    parameters["bimMonkeyApiKey"] = _bimMonkeyApiKey;
+                else
+                    return JsonConvert.SerializeObject(new { success = false, error = "Vision analysis requires a BIM Monkey API key. Open Settings and enter your key." });
                 return await ExecuteMCPWithRetryAsync("analyzeView", parameters);
             }
 
@@ -4341,6 +4338,61 @@ namespace RevitMCPBridge2026.AgentFramework
                             });
                         }
                         snapshot["rooms"] = roomArr;
+                    }
+                    catch { }
+
+                    // Doors (max 300)
+                    try
+                    {
+                        var doorArr = new JArray();
+                        var allDoors = new Autodesk.Revit.DB.FilteredElementCollector(doc)
+                            .OfClass(typeof(Autodesk.Revit.DB.FamilyInstance))
+                            .OfCategory(Autodesk.Revit.DB.BuiltInCategory.OST_Doors)
+                            .Cast<Autodesk.Revit.DB.FamilyInstance>()
+                            .Take(300)
+                            .ToList();
+                        foreach (var d in allDoors)
+                        {
+                            doorArr.Add(new JObject
+                            {
+                                ["doorId"]     = d.Id.Value,
+                                ["mark"]       = d.get_Parameter(Autodesk.Revit.DB.BuiltInParameter.ALL_MODEL_MARK)?.AsString(),
+                                ["familyName"] = d.Symbol?.Family?.Name ?? "Unknown",
+                                ["typeName"]   = d.Symbol?.Name ?? "Unknown",
+                                ["level"]      = (doc.GetElement(d.LevelId) as Autodesk.Revit.DB.Level)?.Name,
+                                ["fromRoom"]   = d.FromRoom?.Name,
+                                ["toRoom"]     = d.ToRoom?.Name,
+                                ["width"]      = Math.Round((d.get_Parameter(Autodesk.Revit.DB.BuiltInParameter.DOOR_WIDTH)?.AsDouble() ?? d.Symbol?.get_Parameter(Autodesk.Revit.DB.BuiltInParameter.DOOR_WIDTH)?.AsDouble() ?? 0) * 12, 2),
+                            });
+                        }
+                        snapshot["doors"] = doorArr;
+                    }
+                    catch { }
+
+                    // Windows (max 300)
+                    try
+                    {
+                        var winArr = new JArray();
+                        var allWins = new Autodesk.Revit.DB.FilteredElementCollector(doc)
+                            .OfClass(typeof(Autodesk.Revit.DB.FamilyInstance))
+                            .OfCategory(Autodesk.Revit.DB.BuiltInCategory.OST_Windows)
+                            .Cast<Autodesk.Revit.DB.FamilyInstance>()
+                            .Take(300)
+                            .ToList();
+                        foreach (var w in allWins)
+                        {
+                            winArr.Add(new JObject
+                            {
+                                ["windowId"]   = w.Id.Value,
+                                ["mark"]       = w.get_Parameter(Autodesk.Revit.DB.BuiltInParameter.ALL_MODEL_MARK)?.AsString(),
+                                ["familyName"] = w.Symbol?.Family?.Name ?? "Unknown",
+                                ["typeName"]   = w.Symbol?.Name ?? "Unknown",
+                                ["level"]      = (doc.GetElement(w.LevelId) as Autodesk.Revit.DB.Level)?.Name,
+                                ["width"]      = Math.Round((w.Symbol?.get_Parameter(Autodesk.Revit.DB.BuiltInParameter.WINDOW_WIDTH)?.AsDouble() ?? 0) * 12, 2),
+                                ["height"]     = Math.Round((w.Symbol?.get_Parameter(Autodesk.Revit.DB.BuiltInParameter.WINDOW_HEIGHT)?.AsDouble() ?? 0) * 12, 2),
+                            });
+                        }
+                        snapshot["windows"] = winArr;
                     }
                     catch { }
                 }

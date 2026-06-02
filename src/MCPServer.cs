@@ -3083,9 +3083,9 @@ namespace RevitMCPBridge
                         return await ExecuteInRevitContext(uiApp => ViewportCaptureMethods.CaptureViewportToBase64(uiApp, parameters));
 
                     case "analyzeView":
-                        // Vision analysis - requires API key passed in parameters
                         var apiKey = parameters?["apiKey"]?.ToString();
-                        return await ExecuteInRevitContext(uiApp => ViewportCaptureMethods.AnalyzeView(uiApp, parameters, apiKey));
+                        var bimMonkeyApiKey = parameters?["bimMonkeyApiKey"]?.ToString();
+                        return await ExecuteInRevitContext(uiApp => ViewportCaptureMethods.AnalyzeView(uiApp, parameters, apiKey, bimMonkeyApiKey));
 
                     case "setCamera":
                         return await ExecuteInRevitContext(uiApp => ViewportCaptureMethods.SetCamera(uiApp, parameters));
