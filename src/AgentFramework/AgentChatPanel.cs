@@ -710,10 +710,7 @@ namespace RevitMCPBridge2026.AgentFramework
             _pasteBanner.Child = bannerRow;
             outerStack.Children.Add(_pasteBanner);
 
-            var grid = new Grid();
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
+            // Row 1: full-width text box
             _inputTextBox = new System.Windows.Controls.TextBox
             {
                 Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
@@ -723,41 +720,38 @@ namespace RevitMCPBridge2026.AgentFramework
                 Padding = new Thickness(12, 10, 12, 10),
                 FontSize = 14,
                 TextWrapping = TextWrapping.Wrap,
-                AcceptsReturn = true,  // Allow multi-line input (Shift+Enter for newline)
-                MaxHeight = 400,       // Large but bounded so it doesn't take over the whole panel
+                AcceptsReturn = true,
+                MaxHeight = 400,
                 MinHeight = 40,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 CaretBrush = Brushes.White,
-                MaxLength = 0          // No character limit (0 = unlimited)
+                MaxLength = 0
             };
             _inputTextBox.PreviewKeyDown += InputTextBox_KeyDown;
             _inputTextBox.AllowDrop = true;
             _inputTextBox.PreviewDragEnter += (s, e) => { e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) && (e.Data.GetData(DataFormats.FileDrop) as string[])?.Any(IsSupportedDropFile) == true ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; };
             _inputTextBox.PreviewDragOver  += (s, e) => { e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) && (e.Data.GetData(DataFormats.FileDrop) as string[])?.Any(IsSupportedDropFile) == true ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; };
             _inputTextBox.PreviewDrop      += (s, e) => { if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return; var files = e.Data.GetData(DataFormats.FileDrop) as string[]; if (files == null) return; e.Handled = true; foreach (var f in files) { var ext = Path.GetExtension(f).ToLowerInvariant(); if (ext == ".pdf") ShowPdfChoiceDialog(f); else if (IsImageExtension(ext)) AttachImageFile(f, ext); } };
-            Grid.SetColumn(_inputTextBox, 0);
-            grid.Children.Add(_inputTextBox);
+            outerStack.Children.Add(_inputTextBox);
 
-            var buttonStack = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Margin = new Thickness(8, 0, 0, 0)
-            };
+            // Row 2: secondary buttons left, Send right
+            var buttonRow = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+            buttonRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            buttonRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-            // Paperclip button (Sprint 2B/5)
+            var secondaryButtons = new StackPanel { Orientation = Orientation.Horizontal };
+
             var attachButton = CreateButton("📎", false);
             attachButton.ToolTip = "Attach image (visual context for Banana Chat) or PDF (upload to Training Library)";
             attachButton.Click += async (s, e) => await BrowseAndAttachImageAsync();
-            buttonStack.Children.Add(attachButton);
+            secondaryButtons.Children.Add(attachButton);
 
-            // Snap View button (Sprint 5) — captures current Revit viewport and attaches as image
             _snapButton = CreateButton("Snap", false);
             _snapButton.Margin = new Thickness(4, 0, 0, 0);
             _snapButton.ToolTip = "Attach a screenshot of the current Revit view";
             _snapButton.Click += async (s, e) => await SnapCurrentViewAsync();
-            buttonStack.Children.Add(_snapButton);
+            secondaryButtons.Children.Add(_snapButton);
 
-            // Visual verify toggle — captures view after placements so Claude can confirm visually
             _verifyButton = CreateVerifyButton();
             _verifyButton.Margin = new Thickness(4, 0, 0, 0);
             _verifyButton.Click += (s, e) =>
@@ -766,23 +760,23 @@ namespace RevitMCPBridge2026.AgentFramework
                 if (_agent != null) _agent.VisualVerifyEnabled = _visualVerifyEnabled;
                 UpdateVerifyButtonState(hover: false);
             };
-            buttonStack.Children.Add(_verifyButton);
+            secondaryButtons.Children.Add(_verifyButton);
 
             _stopButton = CreateButton("Stop", false);
-            _stopButton.Margin = new Thickness(8, 0, 0, 0);
+            _stopButton.Margin = new Thickness(4, 0, 0, 0);
             _stopButton.Visibility = Visibility.Collapsed;
             _stopButton.Click += (s, e) => StopAgent();
-            buttonStack.Children.Add(_stopButton);
+            secondaryButtons.Children.Add(_stopButton);
+
+            Grid.SetColumn(secondaryButtons, 0);
+            buttonRow.Children.Add(secondaryButtons);
 
             _sendButton = CreateButton("Send", true);
-            _sendButton.Margin = new Thickness(8, 0, 0, 0);
+            Grid.SetColumn(_sendButton, 1);
             _sendButton.Click += async (s, e) => await SendMessage();
-            buttonStack.Children.Add(_sendButton);
+            buttonRow.Children.Add(_sendButton);
 
-            Grid.SetColumn(buttonStack, 1);
-            grid.Children.Add(buttonStack);
-
-            outerStack.Children.Add(grid);
+            outerStack.Children.Add(buttonRow);
             border.Child = outerStack;
             return border;
         }
