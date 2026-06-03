@@ -285,6 +285,32 @@ namespace RevitMCPBridge
             bananaButton.LargeImage = CreateButtonIcon("banana", 32);
             bananaButton.Image      = CreateButtonIcon("banana", 16);
 
+            // Skills — right after Banana Chat in AI Enablement
+            try
+            {
+                string bmpDir  = System.IO.Path.GetDirectoryName(asm);
+                string bmpPath = System.IO.Path.Combine(bmpDir, "BimMonkeyPlugin.dll");
+                if (System.IO.File.Exists(bmpPath))
+                {
+                    var skillsButtonData = new PushButtonData("SkillsButton", "Skills", bmpPath,
+                        "BimMonkeyPlugin.Commands.SkillsCommand")
+                    {
+                        ToolTip = "Create and manage reusable Banana Chat workflow skills",
+                        LongDescription =
+                            "Skills are saved workflow procedures you invoke with /skill-name in Banana Chat.\n\n" +
+                            "• Write instructions in plain English\n" +
+                            "• Activate a skill to share it with your whole firm\n" +
+                            "• Invoke with /skill-name in any Banana Chat session\n\n" +
+                            "After saving or activating a skill, restart the BIM Monkey server\n" +
+                            "(Server Control panel → Stop → Start) to sync changes to Banana Chat.",
+                    };
+                    var skillsButton = aiPanel.AddItem(skillsButtonData) as PushButton;
+                    skillsButton.LargeImage = CreateButtonIcon("skills", 32);
+                    skillsButton.Image      = CreateButtonIcon("skills", 16);
+                }
+            }
+            catch { /* BimMonkeyPlugin not present — skip Skills button */ }
+
             // ── Server Control ────────────────────────────────────────────
             var serverPanel = application.CreateRibbonPanel(_tabName, "Server Control");
 
@@ -343,32 +369,6 @@ namespace RevitMCPBridge
             var overlapButton = easyPanel.AddItem(overlapButtonData) as PushButton;
             overlapButton.LargeImage = CreateButtonIcon("overlapfix", 32);
             overlapButton.Image      = CreateButtonIcon("overlapfix", 16);
-
-            // Skills — command lives in BimMonkeyPlugin.dll (co-installed in same Addins folder)
-            try
-            {
-                string bmpDir  = System.IO.Path.GetDirectoryName(asm);
-                string bmpPath = System.IO.Path.Combine(bmpDir, "BimMonkeyPlugin.dll");
-                if (System.IO.File.Exists(bmpPath))
-                {
-                    var skillsButtonData = new PushButtonData("SkillsButton", "Skills", bmpPath,
-                        "BimMonkeyPlugin.Commands.SkillsCommand")
-                    {
-                        ToolTip = "Create and manage reusable Banana Chat workflow skills",
-                        LongDescription =
-                            "Skills are saved workflow procedures you invoke with /skill-name in Banana Chat.\n\n" +
-                            "• Write instructions in plain English\n" +
-                            "• Activate a skill to share it with your whole firm\n" +
-                            "• Invoke with /skill-name in any Banana Chat session\n\n" +
-                            "After saving or activating a skill, restart the BIM Monkey server\n" +
-                            "(Server Control panel → Stop → Start) to sync changes to Banana Chat.",
-                    };
-                    var skillsButton = easyPanel.AddItem(skillsButtonData) as PushButton;
-                    skillsButton.LargeImage = CreateButtonIcon("skills", 32);
-                    skillsButton.Image      = CreateButtonIcon("skills", 16);
-                }
-            }
-            catch { /* BimMonkeyPlugin not present — skip Skills button */ }
 
             // ── Site Data ─────────────────────────────────────────────────
             // AddSlideOut() puts ▼ on the "Site Data" panel title (like Revit's "Manage Models ▼").

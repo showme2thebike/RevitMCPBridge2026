@@ -207,6 +207,9 @@ namespace RevitMCPBridge2026.AgentFramework
             // Diagnostic: confirm constructor ran and Loaded handler registered
             try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "snapshot_debug.txt"), $"{DateTime.Now:o} Constructor ran, Loaded handler registered\r\n"); } catch { }
 
+            // Close slash palette when the window loses focus (alt-tab, clicking away)
+            Deactivated += (s, e) => CloseSlashPalette();
+
             // Ctrl+Shift+K to clear chat from anywhere in the window
             PreviewKeyDown += (s, e) =>
             {
