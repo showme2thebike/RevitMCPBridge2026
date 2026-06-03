@@ -207,8 +207,9 @@ namespace RevitMCPBridge2026.AgentFramework
             // Diagnostic: confirm constructor ran and Loaded handler registered
             try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "snapshot_debug.txt"), $"{DateTime.Now:o} Constructor ran, Loaded handler registered\r\n"); } catch { }
 
-            // Close slash palette when the window loses focus (alt-tab, clicking away)
-            Deactivated += (s, e) => CloseSlashPalette();
+            // Slash palette is closed via WM_ACTIVATEAPP in WndProc (process-level focus loss only)
+            // — NOT via Deactivated, which fires on every intra-process focus switch (e.g. clicking
+            //   the Revit ribbon) and can corrupt WPF visual state when IsOpen is toggled mid-deactivation.
 
             // Ctrl+Shift+K to clear chat from anywhere in the window
             PreviewKeyDown += (s, e) =>
@@ -349,7 +350,17 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
-            const int WM_HOTKEY = 0x0312;
+            const int WM_HOTKEY      = 0x0312;
+            const int WM_ACTIVATEAPP = 0x001C;
+
+            // Close palette only when the entire Revit process loses focus (alt-tab to another app).
+            // wParam=0 means the process is being deactivated; wParam=1 means it gained focus.
+            // This does NOT fire on intra-process focus changes (clicking Revit's ribbon, etc.).
+            if (msg == WM_ACTIVATEAPP && wParam == IntPtr.Zero)
+            {
+                Dispatcher.BeginInvoke(new Action(CloseSlashPalette));
+            }
+
             if (msg == WM_HOTKEY && wParam.ToInt32() == HOTKEY_ID)
             {
                 Show();
