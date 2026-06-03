@@ -52,10 +52,16 @@ namespace RevitMCPBridge.Commands
             foreach (var tn  in textNotes) TryAdd(annotations, BuildTextNoteBounds(tn,  view, scale));
             foreach (var tag in tags)      TryAdd(annotations, BuildTagBounds(tag,       view, scale));
 
+            int totalElements = textNotes.Count + tags.Count;
+            int skipped       = totalElements - annotations.Count;
+
             if (annotations.Count < 2)
             {
+                string skipNote = skipped > 0
+                    ? $"\n\n{skipped} element(s) skipped — Revit did not return measurable bounds (common for some tag families). Run the command while the view is fully open and regenerated."
+                    : "";
                 TaskDialog.Show("Annotation Cleanup",
-                    $"Only {annotations.Count} annotation(s) found in '{view.Name}' — nothing to compare.");
+                    $"Only {annotations.Count} measurable annotation(s) found in '{view.Name}' — nothing to compare.{skipNote}");
                 return Result.Succeeded;
             }
 
@@ -79,7 +85,7 @@ namespace RevitMCPBridge.Commands
                 trans.Commit();
             }
 
-            new OverlapResultsWindow(view.Name, annotations.Count, overlaps.Count, results).ShowDialog();
+            new OverlapResultsWindow(view.Name, annotations.Count, overlaps.Count, skipped, results).ShowDialog();
             return Result.Succeeded;
         }
 
@@ -89,20 +95,14 @@ namespace RevitMCPBridge.Commands
         {
             try
             {
-                // get_BoundingBox returns model-space coords; most accurate when view is current
                 var bb = tn.get_BoundingBox(view);
-                if (bb != null && !bb.Min.IsAlmostEqualTo(bb.Max))
-                    return new AnnBounds(tn.Id, $"Text: \"{Clip(tn.Text, 28)}\"",
-                        (bb.Min.X + bb.Max.X) / 2, (bb.Min.Y + bb.Max.Y) / 2,
-                        (bb.Max.X - bb.Min.X) / 2, (bb.Max.Y - bb.Min.Y) / 2,
-                        !tn.Pinned, "measured");
-
-                // Fallback: use Width property + text-type font size for height
-                var pos = tn.Coord;
-                double w = tn.Width > 0 ? tn.Width : EstimateTextWidth(tn, scale);
-                double h = EstimateTextHeight(tn, scale);
+                if (bb == null || bb.Min.IsAlmostEqualTo(bb.Max)) return null; // skip — no reliable bounds
+                double hw = (bb.Max.X - bb.Min.X) / 2;
+                double hh = (bb.Max.Y - bb.Min.Y) / 2;
+                if (hw < 0.001 || hh < 0.001) return null; // degenerate box
                 return new AnnBounds(tn.Id, $"Text: \"{Clip(tn.Text, 28)}\"",
-                    pos.X, pos.Y, w / 2, h / 2, !tn.Pinned, "estimated");
+                    (bb.Min.X + bb.Max.X) / 2, (bb.Min.Y + bb.Max.Y) / 2,
+                    hw, hh, !tn.Pinned);
             }
             catch { return null; }
         }
@@ -112,55 +112,43 @@ namespace RevitMCPBridge.Commands
             try
             {
                 var bb = tag.get_BoundingBox(view);
-                if (bb != null && !bb.Min.IsAlmostEqualTo(bb.Max))
-                    return new AnnBounds(tag.Id, $"Tag: {tag.TagText ?? "(no text)"}",
-                        (bb.Min.X + bb.Max.X) / 2, (bb.Min.Y + bb.Max.Y) / 2,
-                        (bb.Max.X - bb.Min.X) / 2, (bb.Max.Y - bb.Min.Y) / 2,
-                        !tag.Pinned, "measured");
-
-                // Fallback: TagHeadPosition + 3/16" paper estimate
-                var hp = tag.TagHeadPosition;
-                double halfW = (3.0 / 16.0 / 12.0) * scale;
-                double halfH = (3.0 / 16.0 / 12.0) * scale * 0.6;
+                if (bb == null || bb.Min.IsAlmostEqualTo(bb.Max)) return null; // skip — no reliable bounds
+                double hw = (bb.Max.X - bb.Min.X) / 2;
+                double hh = (bb.Max.Y - bb.Min.Y) / 2;
+                if (hw < 0.001 || hh < 0.001) return null; // degenerate box
                 return new AnnBounds(tag.Id, $"Tag: {tag.TagText ?? "(no text)"}",
-                    hp.X, hp.Y, halfW, halfH, !tag.Pinned, "estimated");
+                    (bb.Min.X + bb.Max.X) / 2, (bb.Min.Y + bb.Max.Y) / 2,
+                    hw, hh, !tag.Pinned);
             }
             catch { return null; }
         }
 
-        private double EstimateTextHeight(TextNote tn, double scale)
-        {
-            try
-            {
-                var type = tn.Document.GetElement(tn.GetTypeId()) as TextNoteType;
-                double paperFt = type?.get_Parameter(BuiltInParameter.TEXT_SIZE)?.AsDouble() ?? 0.01;
-                int lines = Math.Max(1, (tn.Text ?? "").Split('\n').Length);
-                return paperFt * scale * lines * 1.5;
-            }
-            catch { return 0.01 * scale; }
-        }
-
-        private double EstimateTextWidth(TextNote tn, double scale)
-        {
-            try
-            {
-                var type = tn.Document.GetElement(tn.GetTypeId()) as TextNoteType;
-                double paperFt = type?.get_Parameter(BuiltInParameter.TEXT_SIZE)?.AsDouble() ?? 0.01;
-                return paperFt * scale * Math.Max(1, (tn.Text ?? "").Length) * 0.6;
-            }
-            catch { return 0.5 * scale; }
-        }
-
         // ── Overlap detection ────────────────────────────────────────────────────
+
+        // Two elements must overlap by at least this fraction of the smaller element's
+        // dimension in BOTH axes to count as a real overlap. Filters out floating-point
+        // adjacency and tiny corner touches that aren't visually meaningful.
+        private const double OverlapThreshold = 0.10;
 
         private List<(AnnBounds A, AnnBounds B)> FindOverlaps(List<AnnBounds> ann)
         {
             var result = new List<(AnnBounds, AnnBounds)>();
             for (int i = 0; i < ann.Count; i++)
+            {
                 for (int j = i + 1; j < ann.Count; j++)
-                    if (ann[i].MaxX > ann[j].MinX && ann[i].MinX < ann[j].MaxX &&
-                        ann[i].MaxY > ann[j].MinY && ann[i].MinY < ann[j].MaxY)
-                        result.Add((ann[i], ann[j]));
+                {
+                    var a = ann[i]; var b = ann[j];
+                    double overlapX = Math.Min(a.MaxX, b.MaxX) - Math.Max(a.MinX, b.MinX);
+                    double overlapY = Math.Min(a.MaxY, b.MaxY) - Math.Max(a.MinY, b.MinY);
+                    if (overlapX <= 0 || overlapY <= 0) continue; // no intersection
+
+                    // Require meaningful overlap — at least 10% of the smaller element in each axis
+                    double minW = Math.Min(a.HalfW, b.HalfW) * 2;
+                    double minH = Math.Min(a.HalfH, b.HalfH) * 2;
+                    if (overlapX >= minW * OverlapThreshold && overlapY >= minH * OverlapThreshold)
+                        result.Add((a, b));
+                }
+            }
             return result;
         }
 
@@ -209,7 +197,7 @@ namespace RevitMCPBridge.Commands
                 mover.Cy += nudge.Y;
 
                 return NudgeResult.Ok(mover.Label, anchor.Label,
-                    $"moved {nudge.X:F2}', {nudge.Y:F2}' [{mover.Confidence}]");
+                    $"moved {nudge.X:F2}', {nudge.Y:F2}'");
             }
             catch (Exception ex)
             {
@@ -227,7 +215,7 @@ namespace RevitMCPBridge.Commands
         internal class AnnBounds
         {
             public ElementId Id;
-            public string Label, Confidence;
+            public string Label;
             public bool CanMove;
             public double Cx, Cy, HalfW, HalfH;
 
@@ -237,10 +225,10 @@ namespace RevitMCPBridge.Commands
             public double MaxY => Cy + HalfH;
 
             public AnnBounds(ElementId id, string label, double cx, double cy,
-                double hw, double hh, bool canMove, string confidence)
+                double hw, double hh, bool canMove)
             {
                 Id = id; Label = label; Cx = cx; Cy = cy;
-                HalfW = hw; HalfH = hh; CanMove = canMove; Confidence = confidence;
+                HalfW = hw; HalfH = hh; CanMove = canMove;
             }
         }
 
@@ -261,7 +249,7 @@ namespace RevitMCPBridge.Commands
     internal class OverlapResultsWindow : Window
     {
         public OverlapResultsWindow(
-            string viewName, int totalAnn, int totalOverlaps,
+            string viewName, int totalAnn, int totalOverlaps, int skipped,
             List<AnnotationCleanupCommand.NudgeResult> results)
         {
             Title  = "BIM Monkey — Annotation Cleanup";
