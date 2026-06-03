@@ -141,6 +141,7 @@ namespace RevitMCPBridge2026.AgentFramework
         // Slash command palette (/ key triggers filterable skill + built-in command picker)
         private System.Windows.Controls.Primitives.Popup _slashPalette;
         private ListBox _slashPaletteList;
+        private List<BimMonkeySkill> _cachedSkills; // loaded from /api/skills; null = needs refresh
 
         public AgentChatPanel(UIApplication uiApp)
         {
@@ -2932,24 +2933,40 @@ namespace RevitMCPBridge2026.AgentFramework
                 return memoryResult;
             }
 
-            // saveSkill — persist a skill to the local toolbox JSON
+            // saveSkill — POST to Railway /api/skills so it appears in the web app and ribbon
             if (methodName == "saveSkill")
             {
                 try
                 {
-                    var skill = new BimMonkeySkill
-                    {
-                        Slug        = parameters?["slug"]?.ToString(),
-                        Name        = parameters?["name"]?.ToString(),
-                        Description = parameters?["description"]?.ToString(),
-                        Type        = parameters?["type"]?.ToString() ?? "workflow",
-                        Content     = parameters?["content"]?.ToString(),
-                        CreatedAt   = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
-                    };
-                    if (string.IsNullOrWhiteSpace(skill.Slug) || string.IsNullOrWhiteSpace(skill.Content))
+                    var slug        = parameters?["slug"]?.ToString();
+                    var name        = parameters?["name"]?.ToString();
+                    var description = parameters?["description"]?.ToString();
+                    var type        = parameters?["type"]?.ToString() ?? "workflow";
+                    var rawContent  = parameters?["content"]?.ToString();
+
+                    if (string.IsNullOrWhiteSpace(slug) || string.IsNullOrWhiteSpace(rawContent))
                         return JsonConvert.SerializeObject(new { success = false, error = "saveSkill requires slug and content" });
-                    SkillsManager.SaveSkill(skill);
-                    return JsonConvert.SerializeObject(new { success = true, message = $"Skill '{skill.Name}' saved as /{skill.Slug}" });
+
+                    // Prefix C# scripts so invocation routing can detect them on retrieval
+                    var content = type == "revit-script"
+                        ? $"[revit-script]\n{rawContent}"
+                        : rawContent;
+
+                    using (var client = new System.Net.Http.HttpClient())
+                    {
+                        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                        var payload = new System.Net.Http.StringContent(
+                            JsonConvert.SerializeObject(new { slug, name, description, content, scope = "revit" }),
+                            System.Text.Encoding.UTF8,
+                            "application/json");
+                        var resp = await client.PostAsync(
+                            "https://bimmonkey-production.up.railway.app/api/skills", payload);
+                        var respText = await resp.Content.ReadAsStringAsync();
+                        if (!resp.IsSuccessStatusCode)
+                            return JsonConvert.SerializeObject(new { success = false, error = $"API error {(int)resp.StatusCode}: {respText}" });
+                        _cachedSkills = null; // invalidate so palette reloads on next /
+                        return JsonConvert.SerializeObject(new { success = true, message = $"Skill '{name}' saved as /{slug} — visible in the Skills panel and web app." });
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -5050,9 +5067,52 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             var text = _inputTextBox.Text;
             if (text.StartsWith("/"))
+            {
+                if (_cachedSkills == null)
+                    _ = RefreshSkillsCacheAsync(); // fire-and-forget; palette will refresh when done
                 OpenSlashPalette(text.Substring(1).ToLowerInvariant());
+            }
             else
+            {
                 CloseSlashPalette();
+            }
+        }
+
+        private async Task RefreshSkillsCacheAsync()
+        {
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(8) })
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/skills");
+                    if (!resp.IsSuccessStatusCode) return;
+                    var json  = await resp.Content.ReadAsStringAsync();
+                    var data  = JObject.Parse(json);
+                    var list  = new List<BimMonkeySkill>();
+                    foreach (var s in (data["skills"] as JArray) ?? new JArray())
+                    {
+                        var content = s["content"]?.ToString() ?? "";
+                        var isScript = content.StartsWith("[revit-script]");
+                        list.Add(new BimMonkeySkill
+                        {
+                            Slug        = s["slug"]?.ToString(),
+                            Name        = s["name"]?.ToString(),
+                            Description = s["description"]?.ToString(),
+                            Type        = isScript ? "revit-script" : "workflow",
+                            Content     = isScript ? content.Substring("[revit-script]\n".Length) : content
+                        });
+                    }
+                    _cachedSkills = list;
+                    // If the palette is still open, refresh it with the newly loaded skills
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (_slashPalette?.IsOpen == true && _inputTextBox.Text.StartsWith("/"))
+                            UpdateSlashPalette(_inputTextBox.Text.Substring(1).ToLowerInvariant());
+                    });
+                }
+            }
+            catch { /* silently fail — palette just won't show skills */ }
         }
 
         private void OpenSlashPalette(string filter)
@@ -5144,8 +5204,8 @@ namespace RevitMCPBridge2026.AgentFramework
                 _slashPaletteList.Items.Add(MakePaletteRow(cmd.name, cmd.description, isBuiltin: true));
             }
 
-            // User skills
-            var skills = SkillsManager.LoadSkills();
+            // User skills (from API cache)
+            var skills = _cachedSkills ?? new List<BimMonkeySkill>();
             foreach (var skill in skills)
             {
                 if (!string.IsNullOrEmpty(filter) &&
@@ -5287,13 +5347,17 @@ namespace RevitMCPBridge2026.AgentFramework
             }
             _pendingRememberMode = false;
 
-            // ── Skill invocation: /slug → look up in SkillsManager ───────────────────
+            // ── Skill invocation: /slug → look up in API cache (or fetch if cold) ──────
             if (message.StartsWith("/") && !message.StartsWith("//"))
             {
                 var parts        = message.Split(new[] { ' ' }, 2);
                 var slug         = parts[0].TrimStart('/').ToLowerInvariant();
                 var trailingArgs = parts.Length > 1 ? parts[1].Trim() : "";
-                var skill        = SkillsManager.GetSkillBySlug(slug);
+                // Populate cache if empty (user may not have opened the palette yet)
+                if (_cachedSkills == null)
+                    await RefreshSkillsCacheAsync();
+                var skill = _cachedSkills?.Find(s =>
+                    string.Equals(s.Slug, slug, StringComparison.OrdinalIgnoreCase));
                 if (skill != null)
                 {
                     string injected;
