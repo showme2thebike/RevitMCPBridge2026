@@ -731,6 +731,10 @@ namespace RevitMCPBridge2026.AgentFramework
                 MaxLength = 0          // No character limit (0 = unlimited)
             };
             _inputTextBox.PreviewKeyDown += InputTextBox_KeyDown;
+            _inputTextBox.AllowDrop = true;
+            _inputTextBox.PreviewDragEnter += (s, e) => { e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) && (e.Data.GetData(DataFormats.FileDrop) as string[])?.Any(IsSupportedDropFile) == true ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; };
+            _inputTextBox.PreviewDragOver  += (s, e) => { e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) && (e.Data.GetData(DataFormats.FileDrop) as string[])?.Any(IsSupportedDropFile) == true ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; };
+            _inputTextBox.PreviewDrop      += (s, e) => { if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return; var files = e.Data.GetData(DataFormats.FileDrop) as string[]; if (files == null) return; e.Handled = true; foreach (var f in files) { var ext = Path.GetExtension(f).ToLowerInvariant(); if (ext == ".pdf") ShowPdfChoiceDialog(f); else if (IsImageExtension(ext)) AttachImageFile(f, ext); } };
             Grid.SetColumn(_inputTextBox, 0);
             grid.Children.Add(_inputTextBox);
 
