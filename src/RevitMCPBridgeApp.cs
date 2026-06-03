@@ -329,6 +329,21 @@ namespace RevitMCPBridge
             standardsButton.LargeImage = CreateButtonIcon("standards", 32);
             standardsButton.Image      = CreateButtonIcon("standards", 16);
 
+            var overlapButtonData = new PushButtonData("AnnotationCleanup", "Fix\nOverlaps", asm,
+                "RevitMCPBridge.Commands.AnnotationCleanupCommand")
+                {
+                    ToolTip = "Detect and auto-fix overlapping text notes and tags in the active view",
+                    LongDescription =
+                        "Scans all text notes and tags visible in the current view for overlaps.\n\n" +
+                        "• Auto-nudges every overlapping pair in one transaction\n" +
+                        "• Ctrl+Z undoes all moves at once\n" +
+                        "• Shows a report of what moved and what could not be fixed\n\n" +
+                        "Open a floor plan, section, or elevation view before clicking."
+                };
+            var overlapButton = easyPanel.AddItem(overlapButtonData) as PushButton;
+            overlapButton.LargeImage = CreateButtonIcon("overlapfix", 32);
+            overlapButton.Image      = CreateButtonIcon("overlapfix", 16);
+
             // Skills — command lives in BimMonkeyPlugin.dll (co-installed in same Addins folder)
             try
             {
@@ -473,6 +488,7 @@ namespace RevitMCPBridge
                 { "Parcel",            "P" },
                 { "Permits",           "T" },
                 { "SiteClimate",       "S" },
+                { "AnnotationCleanup",  "X" },
                 { "CodeCheck",         "C" },
                 { "Occupancy",         "O" },
                 { "EC3",               "G" },
@@ -811,6 +827,9 @@ namespace RevitMCPBridge
                             break;
                         case "skills":
                             DrawSkillsIcon(dc, size);
+                            break;
+                        case "overlapfix":
+                            DrawOverlapFixIcon(dc, size);
                             break;
                     }
                 }
@@ -2246,6 +2265,30 @@ namespace RevitMCPBridge
         internal static ExternalEvent GetBackgroundJobEvent()
         {
             return _backgroundJobEvent;
+        }
+
+        private void DrawOverlapFixIcon(DrawingContext dc, int size)
+        {
+            // Two offset rectangles (annotations) + green checkmark — flat white/dark style
+            double s   = size / 32.0;
+            var fill   = new SolidColorBrush(Colors.White);
+            var pen    = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.8, 1.3 * s));
+            var green  = new SolidColorBrush(Color.FromRgb(72, 199, 89));
+            var chkPen = new Pen(green, Math.Max(1.0, 1.8 * s))
+            {
+                StartLineCap = PenLineCap.Round,
+                EndLineCap   = PenLineCap.Round,
+                LineJoin     = PenLineJoin.Round
+            };
+
+            // Left annotation rectangle
+            dc.DrawRectangle(fill, pen, new Rect(2 * s, 10 * s, 13 * s, 9 * s));
+            // Right annotation rectangle — slightly offset (would overlap at center)
+            dc.DrawRectangle(fill, pen, new Rect(16 * s, 13 * s, 13 * s, 9 * s));
+
+            // Green checkmark in upper-right quadrant
+            dc.DrawLine(chkPen, new Point(19 * s, 6 * s), new Point(22 * s, 9 * s));
+            dc.DrawLine(chkPen, new Point(22 * s, 9 * s), new Point(28 * s, 2 * s));
         }
     }
 }
