@@ -746,7 +746,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
             // Paperclip button (Sprint 2B/5)
             var attachButton = CreateButton("📎", false);
-            attachButton.ToolTip = "Attach image (context for Claude) or PDF (upload to Training Library)";
+            attachButton.ToolTip = "Attach image (visual context for Banana Chat) or PDF (upload to Training Library)";
             attachButton.Click += async (s, e) => await BrowseAndAttachImageAsync();
             buttonStack.Children.Add(attachButton);
 
@@ -756,6 +756,17 @@ namespace RevitMCPBridge2026.AgentFramework
             _snapButton.ToolTip = "Attach a screenshot of the current Revit view";
             _snapButton.Click += async (s, e) => await SnapCurrentViewAsync();
             buttonStack.Children.Add(_snapButton);
+
+            // Visual verify toggle — captures view after placements so Claude can confirm visually
+            _verifyButton = CreateVerifyButton();
+            _verifyButton.Margin = new Thickness(4, 0, 0, 0);
+            _verifyButton.Click += (s, e) =>
+            {
+                _visualVerifyEnabled = !_visualVerifyEnabled;
+                if (_agent != null) _agent.VisualVerifyEnabled = _visualVerifyEnabled;
+                UpdateVerifyButtonState(hover: false);
+            };
+            buttonStack.Children.Add(_verifyButton);
 
             _stopButton = CreateButton("Stop", false);
             _stopButton.Margin = new Thickness(8, 0, 0, 0);
@@ -1163,6 +1174,42 @@ namespace RevitMCPBridge2026.AgentFramework
             return button;
         }
 
+        private Button CreateVerifyButton()
+        {
+            var btn = new Button
+            {
+                Content = "Verify",
+                Padding = new Thickness(16, 8, 16, 8),
+                Background = new SolidColorBrush(Color.FromRgb(85, 85, 85)),
+                Foreground = Brushes.White,
+                BorderThickness = new Thickness(0),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                ToolTip = "Visual verify OFF — enable to auto-capture the view after each placement for AI review"
+            };
+            btn.MouseEnter += (s, e) => UpdateVerifyButtonState(hover: true);
+            btn.MouseLeave += (s, e) => UpdateVerifyButtonState(hover: false);
+            return btn;
+        }
+
+        private void UpdateVerifyButtonState(bool hover)
+        {
+            if (_verifyButton == null) return;
+            if (_visualVerifyEnabled)
+            {
+                _verifyButton.Background = new SolidColorBrush(hover
+                    ? Color.FromRgb(235, 140, 20)   // lighter amber on hover
+                    : Color.FromRgb(217, 119, 6));   // amber #D97706 when active
+                _verifyButton.ToolTip = "Visual verify ON — view is auto-captured after each placement for AI review";
+            }
+            else
+            {
+                _verifyButton.Background = new SolidColorBrush(hover
+                    ? Color.FromRgb(105, 105, 105)   // lighter gray on hover
+                    : Color.FromRgb(85, 85, 85));    // standard gray when inactive
+                _verifyButton.ToolTip = "Visual verify OFF — enable to auto-capture the view after each placement for AI review";
+            }
+        }
+
         // Config file path - use user's home directory for portability
         private static readonly string ConfigDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops");
         private static readonly string ConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "config.json");
@@ -1172,6 +1219,10 @@ namespace RevitMCPBridge2026.AgentFramework
         // Session data for persistence
         private List<ChatMessage> _sessionMessages = new List<ChatMessage>();
         private string _sessionProjectName;
+
+        // Visual verify toggle
+        private bool _visualVerifyEnabled = false;
+        private Button _verifyButton;
 
         // Compliance remediation tracking
         private string _activeComplianceRunId;
@@ -1897,6 +1948,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private void InitializeAgent()
         {
             _agent = new AgentCore(_apiKey, _selectedModel, _bimMonkeyApiKey);
+            _agent.VisualVerifyEnabled = _visualVerifyEnabled;
             var allTools = new System.Collections.Generic.List<ToolDefinition>(ToolDefinitions.GetAllTools());
             _agent.RegisterTools(allTools);
             _agent.SetToolExecutor(ExecuteMCPMethodAsync);

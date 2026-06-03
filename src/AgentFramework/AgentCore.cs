@@ -64,6 +64,14 @@ namespace RevitMCPBridge2026.AgentFramework
         private ModelTier _maxAllowedTier = ModelTier.IncludeOpus; // Allow all models
         private bool _budgetMode = false;
 
+        // Visual verification — capture viewport after placement tools and inject as vision block
+        public bool VisualVerifyEnabled { get; set; } = false;
+        private static readonly HashSet<string> _verifyAfterTools = new HashSet<string>
+        {
+            "placeViewOnSheet", "createSheet", "setViewportLabelOffset",
+            "moveViewport", "placeScheduleOnSheet", "createViewport"
+        };
+
         // Events for UI updates
         public event Action<string> OnThinking;
         public event Action<string> OnToolCall;
@@ -497,6 +505,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
                     var assistantContent = new List<ContentBlock>();
                     bool hasToolUse = false;
+                    bool anyPlacementTool = false;
                     var toolResults = new List<ToolResultBlock>();
 
                     foreach (var block in response.Content)
@@ -515,6 +524,7 @@ namespace RevitMCPBridge2026.AgentFramework
                             assistantContent.Add(block);
                             _currentStage = "executing";
                             _lastToolName = block.Name;
+                            if (_verifyAfterTools.Contains(block.Name)) anyPlacementTool = true;
 
                             OnToolCall?.Invoke($"Calling: {block.Name}");
 
@@ -604,11 +614,27 @@ namespace RevitMCPBridge2026.AgentFramework
 
                     if (hasToolUse && toolResults.Count > 0)
                     {
-                        _conversationHistory.Add(new Message
+                        var userContent = toolResults.Cast<object>().ToList();
+                        if (VisualVerifyEnabled && anyPlacementTool)
                         {
-                            Role = "user",
-                            Content = toolResults.Cast<object>().ToList()
-                        });
+                            try
+                            {
+                                var snapJson = await _executeToolAsync("captureViewportToBase64", new JObject { ["width"] = 1200, ["height"] = 800 });
+                                var snap = JObject.Parse(snapJson);
+                                if (snap["success"]?.ToObject<bool>() == true)
+                                {
+                                    var b64 = snap["result"]?["base64"]?.ToString();
+                                    var vn  = snap["result"]?["viewName"]?.ToString() ?? "view";
+                                    if (!string.IsNullOrEmpty(b64))
+                                    {
+                                        userContent.Add(new { type = "text", text = $"[Visual verification — screenshot of '{vn}' captured after {_lastToolName}. Confirm the placement looks correct, or identify and fix any issues you see.]" });
+                                        userContent.Add(new { type = "image", source = new { type = "base64", media_type = "image/png", data = b64 } });
+                                    }
+                                }
+                            }
+                            catch { /* non-fatal — proceed without screenshot */ }
+                        }
+                        _conversationHistory.Add(new Message { Role = "user", Content = userContent });
                     }
                     else
                     {
