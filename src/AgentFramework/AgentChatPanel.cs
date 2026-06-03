@@ -233,14 +233,14 @@ namespace RevitMCPBridge2026.AgentFramework
                 _thinkingTimer?.Stop();
             };
 
-            // Drag-and-drop PDF files directly into Banana Chat → upload to Training Library
+            // Drag-and-drop: PDFs → Training Library upload; images → attach as vision context
             AllowDrop = true;
             DragEnter += (s, e) =>
             {
                 if (e.Data.GetDataPresent(DataFormats.FileDrop))
                 {
                     var files = e.Data.GetData(DataFormats.FileDrop) as string[];
-                    if (files != null && files.Any(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)))
+                    if (files != null && files.Any(f => IsSupportedDropFile(f)))
                         e.Effects = DragDropEffects.Copy;
                     else
                         e.Effects = DragDropEffects.None;
@@ -255,10 +255,16 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
                 var files = e.Data.GetData(DataFormats.FileDrop) as string[];
-                var pdf = files?.FirstOrDefault(f => f.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase));
-                if (pdf == null) return;
+                if (files == null) return;
                 e.Handled = true;
-                ShowPdfChoiceDialog(pdf);
+                foreach (var file in files)
+                {
+                    var ext = Path.GetExtension(file).ToLowerInvariant();
+                    if (ext == ".pdf")
+                        ShowPdfChoiceDialog(file);
+                    else if (IsImageExtension(ext))
+                        AttachImageFile(file, ext);
+                }
             };
         }
 
@@ -1076,13 +1082,43 @@ namespace RevitMCPBridge2026.AgentFramework
             }
         }
 
+        private static bool IsSupportedDropFile(string path)
+        {
+            var ext = Path.GetExtension(path).ToLowerInvariant();
+            return ext == ".pdf" || IsImageExtension(ext);
+        }
+
+        private static bool IsImageExtension(string ext) =>
+            ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp" || ext == ".gif";
+
+        private static string ImageMediaType(string ext) => ext switch
+        {
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".webp"           => "image/webp",
+            ".gif"            => "image/gif",
+            _                 => "image/png",
+        };
+
+        private void AttachImageFile(string path, string ext)
+        {
+            try
+            {
+                var bytes = File.ReadAllBytes(path);
+                AddAttachment(new AttachedImage { Base64Data = Convert.ToBase64String(bytes), MediaType = ImageMediaType(ext), Label = Path.GetFileName(path) });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Attach image failed: {ex.Message}");
+            }
+        }
+
         // Attach image → context for Claude; attach PDF → Training Library upload confirmation
         private async Task BrowseAndAttachImageAsync()
         {
             var dlg = new OpenFileDialog
             {
                 Title       = "Attach file",
-                Filter      = "All supported (*.png;*.jpg;*.jpeg;*.pdf)|*.png;*.jpg;*.jpeg;*.pdf|Images (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg|PDF files (*.pdf)|*.pdf",
+                Filter      = "All supported (*.png;*.jpg;*.jpeg;*.webp;*.gif;*.pdf)|*.png;*.jpg;*.jpeg;*.webp;*.gif;*.pdf|Images (*.png;*.jpg;*.jpeg;*.webp;*.gif)|*.png;*.jpg;*.jpeg;*.webp;*.gif|PDF files (*.pdf)|*.pdf",
                 Multiselect = false,
             };
             if (dlg.ShowDialog() != true) return;
@@ -1098,10 +1134,7 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 try
                 {
-                    var bytes     = File.ReadAllBytes(dlg.FileName);
-                    var mediaType = ext == ".jpg" || ext == ".jpeg" ? "image/jpeg" : "image/png";
-                    var label     = Path.GetFileName(dlg.FileName);
-                    AddAttachment(new AttachedImage { Base64Data = Convert.ToBase64String(bytes), MediaType = mediaType, Label = label });
+                    AttachImageFile(dlg.FileName, ext);
                 }
                 catch (Exception ex)
                 {
