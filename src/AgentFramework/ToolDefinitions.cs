@@ -524,6 +524,28 @@ Captures key outcomes, decisions, problems solved, and next steps.",
                         properties = new { },
                         required = new string[] { }
                     }
+                },
+                new ToolDefinition
+                {
+                    Name = "saveSkill",
+                    Description = @"Save a reusable skill to the local skill toolbox. Call this when Barrett confirms he wants to save a workflow or C# Roslyn script as a reusable skill.
+Type 'workflow' = natural-language instructions Barrett wants repeatable.
+Type 'revit-script' = raw C# code that ran successfully via executeRevitScript.
+The slug becomes the /command Barrett uses to invoke it (e.g. slug='door-audit' → /door-audit).
+Always generate a slug from the name: lowercase, hyphens only, no spaces.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            slug        = new { type = "string",  description = "Kebab-case identifier used for /invocation, e.g. 'door-audit'" },
+                            name        = new { type = "string",  description = "Human-readable skill name, e.g. 'Door Audit'" },
+                            description = new { type = "string",  description = "One sentence describing what the skill does" },
+                            type        = new { type = "string",  description = "'workflow' or 'revit-script'" },
+                            content     = new { type = "string",  description = "The skill content: instructions for workflow, raw C# code for revit-script" }
+                        },
+                        required = new[] { "slug", "name", "description", "type", "content" }
+                    }
                 }
             };
         }

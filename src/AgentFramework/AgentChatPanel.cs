@@ -138,6 +138,10 @@ namespace RevitMCPBridge2026.AgentFramework
         private string _lastCorrectionDiff = null;
         private string _lastCorrectionTriggerOp = null;
 
+        // Slash command palette (/ key triggers filterable skill + built-in command picker)
+        private System.Windows.Controls.Primitives.Popup _slashPalette;
+        private ListBox _slashPaletteList;
+
         public AgentChatPanel(UIApplication uiApp)
         {
             _uiApp = uiApp;
@@ -728,6 +732,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 MaxLength = 0
             };
             _inputTextBox.PreviewKeyDown += InputTextBox_KeyDown;
+            _inputTextBox.TextChanged     += InputTextBox_TextChanged;
             _inputTextBox.AllowDrop = true;
             _inputTextBox.PreviewDragEnter += (s, e) => { e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) && (e.Data.GetData(DataFormats.FileDrop) as string[])?.Any(IsSupportedDropFile) == true ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; };
             _inputTextBox.PreviewDragOver  += (s, e) => { e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) && (e.Data.GetData(DataFormats.FileDrop) as string[])?.Any(IsSupportedDropFile) == true ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; };
@@ -2927,6 +2932,31 @@ namespace RevitMCPBridge2026.AgentFramework
                 return memoryResult;
             }
 
+            // saveSkill — persist a skill to the local toolbox JSON
+            if (methodName == "saveSkill")
+            {
+                try
+                {
+                    var skill = new BimMonkeySkill
+                    {
+                        Slug        = parameters?["slug"]?.ToString(),
+                        Name        = parameters?["name"]?.ToString(),
+                        Description = parameters?["description"]?.ToString(),
+                        Type        = parameters?["type"]?.ToString() ?? "workflow",
+                        Content     = parameters?["content"]?.ToString(),
+                        CreatedAt   = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+                    };
+                    if (string.IsNullOrWhiteSpace(skill.Slug) || string.IsNullOrWhiteSpace(skill.Content))
+                        return JsonConvert.SerializeObject(new { success = false, error = "saveSkill requires slug and content" });
+                    SkillsManager.SaveSkill(skill);
+                    return JsonConvert.SerializeObject(new { success = true, message = $"Skill '{skill.Name}' saved as /{skill.Slug}" });
+                }
+                catch (Exception ex)
+                {
+                    return JsonConvert.SerializeObject(new { success = false, error = ex.Message });
+                }
+            }
+
             // callMCPMethod / listAllMethods — universal passthrough to the pipe
             // Claude calls callMCPMethod({method: "foo", parameters: {...}})
             // We unwrap and forward to the pipe as if Claude called "foo" directly.
@@ -4913,6 +4943,42 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private async void InputTextBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)  // hooked as PreviewKeyDown
         {
+            // Slash palette navigation — handled before anything else
+            if (_slashPalette != null && _slashPalette.IsOpen)
+            {
+                switch (e.Key)
+                {
+                    case System.Windows.Input.Key.Down:
+                        if (_slashPaletteList.Items.Count > 0)
+                        {
+                            var next = Math.Min((_slashPaletteList.SelectedIndex < 0 ? -1 : _slashPaletteList.SelectedIndex) + 1,
+                                                _slashPaletteList.Items.Count - 1);
+                            _slashPaletteList.SelectedIndex = next;
+                            _slashPaletteList.ScrollIntoView(_slashPaletteList.SelectedItem);
+                        }
+                        e.Handled = true;
+                        return;
+                    case System.Windows.Input.Key.Up:
+                        if (_slashPaletteList.Items.Count > 0)
+                        {
+                            var prev = Math.Max((_slashPaletteList.SelectedIndex < 0 ? 1 : _slashPaletteList.SelectedIndex) - 1, 0);
+                            _slashPaletteList.SelectedIndex = prev;
+                            _slashPaletteList.ScrollIntoView(_slashPaletteList.SelectedItem);
+                        }
+                        e.Handled = true;
+                        return;
+                    case System.Windows.Input.Key.Enter:
+                    case System.Windows.Input.Key.Tab:
+                        CommitPaletteSelection();
+                        e.Handled = true;
+                        return;
+                    case System.Windows.Input.Key.Escape:
+                        CloseSlashPalette();
+                        e.Handled = true;
+                        return;
+                }
+            }
+
             bool ctrl = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Control) != 0;
 
             // Sprint 2C — explicitly handle standard text-editing shortcuts so Revit can't intercept them
@@ -4974,6 +5040,171 @@ namespace RevitMCPBridge2026.AgentFramework
                     await SendMessage();
                 }
             }
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // Slash command palette
+        // ─────────────────────────────────────────────────────────────────
+
+        private void InputTextBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+        {
+            var text = _inputTextBox.Text;
+            if (text.StartsWith("/"))
+                OpenSlashPalette(text.Substring(1).ToLowerInvariant());
+            else
+                CloseSlashPalette();
+        }
+
+        private void OpenSlashPalette(string filter)
+        {
+            // Build palette lazily on first open
+            if (_slashPalette == null)
+            {
+                _slashPaletteList = new ListBox
+                {
+                    Background  = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
+                    Foreground  = Brushes.White,
+                    BorderThickness = new Thickness(1),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+                    MaxHeight   = 220,
+                    FontSize    = 13,
+                    SelectionMode = SelectionMode.Single,
+                    Padding     = new Thickness(0)
+                };
+
+                // Click to commit
+                _slashPaletteList.MouseLeftButtonUp += (s, e2) =>
+                {
+                    if (_slashPaletteList.SelectedItem != null)
+                        CommitPaletteSelection();
+                };
+
+                // Style selected item
+                var style = new Style(typeof(ListBoxItem));
+                style.Setters.Add(new Setter(ListBoxItem.PaddingProperty, new Thickness(10, 6, 10, 6)));
+                style.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, Brushes.Transparent));
+                style.Setters.Add(new Setter(ListBoxItem.ForegroundProperty, Brushes.White));
+                var selectedTrigger = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
+                selectedTrigger.Setters.Add(new Setter(ListBoxItem.BackgroundProperty,
+                    new SolidColorBrush(Color.FromRgb(60, 100, 160))));
+                style.Triggers.Add(selectedTrigger);
+                _slashPaletteList.ItemContainerStyle = style;
+
+                _slashPalette = new System.Windows.Controls.Primitives.Popup
+                {
+                    PlacementTarget = _inputTextBox,
+                    Placement       = System.Windows.Controls.Primitives.PlacementMode.Top,
+                    StaysOpen       = true,
+                    AllowsTransparency = true,
+                    Child           = new Border
+                    {
+                        Background   = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
+                        BorderBrush  = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+                        BorderThickness = new Thickness(1),
+                        Child        = _slashPaletteList,
+                        Effect       = new System.Windows.Media.Effects.DropShadowEffect
+                        {
+                            Color   = Colors.Black,
+                            BlurRadius = 8,
+                            ShadowDepth = 2,
+                            Opacity = 0.7
+                        }
+                    }
+                };
+
+                // Bind popup width to input box width
+                _inputTextBox.SizeChanged += (s, e2) =>
+                    { if (_slashPalette != null) _slashPalette.Width = _inputTextBox.ActualWidth; };
+            }
+
+            _slashPalette.Width = _inputTextBox.ActualWidth;
+            UpdateSlashPalette(filter);
+
+            if (!_slashPalette.IsOpen)
+                _slashPalette.IsOpen = true;
+        }
+
+        private static readonly (string slug, string name, string description)[] BuiltinCommands = new[]
+        {
+            ("/remember", "/remember",  "Save a note to project or firm memory"),
+            ("/train",    "/train",     "Upload a permit set PDF to the Training Library"),
+            ("/upload",   "/upload",    "Alias for /train — upload a PDF to Training Library"),
+        };
+
+        private void UpdateSlashPalette(string filter)
+        {
+            if (_slashPaletteList == null) return;
+            _slashPaletteList.Items.Clear();
+
+            // Built-in commands
+            foreach (var cmd in BuiltinCommands)
+            {
+                if (!string.IsNullOrEmpty(filter) && !cmd.slug.Contains(filter) && !cmd.description.ToLowerInvariant().Contains(filter))
+                    continue;
+                _slashPaletteList.Items.Add(MakePaletteRow(cmd.name, cmd.description, isBuiltin: true));
+            }
+
+            // User skills
+            var skills = SkillsManager.LoadSkills();
+            foreach (var skill in skills)
+            {
+                if (!string.IsNullOrEmpty(filter) &&
+                    !skill.Slug.Contains(filter) &&
+                    !skill.Name.ToLowerInvariant().Contains(filter) &&
+                    !skill.Description.ToLowerInvariant().Contains(filter))
+                    continue;
+                _slashPaletteList.Items.Add(MakePaletteRow("/" + skill.Slug, skill.Description, isBuiltin: false));
+            }
+
+            if (_slashPaletteList.Items.Count == 0)
+            {
+                CloseSlashPalette();
+                return;
+            }
+
+            // Auto-select first item
+            _slashPaletteList.SelectedIndex = 0;
+        }
+
+        private FrameworkElement MakePaletteRow(string command, string description, bool isBuiltin)
+        {
+            var panel = new StackPanel { Tag = command };
+            var cmdLabel = new TextBlock
+            {
+                Text       = command,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = isBuiltin
+                    ? new SolidColorBrush(Color.FromRgb(130, 180, 255))
+                    : new SolidColorBrush(Color.FromRgb(180, 230, 130)),
+                FontSize   = 13
+            };
+            var descLabel = new TextBlock
+            {
+                Text       = description,
+                Foreground = new SolidColorBrush(Color.FromRgb(170, 170, 170)),
+                FontSize   = 11,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            panel.Children.Add(cmdLabel);
+            panel.Children.Add(descLabel);
+            return panel;
+        }
+
+        private void CommitPaletteSelection()
+        {
+            if (_slashPaletteList?.SelectedItem is FrameworkElement row && row.Tag is string command)
+            {
+                _inputTextBox.Text = command + " ";
+                _inputTextBox.CaretIndex = _inputTextBox.Text.Length;
+                CloseSlashPalette();
+                _inputTextBox.Focus();
+            }
+        }
+
+        private void CloseSlashPalette()
+        {
+            if (_slashPalette != null && _slashPalette.IsOpen)
+                _slashPalette.IsOpen = false;
         }
 
         // Sprint 2B — capture clipboard image and add to pending attachments
@@ -5055,6 +5286,37 @@ namespace RevitMCPBridge2026.AgentFramework
                 return;
             }
             _pendingRememberMode = false;
+
+            // ── Skill invocation: /slug → look up in SkillsManager ───────────────────
+            if (message.StartsWith("/") && !message.StartsWith("//"))
+            {
+                var parts        = message.Split(new[] { ' ' }, 2);
+                var slug         = parts[0].TrimStart('/').ToLowerInvariant();
+                var trailingArgs = parts.Length > 1 ? parts[1].Trim() : "";
+                var skill        = SkillsManager.GetSkillBySlug(slug);
+                if (skill != null)
+                {
+                    string injected;
+                    if (skill.Type == "revit-script")
+                    {
+                        injected = $"[SKILL: {skill.Name}] Execute the following C# script via callMCPMethod with method=executeRevitScript:\n```csharp\n{skill.Content}\n```\n" +
+                                   (string.IsNullOrEmpty(trailingArgs) ? "" : $"Additional context from user: {trailingArgs}");
+                    }
+                    else
+                    {
+                        injected = $"[SKILL: {skill.Name}]\n{skill.Content}" +
+                                   (string.IsNullOrEmpty(trailingArgs) ? "" : $"\n\nUser context: {trailingArgs}");
+                    }
+                    _inputTextBox.Text = "";
+                    CloseSlashPalette();
+                    AddUserMessage(message);
+                    _lastUserMessage = message;
+                    _lastToolCall    = null;
+                    message          = injected;
+                    goto SendToAgent;
+                }
+                // Unknown /command — fall through to existing built-in checks
+            }
 
             // ── Memory commands: /remember /save /note /mem /keep (+ text) ───────────
             var _rememberAliases = new[] { "/remember", "/save", "/note", "/mem", "/keep" };
@@ -5164,6 +5426,8 @@ namespace RevitMCPBridge2026.AgentFramework
             _inputTextBox.Text = "";
             AddUserMessage(message);  // show original in UI
 
+            CloseSlashPalette();
+
             // Inject vicinity map routing instruction into the API message (invisible to user)
             if (IsVicinityMapRequest(message))
             {
@@ -5173,6 +5437,8 @@ namespace RevitMCPBridge2026.AgentFramework
                           "createVicinityMap does not exist — never use it. No API key needed. " +
                           "Warn the user the script takes 60-90 seconds before step 1.]\n\n" + message;
             }
+
+            SendToAgent:
             SetProcessing(true);
             ShowProgress("Thinking...");
 
@@ -5332,7 +5598,18 @@ STYLE:
 - When something is wrong, explain exactly what and suggest how to fix it
 - Don't just describe what you could do - actually do it
 - Follow the WORKFLOWS exactly as specified above
-- VERIFY your work visually when placing elements on sheets";
+- VERIFY your work visually when placing elements on sheets
+
+SKILL SAVE OFFER — MANDATORY:
+After any successful callMCPMethod where method=executeRevitScript (Roslyn C# execution), if the script ran without errors, you MUST ask:
+""That script worked. Would you like me to save it as a reusable skill? If so, give it a name (or just say yes for an auto-generated one).""
+If the user confirms (yes, sure, save it, etc.), call saveSkill with:
+- slug: kebab-case version of the name (e.g. door-audit)
+- name: the human-readable name
+- description: one sentence describing what the script does
+- type: revit-script
+- content: the exact C# code that ran successfully
+Do not ask for saveSkill parameters separately — infer them from the script and conversation.";
 
                 // Sprint 2B — inject image attachments as vision blocks if present
                 if (_pendingAttachments.Count > 0)
