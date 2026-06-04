@@ -16,77 +16,104 @@ namespace RevitMCPBridge.Commands
     [Regeneration(RegenerationOption.Manual)]
     public class AnnotationCleanupCommand : IExternalCommand
     {
+        private static readonly string LogPath = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".bimops", "fix_overlaps_debug.txt");
+
+        private static void Log(string msg)
+        {
+            try { System.IO.File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss.fff}  {msg}\r\n"); } catch { }
+        }
+
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
-            var uiDoc = commandData.Application.ActiveUIDocument;
-            if (uiDoc == null)
+            Log("=== Execute START ===");
+            try
             {
-                TaskDialog.Show("Annotation Cleanup", "No active document.");
-                return Result.Cancelled;
-            }
+                var uiDoc = commandData.Application.ActiveUIDocument;
+                Log($"uiDoc={(uiDoc == null ? "NULL" : "ok")}");
+                if (uiDoc == null)
+                {
+                    TaskDialog.Show("Annotation Cleanup", "No active document.");
+                    return Result.Cancelled;
+                }
 
-            var doc  = uiDoc.Document;
-            var view = uiDoc.ActiveView;
+                var doc  = uiDoc.Document;
+                var view = uiDoc.ActiveView;
+                Log($"view={(view == null ? "NULL" : $"{view.ViewType} '{view.Name}'")}");
 
-            if (view == null || view.ViewType == ViewType.Schedule || view.ViewType == ViewType.DrawingSheet)
-            {
-                TaskDialog.Show("Annotation Cleanup",
-                    "Open a floor plan, section, elevation, or detail view first.");
-                return Result.Cancelled;
-            }
+                if (view == null || view.ViewType == ViewType.Schedule || view.ViewType == ViewType.DrawingSheet)
+                {
+                    TaskDialog.Show("Annotation Cleanup",
+                        "Open a floor plan, section, elevation, or detail view first.");
+                    return Result.Cancelled;
+                }
 
-            double scale = view.Scale;  // denominator: 48 → 1:48
+                double scale = view.Scale;
+                Log($"scale={scale}");
 
-            // Collect TextNote and IndependentTag elements visible in this view
-            var textNotes = new FilteredElementCollector(doc, view.Id)
-                .OfClass(typeof(TextNote))
-                .Cast<TextNote>()
-                .ToList();
+                var textNotes = new FilteredElementCollector(doc, view.Id)
+                    .OfClass(typeof(TextNote))
+                    .Cast<TextNote>()
+                    .ToList();
+                Log($"textNotes={textNotes.Count}");
 
-            var tags = new FilteredElementCollector(doc, view.Id)
-                .OfClass(typeof(IndependentTag))
-                .Cast<IndependentTag>()
-                .ToList();
+                var tags = new FilteredElementCollector(doc, view.Id)
+                    .OfClass(typeof(IndependentTag))
+                    .Cast<IndependentTag>()
+                    .ToList();
+                Log($"tags={tags.Count}");
 
-            var annotations = new List<AnnBounds>();
-            foreach (var tn  in textNotes) TryAdd(annotations, BuildTextNoteBounds(tn,  view, scale));
-            foreach (var tag in tags)      TryAdd(annotations, BuildTagBounds(tag,       view, scale));
+                var annotations = new List<AnnBounds>();
+                foreach (var tn  in textNotes) TryAdd(annotations, BuildTextNoteBounds(tn,  view, scale));
+                foreach (var tag in tags)      TryAdd(annotations, BuildTagBounds(tag,       view, scale));
 
-            int totalElements = textNotes.Count + tags.Count;
-            int skipped       = totalElements - annotations.Count;
+                int totalElements = textNotes.Count + tags.Count;
+                int skipped       = totalElements - annotations.Count;
+                Log($"annotations={annotations.Count}  skipped={skipped}");
 
-            if (annotations.Count < 2)
-            {
-                string skipNote = skipped > 0
-                    ? $"\n\n{skipped} element(s) skipped — Revit did not return measurable bounds (common for some tag families). Run the command while the view is fully open and regenerated."
-                    : "";
-                TaskDialog.Show("Annotation Cleanup",
-                    $"Only {annotations.Count} measurable annotation(s) found in '{view.Name}' — nothing to compare.{skipNote}");
+                if (annotations.Count < 2)
+                {
+                    string skipNote = skipped > 0
+                        ? $"\n\n{skipped} element(s) skipped — Revit did not return measurable bounds (common for some tag families). Run the command while the view is fully open and regenerated."
+                        : "";
+                    Log($"Showing 'too few annotations' dialog");
+                    TaskDialog.Show("Annotation Cleanup",
+                        $"Only {annotations.Count} measurable annotation(s) found in '{view.Name}' — nothing to compare.{skipNote}");
+                    return Result.Succeeded;
+                }
+
+                var overlaps = FindOverlaps(annotations);
+                Log($"overlaps={overlaps.Count}");
+
+                if (overlaps.Count == 0)
+                {
+                    Log("Showing 'no overlaps' dialog");
+                    TaskDialog.Show("Annotation Cleanup",
+                        $"No overlaps found among {annotations.Count} annotations in '{view.Name}'.");
+                    return Result.Succeeded;
+                }
+
+                var results = new List<NudgeResult>();
+                using (var trans = new Transaction(doc, "BIM Monkey — Fix Annotation Overlaps"))
+                {
+                    trans.Start();
+                    foreach (var pair in overlaps)
+                        results.Add(TryNudge(doc, pair));
+                    trans.Commit();
+                }
+                Log($"Nudged {results.Count} pairs. Showing results window.");
+
+                new OverlapResultsWindow(view.Name, annotations.Count, overlaps.Count, skipped, results).ShowDialog();
+                Log("Results window closed.");
                 return Result.Succeeded;
             }
-
-            // Detect all overlapping pairs before touching anything
-            var overlaps = FindOverlaps(annotations);
-
-            if (overlaps.Count == 0)
+            catch (Exception ex)
             {
-                TaskDialog.Show("Annotation Cleanup",
-                    $"No overlaps found among {annotations.Count} annotations in '{view.Name}'.");
-                return Result.Succeeded;
+                Log($"EXCEPTION: {ex.GetType().Name}: {ex.Message}\n{ex.StackTrace}");
+                message = ex.Message;
+                return Result.Failed;
             }
-
-            // Nudge all resolvable pairs in one atomic transaction (single Ctrl+Z to undo)
-            var results = new List<NudgeResult>();
-            using (var trans = new Transaction(doc, "BIM Monkey — Fix Annotation Overlaps"))
-            {
-                trans.Start();
-                foreach (var pair in overlaps)
-                    results.Add(TryNudge(doc, pair));
-                trans.Commit();
-            }
-
-            new OverlapResultsWindow(view.Name, annotations.Count, overlaps.Count, skipped, results).ShowDialog();
-            return Result.Succeeded;
         }
 
         // ── Bounds builders ──────────────────────────────────────────────────────
