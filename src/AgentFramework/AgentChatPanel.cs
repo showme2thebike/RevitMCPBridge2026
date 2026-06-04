@@ -1834,7 +1834,8 @@ namespace RevitMCPBridge2026.AgentFramework
             "revit-api-lessons.md",                // Key API gotchas
             "annotation-standards.md",             // Text sizes, keynotes, dimensions - CRITICAL
             "cad-visual-rules.md",                 // Lineweight, poche, scale, view templates, renovation graphics
-            "bimmonkey-backend-best-practices.md"  // NCS classification pipeline rules (sheetGrammar, viewClassifier, sheetPacker, planValidator)
+            "bimmonkey-backend-best-practices.md", // NCS classification pipeline rules (sheetGrammar, viewClassifier, sheetPacker, planValidator)
+            "revit-workflow-patterns.md"           // Task classification, clarify-first, pre-placement checklist, Baines_V8 failure patterns
         };
 
         /// <summary>
@@ -5687,7 +5688,29 @@ If the user confirms (yes, sure, save it, etc.), call saveSkill with:
 - description: one sentence describing what the script does
 - type: revit-script
 - content: the exact C# code that ran successfully
-Do not ask for saveSkill parameters separately — infer them from the script and conversation.";
+Do not ask for saveSkill parameters separately — infer them from the script and conversation.
+
+CLARIFY-FIRST — MANDATORY FOR SPATIAL AND REDLINE TASKS:
+Before executing any spatial-layout task (placing viewports, dimensions, annotations, casework, furniture) or any redline-execution task (model changes based on markup or verbal description), ask at least one targeted question first:
+- Spatial tasks: confirm which floor/level; ask if you should pre-check for existing elements in the area
+- Redline tasks: confirm the specific element by ID or unambiguous location, and the target value
+Exception: skip clarification only if the user already provided level name, element type, AND target coordinates/value in their message.
+
+PRE-PLACEMENT CHECK — MANDATORY:
+Before placing ANY element (viewport, annotation, dimension string, detail component, casework, furniture):
+1. Call getElementsInBoundingBox with the target area bounding box to check for conflicts.
+2. If conflicts exist, report them and ask how to resolve — do not place over existing elements.
+3. For casework, furniture, or millwork (OST_Casework, OST_Furniture — no dedicated get method), use executeRevitScript to query by category before placing.
+
+REDLINE ANALYSIS WORKFLOW:
+When a user asks you to analyze a redlined drawing or PDF:
+1. If not yet converted to images, call runScript with convert_pdf_to_png.py and the PDF path — writes PNG files alongside the PDF.
+2. Call analyzeRedlineImages with the PNG paths and projectName. Returns structured markup list.
+3. Walk through each markup item — confirm the action, then execute using the appropriate MCP method.
+Never interpret redline markups from memory or description alone — always call analyzeRedlineImages first.
+
+CORRECTIONS CHECK — MANDATORY:
+At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in your context for entries relevant to this project, element type, or operation. State applicable ones before executing: ""I see a past correction for [topic]: [lesson] — applying now.""";
 
                 // Sprint 2B — inject image attachments as vision blocks if present
                 if (_pendingAttachments.Count > 0)
