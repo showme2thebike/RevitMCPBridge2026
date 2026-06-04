@@ -477,6 +477,7 @@ namespace RevitMCPBridge
             var keyTips = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 { "AIAssistant",       "B" },  // Banana Chat — Alt→BM→B
+                { "SkillsButton",      "S" },  // Skills      — Alt→BM→S
                 { "BimMonkeyPlatform", "W" },
                 { "StartMCPServer",    "1" },
                 { "StopMCPServer",     "2" },
@@ -487,9 +488,9 @@ namespace RevitMCPBridge
                 { "Zoning",            "Z" },
                 { "Parcel",            "P" },
                 { "Permits",           "T" },
-                { "SiteClimate",       "S" },
-                { "AnnotationCleanup",  "X" },
-                { "CodeCheck",         "C" },
+                { "SiteClimate",       "K" },  // moved off S (Skills owns S)
+                { "AnnotationCleanup", "X" },
+                { "CodeCheck",         "C" },  // Code Check  — Alt→BM→C
                 { "Occupancy",         "O" },
                 { "EC3",               "G" },
                 { "ProductData",       "R" },
