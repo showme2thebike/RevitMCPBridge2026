@@ -1,7 +1,19 @@
 # BIM Monkey — RevitMCPBridge2026
 
+## Knowledge File Encryption
+All `.md` files in `knowledge/` are AES-256 encrypted at build time.
+- Key: `CONTENT_ENCRYPTION_KEY` (64 hex chars) — set in Railway env vars
+- Script: `bimmonkey-ai-git/scripts/encrypt_knowledge.js`
+- `build_plugin_zip.ps1` runs this automatically — set `$env:CONTENT_ENCRYPTION_KEY` before building
+- To add a new knowledge file: add plaintext `.md`, then run the build script (encrypt runs automatically)
+- The plugin decrypts in-memory using the key returned by `/api/auth/session`
+- Never commit plaintext knowledge files — always check BM01 magic header (`42 4D 01 00`) before committing
+
 ## Build & Deploy
 ```bash
+# 0. Set encryption key (get from Railway → bimmonkey-production → Variables)
+$env:CONTENT_ENCRYPTION_KEY = "cb158b53d99cec1c26919c05159c1b65ed893a16855df5c61d1bd645aeeb1655"
+
 # 1. Build plugin
 dotnet publish -c Release --no-self-contained
 
