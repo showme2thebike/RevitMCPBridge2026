@@ -422,30 +422,6 @@ namespace RevitMCPBridge
                   LargeImage = CreateButtonIcon("occupancy", 16), Image = CreateButtonIcon("occupancy", 16) };
             compliancePanel.AddItem(occupancyButtonData);
 
-            // ── Redline Review ─────────────────────────────────────────────
-            var redlinePanel = application.CreateRibbonPanel(_tabName, "Redline Review");
-
-            var redlineLoadData = new PushButtonData("RedlineLoad", "Redline\nReview", asm,
-                "RevitMCPBridge2026.AgentFramework.LaunchRedlineReviewCommand")
-                { ToolTip = "Attach a redline PDF to Banana Chat — opens a file picker, sends the PDF to Claude for markup analysis. No terminal required." };
-            var redlineLoadButton = redlinePanel.AddItem(redlineLoadData) as PushButton;
-            redlineLoadButton.LargeImage = CreateButtonIcon("redline-load", 32);
-            redlineLoadButton.Image      = CreateButtonIcon("redline-load", 16);
-
-            var redlineCancelData = new PushButtonData("RedlineCancel", "Cancel", asm,
-                "RevitMCPBridge.Commands.RedlineCancelCommand")
-                { ToolTip = "Stop the in-progress redline analysis and clear the loaded PDF" };
-            var redlineCancelButton = redlinePanel.AddItem(redlineCancelData) as PushButton;
-            redlineCancelButton.LargeImage = CreateButtonIcon("redline-cancel", 32);
-            redlineCancelButton.Image      = CreateButtonIcon("redline-cancel", 16);
-
-            var redlineClearData = new PushButtonData("RedlineClear", "Clear", asm,
-                "RevitMCPBridge.Commands.RedlineClearCommand")
-                { ToolTip = "Remove all redline context — next generation runs clean" };
-            var redlineClearButton = redlinePanel.AddItem(redlineClearData) as PushButton;
-            redlineClearButton.LargeImage = CreateButtonIcon("redline-clear", 32);
-            redlineClearButton.Image      = CreateButtonIcon("redline-clear", 16);
-
             // ── Additions ─────────────────────────────────────────────────
             // AddSlideOut() puts ▼ on the "Additions" panel title.
             // FAQ is always visible; EPDs expand from the panel title.
@@ -494,9 +470,6 @@ namespace RevitMCPBridge
                 { "Occupancy",         "O" },
                 { "EC3",               "G" },
                 { "ProductData",       "R" },
-                { "RedlineLoad",       "L" },
-                { "RedlineCancel",     "N" },
-                { "RedlineClear",      "D" },
                 { "FAQ",               "F" },
                 { "MCPSettings",       "E" },
                 { "MCPHelp",           "H" },
