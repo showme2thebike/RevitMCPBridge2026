@@ -2887,7 +2887,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
                 var requestBody = new
                 {
-                    model      = _selectedModel,
+                    model      = "claude-haiku-4-5-20251001",
                     max_tokens = 2048,
                     messages   = new[]
                     {
