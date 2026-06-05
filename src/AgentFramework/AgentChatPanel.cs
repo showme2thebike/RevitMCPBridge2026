@@ -5704,7 +5704,7 @@ Before placing ANY element (viewport, annotation, dimension string, detail compo
 
 REDLINE ANALYSIS WORKFLOW:
 When a user asks you to analyze a redlined drawing or PDF:
-1. If not yet converted to images, call runScript with convert_pdf_to_png.py and the PDF path — writes PNG files alongside the PDF.
+1. If not yet converted to images, call runScript with analyze_redlines.py using args: --pdf ""[pdfPath]"" --folder ""[outputDir]"" — writes PNG files to outputDir and returns JSON with page paths.
 2. Call analyzeRedlineImages with the PNG paths and projectName. Returns structured markup list.
 3. Walk through each markup item — confirm the action, then execute using the appropriate MCP method.
 Never interpret redline markups from memory or description alone — always call analyzeRedlineImages first.

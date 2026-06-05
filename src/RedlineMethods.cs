@@ -13,15 +13,10 @@ namespace RevitMCPBridge
     {
         private const string RedlinesEndpoint =
             "https://bimmonkey-production.up.railway.app/api/partner/redlines";
+        private const int BatchSize = 20;
 
-        /// <summary>
-        /// Analyze redlined drawing pages via the BIM Monkey vision backend.
-        /// Pass an array of local PNG/JPEG file paths (max 20).
-        /// Returns structured markup list: type, severity, location, description, action.
-        /// To convert a PDF first, call runScript with convert_pdf_to_png.py, then call this method.
-        /// </summary>
         [MCPMethod("analyzeRedlineImages", Category = "Redlines",
-            Description = "Analyze redlined drawing images via BIM Monkey vision. Pass PNG/JPEG file paths — returns structured change requests by type and severity.")]
+            Description = "Analyze redlined drawing images via BIM Monkey vision. Pass PNG/JPEG file paths — returns structured change requests by type and severity. Auto-batches large sets; no page-count limit.")]
         public static string AnalyzeRedlineImages(UIApplication uiApp, JObject parameters)
         {
             try
@@ -34,10 +29,8 @@ namespace RevitMCPBridge
                 if (imagePathsToken == null || imagePathsToken.Count == 0)
                     return JsonConvert.SerializeObject(new { success = false, error = "imagePaths is required — array of local PNG/JPEG file paths" });
 
-                if (imagePathsToken.Count > 20)
-                    return JsonConvert.SerializeObject(new { success = false, error = "Maximum 20 images per call" });
-
-                var pages = new List<object>();
+                // Build page list from disk
+                var allPages = new List<object>();
                 foreach (var token in imagePathsToken)
                 {
                     var path = token.ToString();
@@ -47,35 +40,58 @@ namespace RevitMCPBridge
                     var ext       = Path.GetExtension(path).ToLowerInvariant();
                     var mediaType = (ext == ".jpg" || ext == ".jpeg") ? "image/jpeg" : "image/png";
                     var data      = Convert.ToBase64String(File.ReadAllBytes(path));
-                    pages.Add(new { data, mediaType });
+                    allPages.Add(new { data, mediaType });
                 }
 
                 var apiKey = ReadBimMonkeyApiKey();
                 if (string.IsNullOrEmpty(apiKey))
                     return JsonConvert.SerializeObject(new { success = false, error = "BIM Monkey API key not found — check ~/.bimops/config.json" });
 
-                var payload = JsonConvert.SerializeObject(new { pages, projectName, discipline, focus });
+                int totalPages   = allPages.Count;
+                int batchCount   = (int)Math.Ceiling(totalPages / (double)BatchSize);
+                var allMarkups   = new JArray();
+                string summary   = null;
 
-                using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(120) })
+                for (int b = 0; b < batchCount; b++)
                 {
-                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
-                    var content  = new StringContent(payload, Encoding.UTF8, "application/json");
-                    var response = client.PostAsync(RedlinesEndpoint, content).GetAwaiter().GetResult();
-                    var body     = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    var batch   = allPages.GetRange(b * BatchSize, Math.Min(BatchSize, totalPages - b * BatchSize));
+                    var payload = JsonConvert.SerializeObject(new { pages = batch, projectName, discipline, focus });
 
-                    if (!response.IsSuccessStatusCode)
-                        return JsonConvert.SerializeObject(new { success = false, error = $"Backend error {(int)response.StatusCode}: {body}" });
-
-                    var result = JObject.Parse(body);
-                    return JsonConvert.SerializeObject(new
+                    using (var client = new HttpClient { Timeout = TimeSpan.FromSeconds(180) })
                     {
-                        success     = true,
-                        pageCount   = result["pageCount"],
-                        markupCount = result["markupCount"],
-                        summary     = result["summary"],
-                        pages       = result["pages"]
-                    });
+                        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
+                        var content  = new StringContent(payload, Encoding.UTF8, "application/json");
+                        var response = client.PostAsync(RedlinesEndpoint, content).GetAwaiter().GetResult();
+                        var body     = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+                        if (!response.IsSuccessStatusCode)
+                            return JsonConvert.SerializeObject(new
+                            {
+                                success = false,
+                                error   = $"Backend error {(int)response.StatusCode} on batch {b + 1}/{batchCount}: {body}"
+                            });
+
+                        var result = JObject.Parse(body);
+                        if (result["pages"] is JArray batchPages)
+                        {
+                            foreach (var page in batchPages)
+                                allMarkups.Add(page);
+                        }
+
+                        if (b == 0 && result["summary"] != null)
+                            summary = result["summary"].ToString();
+                    }
                 }
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success     = true,
+                    pageCount   = totalPages,
+                    batchCount,
+                    markupCount = allMarkups.Count,
+                    summary,
+                    pages       = allMarkups
+                });
             }
             catch (Exception ex)
             {
