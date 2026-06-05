@@ -121,6 +121,46 @@ Returns: what matches the firm standard, what differs, and quality/compliance is
                         },
                         required = new string[] { }
                     }
+                },
+                new ToolDefinition
+                {
+                    Name = "listRedlineSessions",
+                    Description = "List all redline review sessions uploaded to the BIM Monkey web app for this firm. Returns session IDs, project names, filenames, page counts, pages with redlines, and upload dates. Call this first to find the session ID before calling getRedlineSession or viewRedlinePage.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new { },
+                        required = new string[] { }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "getRedlineSession",
+                    Description = "Get the full redline review for a session: per-page analysis text, sheet numbers, sheet types, and which pages have redlines. Use listRedlineSessions first to get the session ID. Returns all pages so you can summarize findings, list all changes requested, or answer questions about specific sheets.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            sessionId = new { type = "integer", description = "Session ID from listRedlineSessions" }
+                        },
+                        required = new[] { "sessionId" }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "viewRedlinePage",
+                    Description = "Visually analyze a specific redline page — fetches the full-resolution page image and describes all markups, revision clouds, and handwritten notes in detail. Use when the user asks to see or describe a specific page. Use listRedlineSessions to get the session ID.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            sessionId  = new { type = "integer", description = "Session ID from listRedlineSessions" },
+                            pageNumber = new { type = "integer", description = "Page number (1-based)" }
+                        },
+                        required = new[] { "sessionId", "pageNumber" }
+                    }
                 }
             };
         }

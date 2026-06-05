@@ -2797,6 +2797,123 @@ namespace RevitMCPBridge2026.AgentFramework
             }
         }
 
+        private async Task<string> HandleListRedlineSessionsAsync(JObject _)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+                return JsonConvert.SerializeObject(new { success = false, error = "BIM Monkey API key not configured." });
+            try
+            {
+                using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/redlines");
+                var body = await resp.Content.ReadAsStringAsync();
+                if (!resp.IsSuccessStatusCode)
+                    return JsonConvert.SerializeObject(new { success = false, error = $"Redlines API returned {(int)resp.StatusCode}: {body}" });
+                return JsonConvert.SerializeObject(new { success = true, data = JToken.Parse(body) });
+            }
+            catch (Exception ex) { return JsonConvert.SerializeObject(new { success = false, error = ex.Message }); }
+        }
+
+        private async Task<string> HandleGetRedlineSessionAsync(JObject parameters)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+                return JsonConvert.SerializeObject(new { success = false, error = "BIM Monkey API key not configured." });
+            var sessionId = parameters?["sessionId"]?.ToObject<int?>();
+            if (sessionId == null)
+                return JsonConvert.SerializeObject(new { success = false, error = "sessionId is required" });
+            try
+            {
+                using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                var resp = await client.GetAsync($"https://bimmonkey-production.up.railway.app/api/redlines/{sessionId}");
+                var body = await resp.Content.ReadAsStringAsync();
+                if (!resp.IsSuccessStatusCode)
+                    return JsonConvert.SerializeObject(new { success = false, error = $"Redlines API returned {(int)resp.StatusCode}: {body}" });
+                return JsonConvert.SerializeObject(new { success = true, data = JToken.Parse(body) });
+            }
+            catch (Exception ex) { return JsonConvert.SerializeObject(new { success = false, error = ex.Message }); }
+        }
+
+        private async Task<string> HandleViewRedlinePageAsync(JObject parameters)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+                return JsonConvert.SerializeObject(new { success = false, error = "BIM Monkey API key not configured." });
+            var sessionId  = parameters?["sessionId"]?.ToObject<int?>();
+            var pageNumber = parameters?["pageNumber"]?.ToObject<int?>();
+            if (sessionId == null || pageNumber == null)
+                return JsonConvert.SerializeObject(new { success = false, error = "sessionId and pageNumber are required" });
+
+            try
+            {
+                // Attempt live vision: fetch image then run Anthropic vision call
+                string liveAnalysis = await TryLiveRedlineVisionAsync(sessionId.Value, pageNumber.Value);
+                if (liveAnalysis != null)
+                    return JsonConvert.SerializeObject(new { success = true, sessionId, pageNumber, analysis = liveAnalysis });
+
+                // Fallback: return stored analysis text from the DB
+                using var sessionClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                sessionClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                var sResp = await sessionClient.GetAsync($"https://bimmonkey-production.up.railway.app/api/redlines/{sessionId}");
+                if (sResp.IsSuccessStatusCode)
+                {
+                    var sBody   = await sResp.Content.ReadAsStringAsync();
+                    var session = JObject.Parse(sBody);
+                    var page    = (session["pages"] as JArray)?.FirstOrDefault(p => p["page_number"]?.ToObject<int>() == pageNumber);
+                    var stored  = page?["review_text"]?.ToString();
+                    if (!string.IsNullOrEmpty(stored))
+                        return JsonConvert.SerializeObject(new { success = true, sessionId, pageNumber, analysis = stored, source = "stored" });
+                }
+
+                return JsonConvert.SerializeObject(new { success = false, error = "Could not fetch page image and no stored analysis found." });
+            }
+            catch (Exception ex) { return JsonConvert.SerializeObject(new { success = false, error = ex.Message }); }
+        }
+
+        // Returns vision analysis string on success, null if image unavailable or no Anthropic key
+        private async Task<string> TryLiveRedlineVisionAsync(int sessionId, int pageNumber)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(_apiKey)) return null;
+
+                using var imgClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+                var imageUrl = $"https://bimmonkey-production.up.railway.app/api/redlines/{sessionId}/pages/{pageNumber}/image?key={Uri.EscapeDataString(_bimMonkeyApiKey)}";
+                var imgResp = await imgClient.GetAsync(imageUrl);
+                if (!imgResp.IsSuccessStatusCode) return null;
+
+                var imgBytes = await imgResp.Content.ReadAsByteArrayAsync();
+                var base64   = Convert.ToBase64String(imgBytes);
+                var mime     = imgResp.Content.Headers.ContentType?.MediaType ?? "image/png";
+
+                var requestBody = new
+                {
+                    model      = _selectedModel,
+                    max_tokens = 2048,
+                    messages   = new[]
+                    {
+                        new
+                        {
+                            role    = "user",
+                            content = new object[]
+                            {
+                                new { type = "image", source = new { type = "base64", media_type = mime, data = base64 } },
+                                new { type = "text", text = $"This is page {pageNumber} of a redline review. Describe all markups, revision clouds, annotations, and handwritten notes visible. Be specific about what changes are being requested and where on the sheet they appear." }
+                            }
+                        }
+                    }
+                };
+                using var anthropic = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+                anthropic.DefaultRequestHeaders.Add("x-api-key", _apiKey);
+                anthropic.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
+                var vResp  = await anthropic.PostAsync("https://api.anthropic.com/v1/messages",
+                    new System.Net.Http.StringContent(JsonConvert.SerializeObject(requestBody), System.Text.Encoding.UTF8, "application/json"));
+                var vBody  = await vResp.Content.ReadAsStringAsync();
+                var parsed = JObject.Parse(vBody);
+                return parsed["content"]?[0]?["text"]?.ToString();
+            }
+            catch { return null; }
+        }
+
         private async Task<string> HandleParcelLookupAsync(JObject parameters)
         {
             if (string.IsNullOrEmpty(_bimMonkeyApiKey))
@@ -2927,6 +3044,14 @@ namespace RevitMCPBridge2026.AgentFramework
             // BIM Monkey: climate zone + design conditions lookup
             if (methodName == "climateLookup")
                 return await HandleClimateLookupAsync(parameters);
+
+            // BIM Monkey: web app redline library
+            if (methodName == "listRedlineSessions")
+                return await HandleListRedlineSessionsAsync(parameters);
+            if (methodName == "getRedlineSession")
+                return await HandleGetRedlineSessionAsync(parameters);
+            if (methodName == "viewRedlinePage")
+                return await HandleViewRedlinePageAsync(parameters);
 
             // Handle file operation tools locally
             var fileResult = await HandleFileOperationAsync(methodName, parameters);
