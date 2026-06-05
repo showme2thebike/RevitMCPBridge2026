@@ -1802,6 +1802,56 @@ namespace RevitMCPBridge2026.AgentFramework
         // Knowledge base directory - resolved at runtime with fallbacks
         private static readonly string KnowledgeDir = ResolveKnowledgeDir();
 
+        /// <summary>
+        /// Read a knowledge file, decrypting it if the BM01 magic header is present.
+        /// Falls back to plaintext if ContentKey is unavailable (dev) or file is unencrypted.
+        /// </summary>
+        private static string ReadKnowledgeFile(string filePath)
+        {
+            var raw = File.ReadAllBytes(filePath);
+            // BM01 magic: 0x42 0x4D 0x01 0x00
+            if (raw.Length > 20 && raw[0] == 0x42 && raw[1] == 0x4D && raw[2] == 0x01 && raw[3] == 0x00)
+            {
+                var contentKey = RevitMCPBridge.AgentFramework.SessionTokenManager.ContentKey;
+                if (string.IsNullOrEmpty(contentKey))
+                    return $"[{Path.GetFileName(filePath)}: encrypted — session token pending]";
+                try
+                {
+                    var iv = new byte[16];
+                    Array.Copy(raw, 4, iv, 0, 16);
+                    var ciphertext = new byte[raw.Length - 20];
+                    Array.Copy(raw, 20, ciphertext, 0, ciphertext.Length);
+                    var key = KnowledgeHexToBytes(contentKey);
+                    using (var aes = System.Security.Cryptography.Aes.Create())
+                    {
+                        aes.Key = key;
+                        aes.IV = iv;
+                        aes.Mode = System.Security.Cryptography.CipherMode.CBC;
+                        aes.Padding = System.Security.Cryptography.PaddingMode.PKCS7;
+                        using (var decryptor = aes.CreateDecryptor())
+                        using (var ms = new MemoryStream(ciphertext))
+                        using (var cs = new System.Security.Cryptography.CryptoStream(ms, decryptor, System.Security.Cryptography.CryptoStreamMode.Read))
+                        using (var reader = new StreamReader(cs, System.Text.Encoding.UTF8))
+                            return reader.ReadToEnd();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[KnowledgeDecrypt] {Path.GetFileName(filePath)}: {ex.Message}");
+                    return $"[{Path.GetFileName(filePath)}: decryption failed — {ex.Message}]";
+                }
+            }
+            return System.Text.Encoding.UTF8.GetString(raw);
+        }
+
+        private static byte[] KnowledgeHexToBytes(string hex)
+        {
+            var result = new byte[hex.Length / 2];
+            for (int i = 0; i < result.Length; i++)
+                result[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
+            return result;
+        }
+
         private static string ResolveKnowledgeDir()
         {
             // 1. Alongside the DLL (standard installed location)
@@ -1861,7 +1911,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         {
                             try
                             {
-                                var content = File.ReadAllText(filePath);
+                                var content = ReadKnowledgeFile(filePath);
                                 sb.AppendLine($"--- {fileName} ---");
                                 sb.AppendLine(content);
                                 sb.AppendLine();
@@ -1893,7 +1943,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 var filePath = Path.Combine(KnowledgeDir, fileName);
                 if (File.Exists(filePath))
                 {
-                    return File.ReadAllText(filePath);
+                    return ReadKnowledgeFile(filePath);
                 }
                 return $"Knowledge file '{fileName}' not found. Use listKnowledgeFiles to see available files.";
             }
@@ -1917,7 +1967,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
                 // Load the full file — all 10 sections are important.
                 // The file is ~4K tokens, well within context budget.
-                var full = File.ReadAllText(filePath).Trim();
+                var full = ReadKnowledgeFile(filePath).Trim();
                 if (full.Length > 200)
                 {
                     _cadVisualRulesQuickRef = full;

@@ -613,8 +613,11 @@ namespace RevitMCPBridge
                                 continue;
                             }
 
-                            // Subscription gate — every request requires a valid server-issued token
-                            if (!RevitMCPBridge.AgentFramework.SessionTokenManager.IsValid)
+                            // Subscription gate — every request requires a valid server-issued token.
+                            // ping is exempt: it's a health check called before the first token arrives.
+                            string _gateMethod = null;
+                            try { _gateMethod = JObject.Parse(message)["method"]?.ToString(); } catch { }
+                            if (_gateMethod != "ping" && !RevitMCPBridge.AgentFramework.SessionTokenManager.IsValid)
                             {
                                 var authErr = Helpers.ResponseBuilder.Error(
                                     "BIM Monkey subscription required. Visit bimmonkey.ai to renew.",
@@ -760,6 +763,17 @@ namespace RevitMCPBridge
                             success = true,
                             message = "Configuration reloaded",
                             configuration = AppSettings.Instance.GetStatus()
+                        });
+
+                    case "getInstructions":
+                        var instr = RevitMCPBridge.AgentFramework.SessionTokenManager.Instructions;
+                        return JsonConvert.SerializeObject(new
+                        {
+                            success = !string.IsNullOrEmpty(instr),
+                            instructions = instr ?? "",
+                            message = string.IsNullOrEmpty(instr)
+                                ? "Instructions not yet loaded — session token may still be fetching. Retry in a few seconds."
+                                : $"Workflow instructions loaded ({instr.Length} chars). Apply before proceeding."
                         });
 
                     case "listMethods":

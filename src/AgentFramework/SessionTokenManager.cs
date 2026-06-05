@@ -26,6 +26,8 @@ namespace RevitMCPBridge.AgentFramework
         private static Timer _refreshTimer;
         private static string _apiKey;
         private static bool _subscriptionExpired;
+        private static string _contentKey;
+        private static string _instructions;
 
         private static readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(12) };
 
@@ -35,6 +37,8 @@ namespace RevitMCPBridge.AgentFramework
             DateTimeOffset.UtcNow.ToUnixTimeSeconds() < _tokenExp - 60;
 
         public static bool SubscriptionExpired => _subscriptionExpired;
+        public static string ContentKey => _contentKey;
+        public static string Instructions => _instructions;
 
         public static void Start(string bimMonkeyApiKey)
         {
@@ -98,6 +102,12 @@ namespace RevitMCPBridge.AgentFramework
                     _tokenExp = exp;
                     _subscriptionExpired = false;
                     Log.Information("[SessionToken] Token refreshed, valid until {Exp}", DateTimeOffset.FromUnixTimeSeconds(exp));
+
+                    var newContentKey = obj["contentKey"]?.ToString();
+                    if (!string.IsNullOrEmpty(newContentKey)) _contentKey = newContentKey;
+
+                    var newInstructions = obj["instructions"]?.ToString();
+                    if (!string.IsNullOrEmpty(newInstructions)) _instructions = newInstructions;
                 }
                 else
                 {
