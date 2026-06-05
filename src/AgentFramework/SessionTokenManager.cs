@@ -87,7 +87,38 @@ namespace RevitMCPBridge.AgentFramework
 
                 if (!resp.IsSuccessStatusCode)
                 {
-                    Log.Warning("[SessionToken] Non-success from session endpoint ({Status}) — keeping existing token", resp.StatusCode);
+                    // 503 means Railway is up and the API key passed auth, but JWT signing is
+                    // unavailable because SESSION_TOKEN_PRIVATE_KEY is not set on Railway.
+                    // Grant a short bypass lease so valid customers aren't locked out.
+                    // Expired/invalid keys still get 401/402 → blocked correctly below.
+                    if ((int)resp.StatusCode == 503)
+                    {
+                        // Always read body — Railway returns contentKey here even without JWT signing
+                        try
+                        {
+                            var bypassBody = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                            var bypassObj = JObject.Parse(bypassBody);
+                            var bypassKey = bypassObj["contentKey"]?.ToString();
+                            if (!string.IsNullOrEmpty(bypassKey)) _contentKey = bypassKey;
+                        }
+                        catch { }
+
+                        if (string.IsNullOrEmpty(_token))
+                        {
+                            _token = "unsigned-bypass";
+                            _tokenExp = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds();
+                            _subscriptionExpired = false;
+                            Log.Warning("[SessionToken] JWT signing unavailable (503) — granting 1-hour bypass for valid API key. Set SESSION_TOKEN_PRIVATE_KEY on Railway to fix.");
+                        }
+                        else
+                        {
+                            Log.Debug("[SessionToken] 503 on refresh — extending existing bypass, contentKey updated if present");
+                        }
+                    }
+                    else
+                    {
+                        Log.Warning("[SessionToken] Non-success from session endpoint ({Status}) — keeping existing token", resp.StatusCode);
+                    }
                     return;
                 }
 
@@ -155,27 +186,9 @@ namespace RevitMCPBridge.AgentFramework
         {
             try
             {
-                var docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-                var claudeMd = Path.Combine(docs, "BIM Monkey", "CLAUDE.md");
-                if (File.Exists(claudeMd))
-                {
-                    File.WriteAllText(claudeMd,
-                        "BIM Monkey subscription expired. Visit bimmonkey.ai to renew.\n",
-                        Encoding.UTF8);
-                    Log.Information("[SessionToken] CLAUDE.md overwritten with expiry stub");
-                }
-
-                var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-                foreach (var year in new[] { "2024", "2025", "2026" })
-                {
-                    var knowledgeDir = Path.Combine(appData, "Autodesk", "Revit", "Addins", year, "knowledge");
-                    if (!Directory.Exists(knowledgeDir)) continue;
-                    foreach (var f in Directory.GetFiles(knowledgeDir))
-                    {
-                        File.Delete(f);
-                        Log.Information("[SessionToken] Deleted knowledge file: {File}", f);
-                    }
-                }
+                // IP protection is handled by AES-encrypted knowledge files + subscription gate.
+                // CLAUDE.md is intentionally NOT overwritten — wiping it removes the API key,
+                // breaking re-subscription flows.
             }
             catch (Exception ex)
             {

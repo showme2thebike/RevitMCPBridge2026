@@ -12,9 +12,8 @@ namespace RevitMCPBridge2026.AgentFramework
     [Regeneration(RegenerationOption.Manual)]
     public class LaunchAgentCommand : IExternalCommand
     {
-        private static AgentChatPanel _panel;
-
-        public static AgentChatPanel GetPanel() => _panel;
+        public static AgentChatPanel GetPanel() =>
+            BananaChatDockablePane.Instance?.Panel;
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
@@ -22,18 +21,12 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 var uiApp = commandData.Application;
 
-                // If panel exists (visible or hidden), show and bring to front
-                if (_panel != null)
-                {
-                    _panel.Show();
-                    _panel.WindowState = System.Windows.WindowState.Normal;
-                    _panel.Activate();
-                    return Result.Succeeded;
-                }
+                // Ensure the panel has a UIApplication reference (set on first ribbon click if
+                // ApplicationInitialized fired before the pane's SetupDockablePane was called)
+                BananaChatDockablePane.Instance?.InitializeUiApp(uiApp);
 
-                // Create new panel
-                _panel = new AgentChatPanel(uiApp);
-                _panel.Show();
+                var pane = uiApp.GetDockablePane(BananaChatDockablePane.PaneId);
+                pane.Show();
 
                 return Result.Succeeded;
             }

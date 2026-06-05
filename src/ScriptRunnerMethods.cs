@@ -83,26 +83,38 @@ namespace RevitMCPBridge
                     });
                 }
 
+                // Use py.exe (Windows Python Launcher) — always in C:\Windows, finds the
+                // correct Python regardless of Revit's truncated PATH environment.
                 var psi = new ProcessStartInfo
                 {
-                    FileName               = "python",
-                    Arguments              = $"\"{scriptPath}\" {args}",
+                    FileName               = "py.exe",
+                    Arguments              = $"-3 \"{scriptPath}\" {args}",
                     UseShellExecute        = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError  = true,
                     CreateNoWindow         = true,
-                    WorkingDirectory       = OutputDir,  // relative output paths → Documents\BIM Monkey\
+                    WorkingDirectory       = OutputDir,
                 };
 
                 using (var proc = Process.Start(psi))
                 {
-                    var stdout    = proc.StandardOutput.ReadToEnd();
-                    var stderr    = proc.StandardError.ReadToEnd();
+                    // Read stdout and stderr on parallel threads to avoid the classic
+                    // ReadToEnd() deadlock: if either pipe buffer fills while the other
+                    // is being read synchronously, both sides block forever.
+                    var stdout = "";
+                    var stderr = "";
+                    var stdoutThread = new System.Threading.Thread(() => stdout = proc.StandardOutput.ReadToEnd());
+                    var stderrThread = new System.Threading.Thread(() => stderr = proc.StandardError.ReadToEnd());
+                    stdoutThread.Start();
+                    stderrThread.Start();
+
                     bool finished = proc.WaitForExit(timeoutSec * 1000);
 
                     if (!finished)
                     {
                         try { proc.Kill(); } catch { }
+                        stdoutThread.Join(3000);
+                        stderrThread.Join(3000);
                         return JsonConvert.SerializeObject(new
                         {
                             success   = false,
@@ -114,6 +126,8 @@ namespace RevitMCPBridge
                         });
                     }
 
+                    stdoutThread.Join();
+                    stderrThread.Join();
                     return JsonConvert.SerializeObject(new
                     {
                         success   = proc.ExitCode == 0,

@@ -14,18 +14,9 @@ namespace RevitMCPBridge2026.AgentFramework
             try
             {
                 var uiApp = commandData.Application;
-                var panel = LaunchAgentCommand.GetPanel();
-                if (panel == null || !panel.IsVisible)
-                {
-                    panel = new AgentChatPanel(uiApp);
-                    panel.Show();
-                }
-                else
-                {
-                    panel.Activate();
-                }
-
-                panel.PreloadCompliancePrompt();
+                BananaChatDockablePane.Instance?.InitializeUiApp(uiApp);
+                uiApp.GetDockablePane(BananaChatDockablePane.PaneId).Show();
+                LaunchAgentCommand.GetPanel()?.PreloadCompliancePrompt();
                 return Result.Succeeded;
             }
             catch (Exception ex)

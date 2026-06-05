@@ -36,20 +36,10 @@ namespace RevitMCPBridge2026.AgentFramework
                     return Result.Cancelled;
                 }
 
-                // Ensure Banana Chat is open
                 var uiApp = commandData.Application;
-                var panel = LaunchAgentCommand.GetPanel();
-                if (panel == null || !panel.IsVisible)
-                {
-                    panel = new AgentChatPanel(uiApp);
-                    panel.Show();
-                }
-                else
-                {
-                    panel.Activate();
-                }
-
-                panel.AttachRedlinePdf(path);
+                BananaChatDockablePane.Instance?.InitializeUiApp(uiApp);
+                uiApp.GetDockablePane(BananaChatDockablePane.PaneId).Show();
+                LaunchAgentCommand.GetPanel()?.AttachRedlinePdf(path);
                 return Result.Succeeded;
             }
             catch (Exception ex)

@@ -32,11 +32,9 @@ namespace RevitMCPBridge.Commands
                 if (dialog.ShowDialog() != true || dialog.Result == null)
                     return Result.Cancelled;
 
-                var panel = LaunchAgentCommand.GetPanel();
-                if (panel == null) { panel = new AgentChatPanel(uiApp); panel.Show(); }
-                else { panel.Show(); panel.WindowState = System.Windows.WindowState.Normal; panel.Activate(); }
-
-                panel.PreloadEC3Prompt(dialog.Result);
+                RevitMCPBridge2026.AgentFramework.BananaChatDockablePane.Instance?.InitializeUiApp(uiApp);
+                uiApp.GetDockablePane(RevitMCPBridge2026.AgentFramework.BananaChatDockablePane.PaneId).Show();
+                LaunchAgentCommand.GetPanel()?.PreloadEC3Prompt(dialog.Result);
                 return Result.Succeeded;
             }
             catch (Exception ex)

@@ -23,7 +23,7 @@ namespace RevitMCPBridge2026.AgentFramework
     /// AI Assistant Chat Panel - Built entirely in code for Revit compatibility
     /// This provides the same power as Claude Code but in a visual UI
     /// </summary>
-    public class AgentChatPanel : Window
+    public class AgentChatPanel : UserControl
     {
         // UI Elements
         private TextBlock _statusText;
@@ -95,18 +95,6 @@ namespace RevitMCPBridge2026.AgentFramework
         private System.Windows.Controls.TextBox _streamingTextBox;
         private StackPanel _streamingContainer;
 
-        // Global hotkey (Ctrl+B) — open/focus Banana Chat from anywhere in Revit
-        [DllImport("user32.dll")] private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
-        [DllImport("user32.dll")] private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
-        [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
-        [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
-        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
-        private struct RECT { public int Left, Top, Right, Bottom; }
-        private const int    HOTKEY_ID  = 9001;
-        private const uint   MOD_CTRL   = 0x0002;
-        private const uint   VK_B       = 0x42;
-        private HwndSource   _hwndSource;
-
         // Proactive prompting
         private System.Windows.Threading.DispatcherTimer _proactiveTimer;
         private readonly HashSet<string> _promptedViewKeys = new HashSet<string>();
@@ -143,7 +131,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private ListBox _slashPaletteList;
         private List<BimMonkeySkill> _cachedSkills; // loaded from /api/skills; null = needs refresh
 
-        public AgentChatPanel(UIApplication uiApp)
+        public AgentChatPanel(UIApplication uiApp = null)
         {
             _uiApp = uiApp;
 
@@ -153,13 +141,6 @@ namespace RevitMCPBridge2026.AgentFramework
             // Lock to the document that was active when the panel opened
             _lockedDocTitle = uiApp?.ActiveUIDocument?.Document?.Title;
 
-            // Window setup
-            Title = "Banana Chat";
-            Width = 500;
-            Height = 700;
-            MinWidth = 350;
-            MinHeight = 400;
-            WindowStartupLocation = WindowStartupLocation.Manual;
             Background = new SolidColorBrush(Color.FromRgb(30, 30, 30));
 
             // Build UI
@@ -223,18 +204,9 @@ namespace RevitMCPBridge2026.AgentFramework
                 }
             };
 
-            // Hide instead of close so conversation survives accidental X press
-            Closing += (s, e) =>
+            // Cleanup when Revit unloads this pane
+            Unloaded += (s, e) =>
             {
-                if (!_allowClose)
-                {
-                    e.Cancel = true;
-                    Hide();
-                    // Return focus to Revit, not Claude Code or whatever was behind BC
-                    var revitHwnd = System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle;
-                    if (revitHwnd != IntPtr.Zero) SetForegroundWindow(revitHwnd);
-                    return;
-                }
                 _isClosing = true;
                 _agent?.NotifyInterrupted();
                 SaveSession();
@@ -308,81 +280,22 @@ namespace RevitMCPBridge2026.AgentFramework
             Content = mainGrid;
         }
 
-        protected override void OnSourceInitialized(EventArgs e)
-        {
-            base.OnSourceInitialized(e);
-            var helper = new WindowInteropHelper(this);
-
-            // Parent to Revit's main window — panel stays above Revit, never gets buried behind it
-            var revitHwnd = System.Diagnostics.Process.GetCurrentProcess().MainWindowHandle;
-            helper.Owner = revitHwnd;
-
-            // Size and snap to the right edge of the Revit window at full height
-            if (revitHwnd != IntPtr.Zero && GetWindowRect(revitHwnd, out var revitRect))
-            {
-                var src = PresentationSource.FromVisual(this);
-                double sx = src?.CompositionTarget?.TransformFromDevice.M11 ?? 1.0;
-                double sy = src?.CompositionTarget?.TransformFromDevice.M22 ?? 1.0;
-
-                double rLeft   = revitRect.Left   * sx;
-                double rTop    = revitRect.Top    * sy;
-                double rRight  = revitRect.Right  * sx;
-                double rBottom = revitRect.Bottom * sy;
-
-                const double chatWidth = 440;
-                Width  = chatWidth;
-                Height = rBottom - rTop;
-                Left   = rRight - chatWidth;
-                Top    = rTop;
-            }
-            else
-            {
-                // Fallback: right edge of work area, vertically centered
-                var work = SystemParameters.WorkArea;
-                Left = work.Right - Width - 20;
-                Top  = work.Top + (work.Height - Height) / 2;
-            }
-
-            _hwndSource = HwndSource.FromHwnd(helper.Handle);
-            _hwndSource?.AddHook(WndProc);
-            RegisterHotKey(helper.Handle, HOTKEY_ID, MOD_CTRL, VK_B);
-        }
-
-        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
-        {
-            const int WM_HOTKEY      = 0x0312;
-            const int WM_ACTIVATEAPP = 0x001C;
-
-            // Close palette only when the entire Revit process loses focus (alt-tab to another app).
-            // wParam=0 means the process is being deactivated; wParam=1 means it gained focus.
-            // This does NOT fire on intra-process focus changes (clicking Revit's ribbon, etc.).
-            if (msg == WM_ACTIVATEAPP && wParam == IntPtr.Zero)
-            {
-                Dispatcher.BeginInvoke(new Action(CloseSlashPalette));
-            }
-
-            if (msg == WM_HOTKEY && wParam.ToInt32() == HOTKEY_ID)
-            {
-                Show();
-                WindowState = WindowState.Normal;
-                Activate();
-                handled = true;
-            }
-            return IntPtr.Zero;
-        }
 
         public void Shutdown()
         {
-            _allowClose = true;
-            Close();
+            _isClosing = true;
+            _agent?.NotifyInterrupted();
+            SaveSession();
+            DisconnectMCP();
+            _thinkingTimer?.Stop();
         }
 
-        protected override void OnClosed(EventArgs e)
+        public void SetUiApp(UIApplication uiApp)
         {
-            var helper = new WindowInteropHelper(this);
-            UnregisterHotKey(helper.Handle, HOTKEY_ID);
-            _hwndSource?.RemoveHook(WndProc);
-            base.OnClosed(e);
+            if (_uiApp != null) return;
+            _uiApp = uiApp;
+            _sessionProjectName = uiApp?.ActiveUIDocument?.Document?.Title ?? _sessionProjectName;
+            _lockedDocTitle = _lockedDocTitle ?? uiApp?.ActiveUIDocument?.Document?.Title;
         }
 
         private Border CreateHeader()
@@ -403,11 +316,12 @@ namespace RevitMCPBridge2026.AgentFramework
 
             var title = new TextBlock
             {
-                Text = "BIM Monkey - Banana Chat",
+                Text = "Banana Chat",
                 Foreground = Brushes.White,
-                FontSize = 16,
+                FontSize = 15,
                 FontWeight = FontWeights.SemiBold,
                 VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
             };
             Grid.SetColumn(title, 0);
             titleRow.Children.Add(title);
@@ -859,7 +773,6 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (_inputTextBox != null)
                         _inputTextBox.Text = prompt;
                 });
-                Activate();
             }
             catch { }
         }
@@ -883,7 +796,6 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (_inputTextBox != null)
                         _inputTextBox.Text = prompt;
                 });
-                Activate();
             }
             catch { }
         }
@@ -907,7 +819,6 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (_inputTextBox != null)
                         _inputTextBox.Text = prompt;
                 });
-                Activate();
             }
             catch { }
         }
@@ -926,7 +837,6 @@ namespace RevitMCPBridge2026.AgentFramework
                     "3. Flag any FAR, height limit, or setback constraints relevant to my program\n" +
                     "4. Tell me what jurisdiction data (county assessor, GIS) you'd need to complete a full site code check";
                 Dispatcher.Invoke(() => { if (_inputTextBox != null) _inputTextBox.Text = prompt; });
-                Activate();
             }
             catch { }
         }
@@ -955,7 +865,6 @@ namespace RevitMCPBridge2026.AgentFramework
                     "3. Note the most recent permit date and what it tells us about the building's documented history\n" +
                     "4. Suggest what I should verify with the jurisdiction before permit submittal";
                 Dispatcher.Invoke(() => { if (_inputTextBox != null) _inputTextBox.Text = prompt; });
-                Activate();
             }
             catch { }
         }
@@ -974,7 +883,6 @@ namespace RevitMCPBridge2026.AgentFramework
                     "4. Summarize solar exposure context for passive design or PV feasibility\n" +
                     "5. Store the climate zone and design temps in project memory for future sessions";
                 Dispatcher.Invoke(() => { if (_inputTextBox != null) _inputTextBox.Text = prompt; });
-                Activate();
             }
             catch { }
         }
@@ -994,7 +902,6 @@ namespace RevitMCPBridge2026.AgentFramework
                     "4. Note which products would be compliant for LEED v4.1 MRc2 (EPD credit) or LEED v4 MRc4\n" +
                     "5. Recommend whether it's worth requesting a project-specific EPD from the manufacturer";
                 Dispatcher.Invoke(() => { if (_inputTextBox != null) _inputTextBox.Text = prompt; });
-                Activate();
             }
             catch { }
         }
@@ -1015,7 +922,6 @@ namespace RevitMCPBridge2026.AgentFramework
                     "5. Identify any rooms marked \"(default)\" that I should verify — those may be misclassified\n" +
                     "6. List what egress path information you'd still need from me to complete a full IBC §1003–1006 review";
                 Dispatcher.Invoke(() => { if (_inputTextBox != null) _inputTextBox.Text = prompt; });
-                Activate();
             }
             catch { }
         }
@@ -1103,7 +1009,6 @@ namespace RevitMCPBridge2026.AgentFramework
                 var fileName = System.IO.Path.GetFileName(filePath);
                 AddAttachment(new AttachedImage { Base64Data = base64, MediaType = "application/pdf", Label = $"PDF: {fileName}" });
                 AddAssistantMessage($"Redline attached: {fileName}\n\nWhat would you like me to do with it? I can summarize the markup, list requested changes, or identify items to action in Revit.");
-                Activate();
             }
             catch (Exception ex)
             {
@@ -1687,7 +1592,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 Width = 500,
                 Height = 430,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = this,
+                Owner = System.Windows.Window.GetWindow(this),
                 Background = new SolidColorBrush(Color.FromRgb(30, 30, 30))
             };
 
@@ -1786,12 +1691,21 @@ namespace RevitMCPBridge2026.AgentFramework
                 if (selectedItem != null)
                     _selectedModel = selectedItem.Tag.ToString();
 
-                if (!string.IsNullOrEmpty(_apiKey))
+                if (string.IsNullOrEmpty(_apiKey))
                 {
-                    SaveConfig();
-                    InitializeAgent();
-                    dialog.Close();
+                    MessageBox.Show("Anthropic API key is required.", "Missing Key",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
                 }
+
+                SaveConfig();
+
+                // Restart subscription gate with updated BIM Monkey key
+                RevitMCPBridge.AgentFramework.SessionTokenManager.Stop();
+                RevitMCPBridge.AgentFramework.SessionTokenManager.Start(_bimMonkeyApiKey);
+
+                InitializeAgent();
+                dialog.Close();
             };
             stack.Children.Add(button);
 
@@ -6154,7 +6068,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 Width = 400,
                 Height = 300,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = this,
+                Owner = System.Windows.Window.GetWindow(this),
                 Background = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
                 ResizeMode = ResizeMode.NoResize
             };

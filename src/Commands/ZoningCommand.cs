@@ -47,21 +47,9 @@ namespace RevitMCPBridge.Commands
                 if (dialog.ShowDialog() != true || dialog.Result == null)
                     return Result.Cancelled;
 
-                // Open or reuse Banana Chat and pre-load zoning prompt
-                var panel = LaunchAgentCommand.GetPanel();
-                if (panel == null)
-                {
-                    panel = new AgentChatPanel(uiApp);
-                    panel.Show();
-                }
-                else
-                {
-                    panel.Show();
-                    panel.WindowState = System.Windows.WindowState.Normal;
-                    panel.Activate();
-                }
-
-                panel.PreloadZoningPrompt(dialog.Result);
+                RevitMCPBridge2026.AgentFramework.BananaChatDockablePane.Instance?.InitializeUiApp(uiApp);
+                uiApp.GetDockablePane(RevitMCPBridge2026.AgentFramework.BananaChatDockablePane.PaneId).Show();
+                LaunchAgentCommand.GetPanel()?.PreloadZoningPrompt(dialog.Result);
                 return Result.Succeeded;
             }
             catch (Exception ex)

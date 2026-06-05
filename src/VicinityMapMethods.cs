@@ -74,8 +74,8 @@ namespace RevitMCPBridge
 
                 var psi = new ProcessStartInfo
                 {
-                    FileName               = "python",
-                    Arguments              = $"\"{scriptPath}\" \"{address}\" \"{pngFile}\"{distArg}",
+                    FileName               = "py.exe",
+                    Arguments              = $"-3 \"{scriptPath}\" \"{address}\" \"{pngFile}\"{distArg}",
                     UseShellExecute        = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError  = true,
@@ -87,15 +87,26 @@ namespace RevitMCPBridge
 
                 using (var proc = Process.Start(psi))
                 {
-                    var stdout  = proc.StandardOutput.ReadToEnd();
-                    var stderr  = proc.StandardError.ReadToEnd();
-                    bool done   = proc.WaitForExit(timeoutSec * 1000);
+                    var stdout = "";
+                    var stderr = "";
+                    var stdoutThread = new System.Threading.Thread(() => stdout = proc.StandardOutput.ReadToEnd());
+                    var stderrThread = new System.Threading.Thread(() => stderr = proc.StandardError.ReadToEnd());
+                    stdoutThread.Start();
+                    stderrThread.Start();
+
+                    bool done = proc.WaitForExit(timeoutSec * 1000);
 
                     if (!done)
                     {
                         try { proc.Kill(); } catch { }
-                        return ResponseBuilder.Error($"Script timed out after {timeoutSec}s").Build();
+                        stdoutThread.Join(3000);
+                        stderrThread.Join(3000);
+                        return ResponseBuilder.Error($"Script timed out after {timeoutSec}s. stderr: {stderr.Trim()}").Build();
                     }
+
+                    stdoutThread.Join();
+                    stderrThread.Join();
+
                     if (proc.ExitCode != 0)
                         return ResponseBuilder.Error($"Script failed (exit {proc.ExitCode}): {stderr.Trim()}").Build();
 
@@ -175,24 +186,32 @@ namespace RevitMCPBridge
 
                 Log.Information("createVicinityMapLines: textTypeId={Id}", textTypeId?.Value.ToString() ?? "null");
 
-                // Delete any existing vicinity map drafting views so re-runs don't accumulate duplicates.
+                // Delete stale vicinity map drafting views that are NOT placed on any sheet.
+                // Views already on sheets are kept — deleting them would break existing placements.
+                var placedViewIds = new FilteredElementCollector(doc)
+                    .OfClass(typeof(Viewport))
+                    .Cast<Viewport>()
+                    .Select(vp => vp.ViewId)
+                    .ToHashSet();
+
                 using (var txCleanup = new Transaction(doc, "Delete Stale Vicinity Map Views"))
                 {
                     txCleanup.Start();
                     var stale = new FilteredElementCollector(doc)
                         .OfClass(typeof(ViewDrafting))
                         .Cast<ViewDrafting>()
-                        .Where(v => v.Name.StartsWith("VICINITY MAP", StringComparison.OrdinalIgnoreCase))
+                        .Where(v => v.Name.StartsWith("VICINITY MAP", StringComparison.OrdinalIgnoreCase)
+                                 && !placedViewIds.Contains(v.Id))
                         .Select(v => v.Id)
                         .ToList();
                     int deleted = 0;
                     foreach (var id in stale)
                     {
                         try { doc.Delete(id); deleted++; }
-                        catch { /* skip views that are on sheets */ }
+                        catch { }
                     }
                     if (deleted > 0)
-                        Log.Information("createVicinityMapLines: deleted {N} stale vicinity map view(s)", deleted);
+                        Log.Information("createVicinityMapLines: deleted {N} stale unplaced vicinity map view(s)", deleted);
                     txCleanup.Commit();
                 }
 

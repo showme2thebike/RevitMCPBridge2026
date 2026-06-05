@@ -74,10 +74,35 @@ namespace RevitMCPBridge
         {
             try
             {
+                // Register Banana Chat as a dockable pane — must happen before ribbon/tab creation
+                try
+                {
+                    var paneProvider = new RevitMCPBridge2026.AgentFramework.BananaChatDockablePane();
+                    application.RegisterDockablePane(
+                        RevitMCPBridge2026.AgentFramework.BananaChatDockablePane.PaneId,
+                        "BIM Monkey",
+                        paneProvider);
+                    Log.Information("Banana Chat dockable pane registered");
+                }
+                catch (Exception dpEx)
+                {
+                    Log.Warning(dpEx, "Failed to register Banana Chat dockable pane (non-fatal)");
+                }
+
                 // Store UI application reference and initialize ChangeTracker
                 application.ControlledApplication.ApplicationInitialized += (sender, args) =>
                 {
                     _uiApplication = new UIApplication(sender as Autodesk.Revit.ApplicationServices.Application);
+
+                    // Wire UIApplication into the dockable pane panel now that Revit is fully initialized
+                    try
+                    {
+                        RevitMCPBridge2026.AgentFramework.BananaChatDockablePane.Instance?.InitializeUiApp(_uiApplication);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "Could not wire UIApplication into Banana Chat pane (non-fatal)");
+                    }
 
                     // Initialize the ChangeTracker for real-time change detection
                     try

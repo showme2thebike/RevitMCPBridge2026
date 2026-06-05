@@ -1049,6 +1049,8 @@ namespace RevitMCPBridge
                 var sheetIdInt = v.GetRequired<int>("sheetId");
                 var sheet = ElementLookup.GetSheet(doc, sheetIdInt);
 
+                // Regenerate so viewport list reflects all committed transactions.
+                doc.Regenerate();
                 var viewportIds = sheet.GetAllViewports();
                 var viewports = new List<object>();
 
@@ -3464,9 +3466,10 @@ namespace RevitMCPBridge
 
                 // If no viewIds provided, auto-find unplaced views based on requested type
                 int[] viewIdArray = null;
-                string requestedViewType = parameters["viewType"]?.ToString()?.ToLower() ?? "drafting"; // Default to drafting/details
+                bool viewIdsExplicit = parameters["viewIds"] != null; // caller supplied specific IDs — don't shuffle
+                string requestedViewType = parameters["viewType"]?.ToString()?.ToLower() ?? "drafting";
 
-                if (parameters["viewIds"] != null)
+                if (viewIdsExplicit)
                 {
                     viewIdArray = parameters["viewIds"].ToObject<int[]>();
                 }
@@ -3682,9 +3685,9 @@ namespace RevitMCPBridge
                     requestedCount = Math.Max(requestedCount, 1); // At least 1
                 }
 
-                if (requestedCount > 0 && requestedCount < viewIdArray.Length)
+                if (!viewIdsExplicit && requestedCount > 0 && requestedCount < viewIdArray.Length)
                 {
-                    // Randomly shuffle and take requested count
+                    // Only shuffle auto-discovered views, never caller-supplied IDs.
                     var random = new Random();
                     viewIdArray = viewIdArray
                         .OrderBy(x => random.Next())

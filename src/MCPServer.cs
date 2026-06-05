@@ -613,16 +613,15 @@ namespace RevitMCPBridge
                                 continue;
                             }
 
-                            // Subscription gate — every request requires a valid server-issued token.
-                            // ping is exempt: it's a health check called before the first token arrives.
+                            // Subscription gate — hard blocks non-ping calls when token is invalid.
                             string _gateMethod = null;
                             try { _gateMethod = JObject.Parse(message)["method"]?.ToString(); } catch { }
                             if (_gateMethod != "ping" && !RevitMCPBridge.AgentFramework.SessionTokenManager.IsValid)
                             {
-                                var authErr = Helpers.ResponseBuilder.Error(
-                                    "BIM Monkey subscription required. Visit bimmonkey.ai to renew.",
-                                    "SUBSCRIPTION_REQUIRED").Build();
-                                await writer.WriteLineAsync(authErr);
+                                var gateResponse = RevitMCPBridge.Helpers.ResponseBuilder
+                                    .Error("Active BIM Monkey subscription required. Visit bimmonkey.ai to subscribe.", "SUBSCRIPTION_REQUIRED")
+                                    .Build();
+                                await writer.WriteLineAsync(gateResponse);
                                 continue;
                             }
 
