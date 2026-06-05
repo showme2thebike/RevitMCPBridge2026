@@ -613,6 +613,16 @@ namespace RevitMCPBridge
                                 continue;
                             }
 
+                            // Subscription gate — every request requires a valid server-issued token
+                            if (!RevitMCPBridge.AgentFramework.SessionTokenManager.IsValid)
+                            {
+                                var authErr = Helpers.ResponseBuilder.Error(
+                                    "BIM Monkey subscription required. Visit bimmonkey.ai to renew.",
+                                    "SUBSCRIPTION_REQUIRED").Build();
+                                await writer.WriteLineAsync(authErr);
+                                continue;
+                            }
+
                             Log.Debug("Received message ({Size} bytes)", message.Length);
                             MessageReceived?.Invoke(this, message);
 

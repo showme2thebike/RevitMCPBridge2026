@@ -234,6 +234,18 @@ namespace RevitMCPBridge
                 try { ApplyButtonKeyTips(); }
                 catch (Exception ex) { Log.Warning($"Could not set button KeyTips: {ex.Message}"); }
 
+                // Start session token manager — gates all MCP calls behind subscription check
+                try
+                {
+                    var bmKey = RevitMCPBridge.AgentFramework.SessionTokenManager.ReadBimMonkeyApiKey();
+                    RevitMCPBridge.AgentFramework.SessionTokenManager.Start(bmKey);
+                    Log.Information("SessionTokenManager started");
+                }
+                catch (Exception tokenEx)
+                {
+                    Log.Warning(tokenEx, "SessionTokenManager failed to start (non-fatal)");
+                }
+
                 // Auto-start server on Revit startup (respects Settings → Auto-start toggle, default: on)
                 try
                 {
