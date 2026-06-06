@@ -54,10 +54,19 @@ namespace RevitMCPBridge
         }
 
         /// <summary>
+        /// True while IExternalEventHandler.Execute() is active — Revit API context is held
+        /// and native dialogs (VG, Revisions) cannot open. Polled by the BC panel status bar.
+        /// </summary>
+        public static volatile bool IsExecuting;
+
+        /// <summary>
         /// Execute queued requests in Revit's main thread
         /// </summary>
         public void Execute(UIApplication app)
         {
+            IsExecuting = true;
+            try
+            {
             int processedCount = 0;
             int skippedCount = 0;
             const int maxBatchSize = 10;
@@ -172,6 +181,11 @@ namespace RevitMCPBridge
             {
                 Log.Information("Processed {Processed} requests, skipped {Skipped} in this Execute cycle",
                     processedCount, skippedCount);
+            }
+            }
+            finally
+            {
+                IsExecuting = false;
             }
         }
 

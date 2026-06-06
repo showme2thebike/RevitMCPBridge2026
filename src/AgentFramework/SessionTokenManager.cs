@@ -30,6 +30,8 @@ namespace RevitMCPBridge.AgentFramework
         private static string _instructions;
 
         private static readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(12) };
+        private static Timer _retryTimer;
+        private const int RETRY_DELAY_MINUTES = 2;
 
         public static bool IsValid =>
             !_subscriptionExpired &&
@@ -63,6 +65,8 @@ namespace RevitMCPBridge.AgentFramework
         {
             _refreshTimer?.Dispose();
             _refreshTimer = null;
+            _retryTimer?.Dispose();
+            _retryTimer = null;
             _token = null;
         }
 
@@ -134,6 +138,10 @@ namespace RevitMCPBridge.AgentFramework
                     _subscriptionExpired = false;
                     Log.Information("[SessionToken] Token refreshed, valid until {Exp}", DateTimeOffset.FromUnixTimeSeconds(exp));
 
+                    // Successful refresh — cancel any pending retry
+                    _retryTimer?.Dispose();
+                    _retryTimer = null;
+
                     var newContentKey = obj["contentKey"]?.ToString();
                     if (!string.IsNullOrEmpty(newContentKey)) _contentKey = newContentKey;
 
@@ -148,6 +156,19 @@ namespace RevitMCPBridge.AgentFramework
             catch (Exception ex)
             {
                 Log.Warning(ex, "[SessionToken] Network error during token fetch — keeping existing token");
+                // If the current token is expiring within 10 minutes, schedule an early retry
+                // so a transient network hiccup at 2am doesn't cause a 40-minute outage window.
+                var secsRemaining = _tokenExp - DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                if (secsRemaining < 600 && !string.IsNullOrEmpty(_token) && _retryTimer == null)
+                {
+                    _retryTimer = new Timer(_ =>
+                    {
+                        _retryTimer?.Dispose();
+                        _retryTimer = null;
+                        Task.Run(() => FetchTokenAsync());
+                    }, null, TimeSpan.FromMinutes(RETRY_DELAY_MINUTES), Timeout.InfiniteTimeSpan);
+                    Log.Information("[SessionToken] Token expires in {Secs}s — retry scheduled in {Min} minutes", secsRemaining, RETRY_DELAY_MINUTES);
+                }
             }
         }
 

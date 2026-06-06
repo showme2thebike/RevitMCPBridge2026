@@ -212,6 +212,32 @@ namespace RevitMCPBridge2026.AgentFramework
                 SaveSession();
                 DisconnectMCP();
                 _thinkingTimer?.Stop();
+
+                // Register a one-shot Loaded handler for the next reopen:
+                // - resets _isClosing so the panel is fully functional again
+                // - auto-resumes the server if it was paused (stops VG/dialogs from breaking reopen)
+                RoutedEventHandler onReopen = null;
+                onReopen = (rs, re) =>
+                {
+                    Loaded -= onReopen;
+                    _isClosing = false;
+                    if (_pipePaused)
+                    {
+                        var server = RevitMCPBridgeApp.GetServer();
+                        if (server != null && !server.IsRunning)
+                        {
+                            try { server.Start(); } catch { }
+                        }
+                        _pipePaused = false;
+                        if (_pipePauseButton != null)
+                        {
+                            _pipePauseButton.Content = "⏸";
+                            _pipePauseButton.Background = new SolidColorBrush(Color.FromRgb(85, 85, 85));
+                        }
+                        if (_statusText != null) _statusText.Text = "Ready";
+                    }
+                };
+                Loaded += onReopen;
             };
 
             // Drag-and-drop: PDFs → Training Library upload; images → attach as vision context
@@ -6453,6 +6479,11 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                             tg.Children.Add(new System.Windows.Media.TranslateTransform(0, yOff));
                             _spinnerText.RenderTransform = tg;
                         }
+                        // Show Revit execution state so Barrett knows when VG/dialogs are accessible
+                        if (_statusText != null)
+                            _statusText.Text = RevitMCPBridge.MCPRequestHandler.IsExecuting
+                                ? "⚡ Revit"
+                                : "◌ Thinking";
                     };
                 }
                 _timerText.Text = "0s";
@@ -6473,6 +6504,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             if (_timerText != null) _timerText.Text = "";
             var elapsed = (int)(DateTime.Now - _thinkingStartTime).TotalSeconds;
             if (_elapsedText != null) _elapsedText.Text = $"{elapsed} s";
+            if (_statusText != null) _statusText.Text = "Ready";
         }
 
         private void SetProcessing(bool isProcessing)
