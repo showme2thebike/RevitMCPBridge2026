@@ -213,31 +213,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 DisconnectMCP();
                 _thinkingTimer?.Stop();
 
-                // Register a one-shot Loaded handler for the next reopen:
-                // - resets _isClosing so the panel is fully functional again
-                // - auto-resumes the server if it was paused (stops VG/dialogs from breaking reopen)
-                RoutedEventHandler onReopen = null;
-                onReopen = (rs, re) =>
-                {
-                    Loaded -= onReopen;
-                    _isClosing = false;
-                    if (_pipePaused)
-                    {
-                        var server = RevitMCPBridgeApp.GetServer();
-                        if (server != null && !server.IsRunning)
-                        {
-                            try { server.Start(); } catch { }
-                        }
-                        _pipePaused = false;
-                        if (_pipePauseButton != null)
-                        {
-                            _pipePauseButton.Content = "⏸";
-                            _pipePauseButton.Background = new SolidColorBrush(Color.FromRgb(85, 85, 85));
-                        }
-                        if (_statusText != null) _statusText.Text = "Ready";
-                    }
-                };
-                Loaded += onReopen;
+                // Reopen logic is handled in OnShown(), called by LaunchAgentCommand.
             };
 
             // Drag-and-drop: PDFs → Training Library upload; images → attach as vision context
@@ -314,6 +290,33 @@ namespace RevitMCPBridge2026.AgentFramework
             SaveSession();
             DisconnectMCP();
             _thinkingTimer?.Stop();
+        }
+
+        /// <summary>
+        /// Called by LaunchAgentCommand every time the Banana Chat button is clicked.
+        /// Reliable hook for reopen logic — Loaded/Unloaded don't fire on Revit pane show/hide.
+        /// </summary>
+        public void OnShown()
+        {
+            _isClosing = false;
+            if (!_pipePaused) return;
+
+            var server = RevitMCPBridgeApp.GetServer();
+            if (server != null && !server.IsRunning)
+            {
+                try { server.Start(); } catch { }
+            }
+            _pipePaused = false;
+            Dispatcher.Invoke(() =>
+            {
+                if (_pipePauseButton != null)
+                {
+                    _pipePauseButton.Content = "⏸";
+                    _pipePauseButton.Background = new System.Windows.Media.SolidColorBrush(
+                        System.Windows.Media.Color.FromRgb(85, 85, 85));
+                }
+                if (_statusText != null) _statusText.Text = "Ready";
+            });
         }
 
         public void SetUiApp(UIApplication uiApp)

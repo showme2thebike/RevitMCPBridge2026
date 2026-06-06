@@ -28,6 +28,11 @@ namespace RevitMCPBridge2026.AgentFramework
                 var pane = uiApp.GetDockablePane(BananaChatDockablePane.PaneId);
                 pane.Show();
 
+                // Auto-resume the pipe if it was paused when BC was last closed.
+                // Loaded/Unloaded events don't reliably fire on Revit dockable pane show/hide,
+                // so this is the guaranteed hook — runs every time the Banana Chat button is clicked.
+                BananaChatDockablePane.Instance?.Panel?.OnShown();
+
                 return Result.Succeeded;
             }
             catch (Exception ex)
