@@ -3750,7 +3750,7 @@ namespace RevitMCPBridge
         /// viewNames (optional): Array of specific view names to import
         /// importAll (optional): Boolean to import all importable views (default: false)
         /// </param>
-        [MCPMethod("insertViewsFromFile", Category = "View", Description = "Insert views from another Revit file into the current document. Filter by viewIds (int[]), viewTypes (string[]), viewNames (string[]), or importAll (bool). IMPORTANT: opening the source file takes 15-30s — pass ALL viewIds in a single call rather than making multiple calls. The source document is cached after the first open so subsequent calls to the same file are fast.")]
+        [MCPMethod("insertViewsFromFile", Category = "View", Description = "Insert views from another Revit file into the current document. Filter by viewIds (int[]), viewTypes (string[]), viewNames (string[]), or importAll (bool). IMPORTANT: opening the source file takes 15-30s — pass ALL viewIds in a single call rather than making multiple calls. The source document is cached after the first open so subsequent calls to the same file are fast. Only DraftingViews and Legends can be transferred — Detail-type views (model-bound callout views) cannot be copied directly; use batchConvertDetailsToDraftingViews on the source file first to convert them, then insertViewsFromFile will pick up the resulting drafting views.")]
         public static string InsertViewsFromFile(UIApplication uiApp, JObject parameters)
         {
             try
