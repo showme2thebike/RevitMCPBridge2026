@@ -153,7 +153,7 @@ namespace RevitMCPBridge
                 {
                     position = locPoint.Point;
                 }
-                else if (location is LocationCurve locCurve)
+                else if (location is LocationCurve locCurve && locCurve.Curve.IsBound)
                 {
                     position = locCurve.Curve.GetEndPoint(0);
                 }

@@ -41,6 +41,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private Border _progressPanel;
         private TextBlock _progressTitle;
         private TextBlock _progressDetail;
+        private Border _statusStrip;
         private System.Windows.Threading.DispatcherTimer _thinkingTimer;
         private DateTime _thinkingStartTime;
 
@@ -254,29 +255,41 @@ namespace RevitMCPBridge2026.AgentFramework
         private void BuildUI()
         {
             var mainGrid = new Grid();
-            mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });          // 0: header
+            mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });          // 1: status strip
+            mainGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // 2: chat
+            mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });          // 3: progress
+            mainGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });          // 4: input
 
             // Header
             var header = CreateHeader();
             Grid.SetRow(header, 0);
             mainGrid.Children.Add(header);
 
+            // Status strip — 3px colored bar between header and chat.
+            // Transparent = Ready, Amber = Thinking, Red = Revit executing.
+            _statusStrip = new Border
+            {
+                Height = 3,
+                Background = Brushes.Transparent,
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            Grid.SetRow(_statusStrip, 1);
+            mainGrid.Children.Add(_statusStrip);
+
             // Chat history area
             var chatArea = CreateChatArea();
-            Grid.SetRow(chatArea, 1);
+            Grid.SetRow(chatArea, 2);
             mainGrid.Children.Add(chatArea);
 
             // Progress panel
             _progressPanel = CreateProgressPanel();
-            Grid.SetRow(_progressPanel, 2);
+            Grid.SetRow(_progressPanel, 3);
             mainGrid.Children.Add(_progressPanel);
 
             // Input area
             var inputArea = CreateInputArea();
-            Grid.SetRow(inputArea, 3);
+            Grid.SetRow(inputArea, 4);
             mainGrid.Children.Add(inputArea);
 
             Content = mainGrid;
@@ -316,6 +329,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         System.Windows.Media.Color.FromRgb(85, 85, 85));
                 }
                 if (_statusText != null) _statusText.Text = "Ready";
+                if (_statusStrip != null) _statusStrip.Background = Brushes.Transparent;
             });
         }
 
@@ -6482,11 +6496,14 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                             tg.Children.Add(new System.Windows.Media.TranslateTransform(0, yOff));
                             _spinnerText.RenderTransform = tg;
                         }
-                        // Show Revit execution state so Barrett knows when VG/dialogs are accessible
+                        // Show Revit execution state — strip color + text give two channels of feedback
+                        bool executing = RevitMCPBridge.MCPRequestHandler.IsExecuting;
                         if (_statusText != null)
-                            _statusText.Text = RevitMCPBridge.MCPRequestHandler.IsExecuting
-                                ? "⚡ Revit"
-                                : "◌ Thinking";
+                            _statusText.Text = executing ? "⚡ Revit busy" : "◌ Thinking";
+                        if (_statusStrip != null)
+                            _statusStrip.Background = executing
+                                ? new SolidColorBrush(Color.FromRgb(229, 57, 53))   // red — Revit API held
+                                : new SolidColorBrush(Color.FromRgb(255, 152, 0));  // amber — Claude thinking
                     };
                 }
                 _timerText.Text = "0s";
@@ -6508,6 +6525,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             var elapsed = (int)(DateTime.Now - _thinkingStartTime).TotalSeconds;
             if (_elapsedText != null) _elapsedText.Text = $"{elapsed} s";
             if (_statusText != null) _statusText.Text = "Ready";
+            if (_statusStrip != null) _statusStrip.Background = Brushes.Transparent;
         }
 
         private void SetProcessing(bool isProcessing)

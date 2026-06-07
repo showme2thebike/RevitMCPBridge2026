@@ -3706,7 +3706,7 @@ namespace RevitMCPBridge
         /// viewNames (optional): Array of specific view names to import
         /// importAll (optional): Boolean to import all importable views (default: false)
         /// </param>
-        [MCPMethod("insertViewsFromFile", Category = "View", Description = "Insert views from another Revit file into the current document")]
+        [MCPMethod("insertViewsFromFile", Category = "View", Description = "Insert views from another Revit file into the current document. Filter by viewIds (int[]), viewTypes (string[]), viewNames (string[]), or importAll (bool).")]
         public static string InsertViewsFromFile(UIApplication uiApp, JObject parameters)
         {
             try
@@ -3729,31 +3729,46 @@ namespace RevitMCPBridge
                 // Parse parameters
                 var viewTypes = parameters["viewTypes"]?.ToObject<string[]>() ?? new string[0];
                 var viewNames = parameters["viewNames"]?.ToObject<string[]>() ?? new string[0];
+                var viewIds = parameters["viewIds"]?.ToObject<int[]>() ?? new int[0];
                 var importAll = parameters["importAll"]?.Value<bool>() ?? false;
 
                 // If no filters specified and importAll is false, return error
-                if (viewTypes.Length == 0 && viewNames.Length == 0 && !importAll)
+                if (viewTypes.Length == 0 && viewNames.Length == 0 && viewIds.Length == 0 && !importAll)
                 {
-                    return ResponseBuilder.Error("Specify viewTypes, viewNames, or set importAll to true", "VALIDATION_ERROR").Build();
+                    return ResponseBuilder.Error("Specify viewIds, viewTypes, viewNames, or set importAll to true", "VALIDATION_ERROR").Build();
                 }
 
-                // Open source document (detached, no worksets)
-                var openOptions = new OpenOptions();
-                openOptions.DetachFromCentralOption = DetachFromCentralOption.DetachAndDiscardWorksets;
-
-                // Don't open worksets to speed up loading
-                var worksetConfig = new WorksetConfiguration(WorksetConfigurationOption.CloseAllWorksets);
-                openOptions.SetOpenWorksetsConfiguration(worksetConfig);
-
                 Document sourceDoc = null;
+                bool sourceDocWasAlreadyOpen = false;
                 var copiedViews = new List<object>();
                 var errors = new List<string>();
 
                 try
                 {
-                    // Open source document
-                    var modelPath = ModelPathUtils.ConvertUserVisiblePathToModelPath(filePath);
-                    sourceDoc = app.OpenDocumentFile(modelPath, openOptions);
+                    // Check if source file is already open to avoid double-open / workset conflicts
+                    var normalizedFilePath = System.IO.Path.GetFullPath(filePath);
+                    foreach (Document openDoc in app.Documents)
+                    {
+                        if (!openDoc.IsLinked && !openDoc.IsFamilyDocument &&
+                            string.Equals(System.IO.Path.GetFullPath(openDoc.PathName), normalizedFilePath, StringComparison.OrdinalIgnoreCase))
+                        {
+                            sourceDoc = openDoc;
+                            sourceDocWasAlreadyOpen = true;
+                            break;
+                        }
+                    }
+
+                    if (!sourceDocWasAlreadyOpen)
+                    {
+                        // Open source document (detached, no worksets)
+                        var openOptions = new OpenOptions();
+                        openOptions.DetachFromCentralOption = DetachFromCentralOption.DetachAndDiscardWorksets;
+                        var worksetConfig = new WorksetConfiguration(WorksetConfigurationOption.CloseAllWorksets);
+                        openOptions.SetOpenWorksetsConfiguration(worksetConfig);
+
+                        var modelPath = ModelPathUtils.ConvertUserVisiblePathToModelPath(filePath);
+                        sourceDoc = app.OpenDocumentFile(modelPath, openOptions);
+                    }
 
                     if (sourceDoc == null)
                     {
@@ -3781,7 +3796,13 @@ namespace RevitMCPBridge
 
                         bool shouldImport = false;
 
-                        if (importAll)
+                        // viewIds takes priority — exact match by element ID
+                        if (viewIds.Length > 0)
+                        {
+                            if (viewIds.Contains((int)view.Id.Value))
+                                shouldImport = true;
+                        }
+                        else if (importAll)
                         {
                             // Import all importable view types
                             if (viewTypeName == "DraftingView" || viewTypeName == "Legend" ||
@@ -4004,8 +4025,8 @@ namespace RevitMCPBridge
                 }
                 finally
                 {
-                    // Close source document without saving
-                    if (sourceDoc != null)
+                    // Only close if we opened it — don't close a document the user already had open
+                    if (sourceDoc != null && !sourceDocWasAlreadyOpen)
                     {
                         sourceDoc.Close(false);
                     }
@@ -4018,6 +4039,127 @@ namespace RevitMCPBridge
                     .With("errors", errors)
                     .WithMessage($"Copied {copiedViews.Count} views from {System.IO.Path.GetFileName(filePath)}")
                     .Build();
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Search views in the current document (or a source file) for text annotations containing a keyword.
+        /// Returns view IDs that can be passed directly to insertViewsFromFile.
+        /// </summary>
+        [MCPMethod("searchViewsByAnnotation", Category = "View", Description = "Search views for text annotations containing a keyword. Returns viewIds for use with insertViewsFromFile. Parameters: keyword (required), filePath (optional — searches current doc if omitted), viewType (optional filter, e.g. 'DraftingView').")]
+        public static string SearchViewsByAnnotation(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var app = uiApp.Application;
+
+                var keyword = parameters["keyword"]?.ToString();
+                if (string.IsNullOrEmpty(keyword))
+                    return ResponseBuilder.Error("keyword is required", "MISSING_PARAMETER").Build();
+
+                var filePath = parameters["filePath"]?.ToString();
+                var viewTypeFilter = parameters["viewType"]?.ToString();
+
+                Document searchDoc = null;
+                bool searchDocWasAlreadyOpen = false;
+
+                try
+                {
+                    if (string.IsNullOrEmpty(filePath))
+                    {
+                        searchDoc = uiApp.ActiveUIDocument.Document;
+                        searchDocWasAlreadyOpen = true;
+                    }
+                    else
+                    {
+                        if (!System.IO.File.Exists(filePath))
+                            return ResponseBuilder.Error($"File not found: {filePath}", "ELEMENT_NOT_FOUND").Build();
+
+                        var normalizedPath = System.IO.Path.GetFullPath(filePath);
+                        foreach (Document openDoc in app.Documents)
+                        {
+                            if (!openDoc.IsLinked && !openDoc.IsFamilyDocument &&
+                                string.Equals(System.IO.Path.GetFullPath(openDoc.PathName), normalizedPath, StringComparison.OrdinalIgnoreCase))
+                            {
+                                searchDoc = openDoc;
+                                searchDocWasAlreadyOpen = true;
+                                break;
+                            }
+                        }
+
+                        if (!searchDocWasAlreadyOpen)
+                        {
+                            var openOptions = new OpenOptions();
+                            openOptions.DetachFromCentralOption = DetachFromCentralOption.DetachAndDiscardWorksets;
+                            openOptions.SetOpenWorksetsConfiguration(new WorksetConfiguration(WorksetConfigurationOption.CloseAllWorksets));
+                            var modelPath = ModelPathUtils.ConvertUserVisiblePathToModelPath(filePath);
+                            searchDoc = app.OpenDocumentFile(modelPath, openOptions);
+                        }
+                    }
+
+                    if (searchDoc == null)
+                        return ResponseBuilder.Error("Failed to open document for search", "OPERATION_FAILED").Build();
+
+                    var keywordLower = keyword.ToLowerInvariant();
+
+                    // Build a view lookup (id → view) in one pass — avoids per-view collectors
+                    var viewLookup = new FilteredElementCollector(searchDoc)
+                        .OfClass(typeof(View))
+                        .Cast<View>()
+                        .Where(v => !v.IsTemplate)
+                        .Where(v => string.IsNullOrEmpty(viewTypeFilter) ||
+                                    v.ViewType.ToString().Equals(viewTypeFilter, StringComparison.OrdinalIgnoreCase))
+                        .ToDictionary(v => v.Id);
+
+                    // Collect ALL text notes in one document-level pass, group by owning view
+                    var allTextNotes = new FilteredElementCollector(searchDoc)
+                        .OfClass(typeof(TextNote))
+                        .Cast<TextNote>()
+                        .Where(t => t.Text.ToLowerInvariant().Contains(keywordLower))
+                        .ToList();
+
+                    var grouped = allTextNotes
+                        .Where(t => viewLookup.ContainsKey(t.OwnerViewId))
+                        .GroupBy(t => t.OwnerViewId);
+
+                    var matchingViews = new List<object>();
+                    foreach (var group in grouped)
+                    {
+                        var view = viewLookup[group.Key];
+                        var samples = group
+                            .Select(t => t.Text.Length > 120 ? t.Text.Substring(0, 120) + "…" : t.Text)
+                            .Take(3)
+                            .ToList();
+                        matchingViews.Add(new
+                        {
+                            viewId = (int)view.Id.Value,
+                            viewName = view.Name,
+                            viewType = view.ViewType.ToString(),
+                            matchCount = group.Count(),
+                            samples
+                        });
+                    }
+
+                    var viewIdsFound = matchingViews.Select(v => ((dynamic)v).viewId).Cast<int>().ToList();
+
+                    return ResponseBuilder.Success()
+                        .With("keyword", keyword)
+                        .With("searchedViewCount", viewLookup.Count)
+                        .With("matchingViewCount", matchingViews.Count)
+                        .With("viewIds", viewIdsFound)
+                        .With("matchingViews", matchingViews)
+                        .WithMessage($"Found {matchingViews.Count} views containing \"{keyword}\" (searched {viewLookup.Count} views)")
+                        .Build();
+                }
+                finally
+                {
+                    if (searchDoc != null && !searchDocWasAlreadyOpen)
+                        searchDoc.Close(false);
+                }
             }
             catch (Exception ex)
             {

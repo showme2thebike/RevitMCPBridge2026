@@ -205,6 +205,7 @@ namespace RevitMCPBridge
                 // Initialize MCP request handler and external event
                 _requestHandler = new MCPRequestHandler();
                 _externalEvent = ExternalEvent.Create(_requestHandler);
+                _requestHandler.DrainQueue = () => _externalEvent.Raise();
                 Log.Information("MCP Request Handler and ExternalEvent initialized");
 
                 // Initialize background job handler for async executePlan

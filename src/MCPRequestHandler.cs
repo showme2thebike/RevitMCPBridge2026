@@ -10,12 +10,23 @@ namespace RevitMCPBridge
 {
     /// <summary>
     /// Handles execution of MCP requests in Revit's main thread context using ExternalEvent.
-    /// Supports request cancellation for timeout handling.
+    /// Processes ONE request per Execute() call so Revit yields the main thread between each
+    /// tool call — allowing VG, Revisions, and other dialogs to open between BC steps.
+    /// DrainQueue is set by RevitMCPBridgeApp and re-raises the ExternalEvent from a thread-pool
+    /// thread (required by Revit API) when the queue still has work after each cycle.
     /// </summary>
     public class MCPRequestHandler : IExternalEventHandler
     {
         private readonly Queue<RequestItem> _requestQueue;
         private readonly object _queueLock = new object();
+
+        /// <summary>
+        /// Set by RevitMCPBridgeApp after ExternalEvent.Create():
+        ///   _requestHandler.DrainQueue = () => _externalEvent.Raise();
+        /// Called from Task.Run at end of Execute() when queue still has items,
+        /// scheduling the next Execute() cycle without holding the main thread.
+        /// </summary>
+        public Action DrainQueue { get; set; }
 
         public MCPRequestHandler()
         {
@@ -60,143 +71,103 @@ namespace RevitMCPBridge
         public static volatile bool IsExecuting;
 
         /// <summary>
-        /// Execute queued requests in Revit's main thread
+        /// Execute ONE queued request in Revit's main thread, then yield.
+        /// If the queue still has items after this cycle, DrainQueue re-raises the ExternalEvent
+        /// from a Task.Run so Revit can process pending UI events before the next cycle.
         /// </summary>
         public void Execute(UIApplication app)
         {
             IsExecuting = true;
             try
             {
-            int processedCount = 0;
-            int skippedCount = 0;
-            const int maxBatchSize = 10;
-
-            while (processedCount < maxBatchSize)
-            {
                 RequestItem requestItem = null;
+
+                lock (_queueLock)
+                {
+                    if (_requestQueue.Count > 0)
+                        requestItem = _requestQueue.Dequeue();
+                }
+
+                if (requestItem == null)
+                {
+                    Log.Debug("Execute called but queue is empty");
+                    return;
+                }
+
+                // Skip cancelled requests
+                if (requestItem.CancellationToken.IsCancellationRequested)
+                {
+                    Log.Warning("Skipping cancelled request (queued {QueuedAt}, waited {WaitMs}ms)",
+                        requestItem.QueuedAt, (DateTime.UtcNow - requestItem.QueuedAt).TotalMilliseconds);
+                    requestItem.CompletionSource.TrySetCanceled();
+                    return;
+                }
+
+                // Skip stale requests (waited longer than 10 minutes)
+                var waitTime = DateTime.UtcNow - requestItem.QueuedAt;
+                if (waitTime.TotalMinutes > 10)
+                {
+                    Log.Warning("Skipping stale request (queued {WaitMs}ms ago, max 10 minutes)",
+                        waitTime.TotalMilliseconds);
+                    requestItem.CompletionSource.TrySetResult(
+                        Helpers.ResponseBuilder.Error(
+                            "Request expired while waiting in queue",
+                            "REQUEST_EXPIRED")
+                            .With("waitTimeMs", (long)waitTime.TotalMilliseconds)
+                            .Build());
+                    return;
+                }
 
                 try
                 {
-                    lock (_queueLock)
-                    {
-                        if (_requestQueue.Count > 0)
-                        {
-                            requestItem = _requestQueue.Dequeue();
-                        }
-                        else
-                        {
-                            break;
-                        }
-                    }
-
-                    if (requestItem == null)
-                    {
-                        break;
-                    }
-
-                    // Skip cancelled/timed-out requests
-                    if (requestItem.CancellationToken.IsCancellationRequested)
-                    {
-                        Log.Warning("Skipping cancelled request (queued {QueuedAt}, waited {WaitMs}ms)",
-                            requestItem.QueuedAt, (DateTime.UtcNow - requestItem.QueuedAt).TotalMilliseconds);
-                        requestItem.CompletionSource.TrySetCanceled();
-                        skippedCount++;
-                        continue;
-                    }
-
-                    // Skip requests that have been waiting too long (stale requests)
-                    var waitTime = DateTime.UtcNow - requestItem.QueuedAt;
-                    if (waitTime.TotalMinutes > 10)
-                    {
-                        Log.Warning("Skipping stale request (queued {WaitMs}ms ago, max 10 minutes)",
-                            waitTime.TotalMilliseconds);
-                        requestItem.CompletionSource.TrySetResult(
-                            Helpers.ResponseBuilder.Error(
-                                "Request expired while waiting in queue",
-                                "REQUEST_EXPIRED")
-                                .With("waitTimeMs", (long)waitTime.TotalMilliseconds)
-                                .Build());
-                        skippedCount++;
-                        continue;
-                    }
-
-                    // Execute the action in Revit's main thread context
                     var sw = Stopwatch.StartNew();
-                    Log.Debug("Executing request {Num} (queued {WaitMs}ms ago). Remaining: {Remaining}",
-                        processedCount + 1, (long)waitTime.TotalMilliseconds, _requestQueue.Count);
+                    Log.Debug("Executing request (queued {WaitMs}ms ago). Remaining in queue: {Remaining}",
+                        (long)waitTime.TotalMilliseconds, _requestQueue.Count);
 
                     var result = requestItem.Action(app);
                     sw.Stop();
 
                     Log.Information("[MCPRequestHandler] Action completed in {ElapsedMs}ms", sw.ElapsedMilliseconds);
                     requestItem.CompletionSource.TrySetResult(result);
-                    processedCount++;
-
-                    // Small delay between requests to let Revit breathe (50ms)
-                    if (_requestQueue.Count > 0)
-                    {
-                        Thread.Sleep(50);
-                    }
                 }
                 catch (OperationCanceledException)
                 {
-                    if (requestItem != null)
-                    {
-                        requestItem.CompletionSource.TrySetCanceled();
-                    }
-                    skippedCount++;
+                    requestItem.CompletionSource.TrySetCanceled();
                 }
                 catch (Exception ex)
                 {
                     Log.Error(ex, "Error executing request in Revit context: {ExType}", ex.GetType().Name);
-
-                    if (requestItem != null)
+                    try
                     {
-                        // Try to return a structured error instead of throwing
-                        try
-                        {
-                            var errorResult = Helpers.ResponseBuilder.Error(
-                                $"Revit execution error: {ex.Message}",
-                                "REVIT_EXECUTION_ERROR")
-                                .With("exceptionType", ex.GetType().FullName)
-                                .With("stackTrace", ex.StackTrace)
-                                .Build();
-                            requestItem.CompletionSource.TrySetResult(errorResult);
-                        }
-                        catch
-                        {
-                            // Last resort: propagate the exception
-                            requestItem.CompletionSource.TrySetException(ex);
-                        }
+                        var errorResult = Helpers.ResponseBuilder.Error(
+                            $"Revit execution error: {ex.Message}",
+                            "REVIT_EXECUTION_ERROR")
+                            .With("exceptionType", ex.GetType().FullName)
+                            .With("stackTrace", ex.StackTrace)
+                            .Build();
+                        requestItem.CompletionSource.TrySetResult(errorResult);
                     }
-                    processedCount++;
+                    catch
+                    {
+                        requestItem.CompletionSource.TrySetException(ex);
+                    }
                 }
-            }
-
-            if (processedCount == 0 && skippedCount == 0)
-            {
-                Log.Debug("Execute called but queue is empty");
-            }
-            else
-            {
-                Log.Information("Processed {Processed} requests, skipped {Skipped} in this Execute cycle",
-                    processedCount, skippedCount);
-            }
             }
             finally
             {
                 IsExecuting = false;
+
+                // If more items are waiting, re-raise the ExternalEvent from a thread-pool thread.
+                // This yields the Revit main thread so UI events (VG, Revisions, etc.) can process
+                // before the next Execute() cycle. ExternalEvent.Raise() coalesces duplicate calls
+                // automatically — safe even if MCPServer is raising for a new item simultaneously.
+                if (HasPendingRequests())
+                    Task.Run(() => DrainQueue?.Invoke());
             }
         }
 
-        public string GetName()
-        {
-            return "MCPRequestHandler";
-        }
+        public string GetName() => "MCPRequestHandler";
 
-        /// <summary>
-        /// Check if there are pending requests
-        /// </summary>
         public bool HasPendingRequests()
         {
             lock (_queueLock)
@@ -205,9 +176,6 @@ namespace RevitMCPBridge
             }
         }
 
-        /// <summary>
-        /// Get current queue depth for diagnostics
-        /// </summary>
         public int QueueDepth
         {
             get
