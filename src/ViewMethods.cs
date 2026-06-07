@@ -16,6 +16,50 @@ namespace RevitMCPBridge
     /// </summary>
     public static class ViewMethods
     {
+        // Source documents opened by insertViewsFromFile / searchViewsByAnnotation are cached
+        // here for the Revit session so repeated calls to the same file skip the expensive open.
+        // Key = normalized absolute file path (OrdinalIgnoreCase).
+        private static readonly Dictionary<string, Document> _sourceDocCache =
+            new Dictionary<string, Document>(StringComparer.OrdinalIgnoreCase);
+
+        private static Document GetOrOpenSourceDoc(Autodesk.Revit.ApplicationServices.Application app, string filePath)
+        {
+            var normalizedPath = System.IO.Path.GetFullPath(filePath);
+
+            // 1. Already open in Revit (user opened it manually, or we cached it last call)
+            foreach (Document openDoc in app.Documents)
+            {
+                if (!openDoc.IsLinked && !openDoc.IsFamilyDocument &&
+                    string.Equals(System.IO.Path.GetFullPath(openDoc.PathName), normalizedPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    _sourceDocCache[normalizedPath] = openDoc; // keep cache in sync
+                    return openDoc;
+                }
+            }
+
+            // 2. Cache hit — validate before using
+            if (_sourceDocCache.TryGetValue(normalizedPath, out var cached))
+            {
+                try
+                {
+                    if (cached.IsValidObject)
+                        return cached;
+                }
+                catch { }
+                _sourceDocCache.Remove(normalizedPath); // stale — evict
+            }
+
+            // 3. Open detached, no worksets — cache for subsequent calls
+            var openOptions = new OpenOptions();
+            openOptions.DetachFromCentralOption = DetachFromCentralOption.DetachAndDiscardWorksets;
+            openOptions.SetOpenWorksetsConfiguration(new WorksetConfiguration(WorksetConfigurationOption.CloseAllWorksets));
+            var modelPath = ModelPathUtils.ConvertUserVisiblePathToModelPath(filePath);
+            var sourceDoc = app.OpenDocumentFile(modelPath, openOptions);
+            if (sourceDoc != null)
+                _sourceDocCache[normalizedPath] = sourceDoc;
+            return sourceDoc;
+        }
+
         /// <summary>
         /// Parse a point from JSON - accepts both object {x,y,z} and array [x,y,z] formats
         /// </summary>
@@ -3706,7 +3750,7 @@ namespace RevitMCPBridge
         /// viewNames (optional): Array of specific view names to import
         /// importAll (optional): Boolean to import all importable views (default: false)
         /// </param>
-        [MCPMethod("insertViewsFromFile", Category = "View", Description = "Insert views from another Revit file into the current document. Filter by viewIds (int[]), viewTypes (string[]), viewNames (string[]), or importAll (bool).")]
+        [MCPMethod("insertViewsFromFile", Category = "View", Description = "Insert views from another Revit file into the current document. Filter by viewIds (int[]), viewTypes (string[]), viewNames (string[]), or importAll (bool). IMPORTANT: opening the source file takes 15-30s — pass ALL viewIds in a single call rather than making multiple calls. The source document is cached after the first open so subsequent calls to the same file are fast.")]
         public static string InsertViewsFromFile(UIApplication uiApp, JObject parameters)
         {
             try
@@ -3738,37 +3782,10 @@ namespace RevitMCPBridge
                     return ResponseBuilder.Error("Specify viewIds, viewTypes, viewNames, or set importAll to true", "VALIDATION_ERROR").Build();
                 }
 
-                Document sourceDoc = null;
-                bool sourceDocWasAlreadyOpen = false;
                 var copiedViews = new List<object>();
                 var errors = new List<string>();
 
-                try
-                {
-                    // Check if source file is already open to avoid double-open / workset conflicts
-                    var normalizedFilePath = System.IO.Path.GetFullPath(filePath);
-                    foreach (Document openDoc in app.Documents)
-                    {
-                        if (!openDoc.IsLinked && !openDoc.IsFamilyDocument &&
-                            string.Equals(System.IO.Path.GetFullPath(openDoc.PathName), normalizedFilePath, StringComparison.OrdinalIgnoreCase))
-                        {
-                            sourceDoc = openDoc;
-                            sourceDocWasAlreadyOpen = true;
-                            break;
-                        }
-                    }
-
-                    if (!sourceDocWasAlreadyOpen)
-                    {
-                        // Open source document (detached, no worksets)
-                        var openOptions = new OpenOptions();
-                        openOptions.DetachFromCentralOption = DetachFromCentralOption.DetachAndDiscardWorksets;
-                        var worksetConfig = new WorksetConfiguration(WorksetConfigurationOption.CloseAllWorksets);
-                        openOptions.SetOpenWorksetsConfiguration(worksetConfig);
-
-                        var modelPath = ModelPathUtils.ConvertUserVisiblePathToModelPath(filePath);
-                        sourceDoc = app.OpenDocumentFile(modelPath, openOptions);
-                    }
+                var sourceDoc = GetOrOpenSourceDoc(app, filePath);
 
                     if (sourceDoc == null)
                     {
@@ -3837,7 +3854,6 @@ namespace RevitMCPBridge
 
                     if (viewsToImport.Count == 0)
                     {
-                        sourceDoc.Close(false);
                         return ResponseBuilder.Error("No matching views found in source document", "ELEMENT_NOT_FOUND")
                             .With("availableViews", allViews.Select(v => new { name = v.Name, type = v.ViewType.ToString() }).Take(50).ToList())
                             .Build();
@@ -4022,15 +4038,6 @@ namespace RevitMCPBridge
 
                         trans.Commit();
                     }
-                }
-                finally
-                {
-                    // Only close if we opened it — don't close a document the user already had open
-                    if (sourceDoc != null && !sourceDocWasAlreadyOpen)
-                    {
-                        sourceDoc.Close(false);
-                    }
-                }
 
                 return ResponseBuilder.Success()
                     .With("copiedCount", copiedViews.Count)
@@ -4064,45 +4071,22 @@ namespace RevitMCPBridge
                 var filePath = parameters["filePath"]?.ToString();
                 var viewTypeFilter = parameters["viewType"]?.ToString();
 
-                Document searchDoc = null;
-                bool searchDocWasAlreadyOpen = false;
+                Document searchDoc;
 
-                try
+                if (string.IsNullOrEmpty(filePath))
                 {
-                    if (string.IsNullOrEmpty(filePath))
-                    {
-                        searchDoc = uiApp.ActiveUIDocument.Document;
-                        searchDocWasAlreadyOpen = true;
-                    }
-                    else
-                    {
-                        if (!System.IO.File.Exists(filePath))
-                            return ResponseBuilder.Error($"File not found: {filePath}", "ELEMENT_NOT_FOUND").Build();
+                    searchDoc = uiApp.ActiveUIDocument.Document;
+                }
+                else
+                {
+                    if (!System.IO.File.Exists(filePath))
+                        return ResponseBuilder.Error($"File not found: {filePath}", "ELEMENT_NOT_FOUND").Build();
 
-                        var normalizedPath = System.IO.Path.GetFullPath(filePath);
-                        foreach (Document openDoc in app.Documents)
-                        {
-                            if (!openDoc.IsLinked && !openDoc.IsFamilyDocument &&
-                                string.Equals(System.IO.Path.GetFullPath(openDoc.PathName), normalizedPath, StringComparison.OrdinalIgnoreCase))
-                            {
-                                searchDoc = openDoc;
-                                searchDocWasAlreadyOpen = true;
-                                break;
-                            }
-                        }
+                    searchDoc = GetOrOpenSourceDoc(app, filePath);
+                }
 
-                        if (!searchDocWasAlreadyOpen)
-                        {
-                            var openOptions = new OpenOptions();
-                            openOptions.DetachFromCentralOption = DetachFromCentralOption.DetachAndDiscardWorksets;
-                            openOptions.SetOpenWorksetsConfiguration(new WorksetConfiguration(WorksetConfigurationOption.CloseAllWorksets));
-                            var modelPath = ModelPathUtils.ConvertUserVisiblePathToModelPath(filePath);
-                            searchDoc = app.OpenDocumentFile(modelPath, openOptions);
-                        }
-                    }
-
-                    if (searchDoc == null)
-                        return ResponseBuilder.Error("Failed to open document for search", "OPERATION_FAILED").Build();
+                if (searchDoc == null)
+                    return ResponseBuilder.Error("Failed to open document for search", "OPERATION_FAILED").Build();
 
                     var keywordLower = keyword.ToLowerInvariant();
 
@@ -4154,12 +4138,6 @@ namespace RevitMCPBridge
                         .With("matchingViews", matchingViews)
                         .WithMessage($"Found {matchingViews.Count} views containing \"{keyword}\" (searched {viewLookup.Count} views)")
                         .Build();
-                }
-                finally
-                {
-                    if (searchDoc != null && !searchDocWasAlreadyOpen)
-                        searchDoc.Close(false);
-                }
             }
             catch (Exception ex)
             {
