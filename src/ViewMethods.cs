@@ -52,7 +52,7 @@ namespace RevitMCPBridge
             // 3. Open detached, no worksets — cache for subsequent calls
             var openOptions = new OpenOptions();
             openOptions.DetachFromCentralOption = DetachFromCentralOption.DetachAndDiscardWorksets;
-            openOptions.SetOpenWorksetsConfiguration(new WorksetConfiguration(WorksetConfigurationOption.CloseAllWorksets));
+            openOptions.SetOpenWorksetsConfiguration(new WorksetConfiguration(WorksetConfigurationOption.OpenAllWorksets));
             var modelPath = ModelPathUtils.ConvertUserVisiblePathToModelPath(filePath);
             var sourceDoc = app.OpenDocumentFile(modelPath, openOptions);
             if (sourceDoc != null)
