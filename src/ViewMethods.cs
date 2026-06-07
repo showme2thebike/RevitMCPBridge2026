@@ -52,7 +52,7 @@ namespace RevitMCPBridge
             // 3. Open detached, no worksets — cache for subsequent calls
             var openOptions = new OpenOptions();
             openOptions.DetachFromCentralOption = DetachFromCentralOption.DetachAndDiscardWorksets;
-            openOptions.SetOpenWorksetsConfiguration(new WorksetConfiguration(WorksetConfigurationOption.OpenAllWorksets));
+            openOptions.SetOpenWorksetsConfiguration(new WorksetConfiguration(WorksetConfigurationOption.CloseAllWorksets));
             var modelPath = ModelPathUtils.ConvertUserVisiblePathToModelPath(filePath);
             var sourceDoc = app.OpenDocumentFile(modelPath, openOptions);
             if (sourceDoc != null)
@@ -3750,7 +3750,7 @@ namespace RevitMCPBridge
         /// viewNames (optional): Array of specific view names to import
         /// importAll (optional): Boolean to import all importable views (default: false)
         /// </param>
-        [MCPMethod("insertViewsFromFile", Category = "View", Description = "Insert views from another Revit file into the current document. Filter by viewIds (int[]), viewTypes (string[]), viewNames (string[]), or importAll (bool). IMPORTANT: opening the source file takes 15-30s — pass ALL viewIds in a single call rather than making multiple calls. The source document is cached after the first open so subsequent calls to the same file are fast. Only DraftingViews and Legends can be transferred — Detail-type views (model-bound callout views) cannot be copied directly; use batchConvertDetailsToDraftingViews on the source file first to convert them, then insertViewsFromFile will pick up the resulting drafting views.")]
+        [MCPMethod("insertViewsFromFile", Category = "View", Description = "Insert views from another Revit file into the current document. Filter by viewIds (int[]), viewTypes (string[]), viewNames (string[]), or importAll (bool). IMPORTANT: For workshared models, the source file must already be open in Revit for view content to copy correctly — if the file is not open, it is opened detached with worksets closed and views will be empty shells. Always instruct the user to open the source file in Revit first, then call this method. Pass ALL viewIds in a single call. Only DraftingViews and Legends can be transferred — Detail-type views (model-bound callout views) cannot be copied directly; use batchConvertDetailsToDraftingViews on the source file first to convert them, then insertViewsFromFile will pick up the resulting drafting views.")]
         public static string InsertViewsFromFile(UIApplication uiApp, JObject parameters)
         {
             try
