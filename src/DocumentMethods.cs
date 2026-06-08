@@ -500,9 +500,14 @@ namespace RevitMCPBridge
                     return JsonConvert.SerializeObject(new { success = false, error = "No document to close" });
                 }
 
-                // Revit API cannot close the active document — check before attempting
+                // Revit API cannot close the active document — check before attempting.
+                // ReferenceEquals catches the no-documentTitle path; PathName catches the by-title path.
                 var activeDoc = uiApp.ActiveUIDocument?.Document;
-                if (activeDoc != null && string.Equals(activeDoc.PathName, docToClose.PathName, StringComparison.OrdinalIgnoreCase))
+                bool isActiveDoc = activeDoc != null &&
+                    (ReferenceEquals(activeDoc, docToClose) ||
+                     (!string.IsNullOrEmpty(docToClose.PathName) &&
+                      string.Equals(activeDoc.PathName, docToClose.PathName, StringComparison.OrdinalIgnoreCase)));
+                if (isActiveDoc)
                 {
                     return JsonConvert.SerializeObject(new
                     {
