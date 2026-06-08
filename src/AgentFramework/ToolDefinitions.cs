@@ -299,17 +299,18 @@ Use this to examine project files, scripts, configuration, or any text-based con
                 {
                     Name = "writeFile",
                     Description = @"Write content to a file. Creates the file if it doesn't exist, overwrites if it does.
-Use for saving scripts, configurations, reports, or generated content.",
+Use for saving scripts, configurations, reports, or generated content.
+Pass the path as a plain Windows path string — spaces in folder/file names are fine (e.g. ""C:\Users\name\My Folder\output.txt""). Do not escape or quote the path.",
                     InputSchema = new
                     {
                         type = "object",
                         properties = new
                         {
-                            filePath = new { type = "string", description = "Absolute path to the file to write" },
+                            path = new { type = "string", description = "Absolute Windows path to the file to write (spaces in path are fine — do not escape or shell-quote)" },
                             content = new { type = "string", description = "Content to write to the file" },
                             append = new { type = "boolean", description = "If true, append instead of overwrite (default: false)" }
                         },
-                        required = new[] { "filePath", "content" }
+                        required = new[] { "path", "content" }
                     }
                 },
                 new ToolDefinition

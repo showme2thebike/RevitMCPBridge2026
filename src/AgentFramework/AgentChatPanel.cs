@@ -3433,7 +3433,8 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private string HandleWriteFile(JObject parameters)
         {
-            var filePath = parameters?["path"]?.ToString();
+            // Accept both "path" and "filePath" — schema uses "path", legacy calls may use "filePath"
+            var filePath = parameters?["path"]?.ToString() ?? parameters?["filePath"]?.ToString();
             var content = parameters?["content"]?.ToString();
 
             if (string.IsNullOrEmpty(filePath))

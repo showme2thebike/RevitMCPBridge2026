@@ -462,7 +462,7 @@ namespace RevitMCPBridge
         /// <summary>
         /// Close a document.
         /// </summary>
-        [MCPMethod("closeDocument", Category = "Document", Description = "Close a document")]
+        [MCPMethod("closeDocument", Category = "Document", Description = "Close a non-active document. IMPORTANT: Revit API cannot close the currently active document — if the target document is active, this will fail. To close the active document, first open or activate another document, then call closeDocument with the title of the one to close.")]
         public static string CloseDocument(UIApplication uiApp, JObject parameters)
         {
             try
@@ -498,6 +498,17 @@ namespace RevitMCPBridge
                 if (docToClose == null)
                 {
                     return JsonConvert.SerializeObject(new { success = false, error = "No document to close" });
+                }
+
+                // Revit API cannot close the active document — check before attempting
+                var activeDoc = uiApp.ActiveUIDocument?.Document;
+                if (activeDoc != null && string.Equals(activeDoc.PathName, docToClose.PathName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = false,
+                        error = $"Cannot close '{docToClose.Title}' — it is the active document. Open or switch to another document first, then call closeDocument again."
+                    });
                 }
 
                 var closedTitle = docToClose.Title;

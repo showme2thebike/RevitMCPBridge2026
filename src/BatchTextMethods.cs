@@ -200,18 +200,38 @@ namespace RevitMCPBridge2026
                 bool allFields = fieldsParam == null || fieldsParam.Count == 0;
                 var requestedFields = allFields ? null : new HashSet<string>(fieldsParam.Select(f => f.ToString()), StringComparer.OrdinalIgnoreCase);
 
-                FilteredElementCollector collector;
+                List<TextNote> allNotes;
                 if (viewIdFilter.HasValue)
                 {
                     var viewId = new ElementId(viewIdFilter.Value);
-                    collector = new FilteredElementCollector(doc, viewId).OfClass(typeof(TextNote));
+                    var view = doc.GetElement(viewId) as View;
+                    if (view == null)
+                        return JsonConvert.SerializeObject(new { success = false, error = $"No view found with id {viewIdFilter.Value}" });
+
+                    // View-scoped collector finds elements visible in the view
+                    allNotes = new FilteredElementCollector(doc, viewId)
+                        .OfClass(typeof(TextNote))
+                        .Cast<TextNote>()
+                        .ToList();
+
+                    // Fallback: newly-imported drafting views may not yet be indexed by the view-scoped
+                    // collector. If 0 results, retry with a doc-level collector filtered by OwnerViewId.
+                    if (allNotes.Count == 0)
+                    {
+                        allNotes = new FilteredElementCollector(doc)
+                            .OfClass(typeof(TextNote))
+                            .Cast<TextNote>()
+                            .Where(tn => tn.OwnerViewId == viewId)
+                            .ToList();
+                    }
                 }
                 else
                 {
-                    collector = new FilteredElementCollector(doc).OfClass(typeof(TextNote));
+                    allNotes = new FilteredElementCollector(doc)
+                        .OfClass(typeof(TextNote))
+                        .Cast<TextNote>()
+                        .ToList();
                 }
-
-                var allNotes = collector.Cast<TextNote>().ToList();
                 int totalCount = allNotes.Count;
                 var paged = allNotes.Skip(offset).Take(maxResults);
 
