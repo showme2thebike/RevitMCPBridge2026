@@ -19,7 +19,7 @@ namespace RevitMCPBridge.AgentFramework
             "</RSAKeyValue>";
 
         private const string SESSION_URL = "https://bimmonkey-production.up.railway.app/api/auth/session";
-        private const int REFRESH_MINUTES = 50;
+        private const int REFRESH_MINUTES = 45;
 
         private static string _token;
         private static long _tokenExp;
@@ -116,7 +116,9 @@ namespace RevitMCPBridge.AgentFramework
                         }
                         else
                         {
-                            Log.Debug("[SessionToken] 503 on refresh — extending existing bypass, contentKey updated if present");
+                            // Extend the bypass lease so it doesn't expire mid-session
+                            _tokenExp = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeSeconds();
+                            Log.Debug("[SessionToken] 503 on refresh — bypass lease extended by 1 hour");
                         }
                     }
                     else
@@ -156,18 +158,19 @@ namespace RevitMCPBridge.AgentFramework
             catch (Exception ex)
             {
                 Log.Warning(ex, "[SessionToken] Network error during token fetch — keeping existing token");
-                // If the current token is expiring within 10 minutes, schedule an early retry
-                // so a transient network hiccup at 2am doesn't cause a 40-minute outage window.
-                var secsRemaining = _tokenExp - DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-                if (secsRemaining < 600 && !string.IsNullOrEmpty(_token) && _retryTimer == null)
+                // Always schedule a retry on any network failure — the 50-minute refresh fires
+                // exactly when secsRemaining == 600, which the old < 600 check excluded, causing
+                // a 40-minute blackout window when that one refresh failed.
+                if (_retryTimer == null)
                 {
+                    var secsRemaining = _tokenExp - DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                     _retryTimer = new Timer(_ =>
                     {
                         _retryTimer?.Dispose();
                         _retryTimer = null;
                         Task.Run(() => FetchTokenAsync());
                     }, null, TimeSpan.FromMinutes(RETRY_DELAY_MINUTES), Timeout.InfiniteTimeSpan);
-                    Log.Information("[SessionToken] Token expires in {Secs}s — retry scheduled in {Min} minutes", secsRemaining, RETRY_DELAY_MINUTES);
+                    Log.Information("[SessionToken] Network error — retry scheduled in {Min} minutes (token expires in {Secs}s)", RETRY_DELAY_MINUTES, secsRemaining);
                 }
             }
         }
