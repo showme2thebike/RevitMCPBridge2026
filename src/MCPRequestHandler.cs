@@ -78,6 +78,7 @@ namespace RevitMCPBridge
         public void Execute(UIApplication app)
         {
             IsExecuting = true;
+            RevitMCPBridgeApp.AutoHandleDialogs = true;
             try
             {
                 RequestItem requestItem = null;
@@ -156,6 +157,7 @@ namespace RevitMCPBridge
             finally
             {
                 IsExecuting = false;
+                RevitMCPBridgeApp.AutoHandleDialogs = false;
 
                 // If more items are waiting, re-raise the ExternalEvent from a thread-pool thread.
                 // This yields the Revit main thread so UI events (VG, Revisions, etc.) can process

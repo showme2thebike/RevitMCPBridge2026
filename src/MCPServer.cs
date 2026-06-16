@@ -694,10 +694,6 @@ namespace RevitMCPBridge
         
         private async Task<string> ProcessMessage(string message)
         {
-            // Enable auto-dialog handling during MCP command execution
-            var previousDialogState = RevitMCPBridgeApp.AutoHandleDialogs;
-            RevitMCPBridgeApp.AutoHandleDialogs = true;
-
             try
             {
                 var request = JObject.Parse(message);
@@ -3907,11 +3903,6 @@ namespace RevitMCPBridge
                     "INTERNAL_ERROR")
                     .With("exceptionType", ex.GetType().FullName)
                     .Build();
-            }
-            finally
-            {
-                // ALWAYS restore dialog handling state (off by default for manual Revit use)
-                RevitMCPBridgeApp.AutoHandleDialogs = previousDialogState;
             }
         }
 
