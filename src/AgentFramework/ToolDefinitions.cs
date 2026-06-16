@@ -281,6 +281,27 @@ Example files:
             {
                 new ToolDefinition
                 {
+                    Name = "fetchUrl",
+                    Description = @"Fetch the content of any public URL and return it as text. Use this to:
+- Read Zillow listings, county assessor pages, permit portals, zoning maps
+- Pull JSON from public APIs (parcel data, weather, code lookups)
+- Read any web page Barrett pastes a link to
+
+HTML pages are stripped to readable text. JSON/plain-text returned as-is.
+Content is truncated at 30,000 characters. Note: some sites (Zillow, Google) block bots — photos/images cannot be fetched this way, only text content.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            url     = new { type = "string",  description = "Full URL to fetch (must start with http:// or https://)" },
+                            timeout = new { type = "integer", description = "Request timeout in seconds (default: 15)" }
+                        },
+                        required = new[] { "url" }
+                    }
+                },
+                new ToolDefinition
+                {
                     Name = "readFile",
                     Description = @"Read the contents of a file. Supports text files, code files, JSON, CSV, etc.
 Use this to examine project files, scripts, configuration, or any text-based content.",

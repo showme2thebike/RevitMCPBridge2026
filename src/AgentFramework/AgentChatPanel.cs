@@ -2992,6 +2992,63 @@ namespace RevitMCPBridge2026.AgentFramework
             catch (Exception ex) { return JsonConvert.SerializeObject(new { success = false, error = ex.Message }); }
         }
 
+        private async Task<string> HandleFetchUrlAsync(JObject parameters)
+        {
+            var url = parameters?["url"]?.ToString();
+            if (string.IsNullOrEmpty(url))
+                return JsonConvert.SerializeObject(new { success = false, error = "url parameter is required" });
+            if (!url.StartsWith("http://") && !url.StartsWith("https://"))
+                return JsonConvert.SerializeObject(new { success = false, error = "url must start with http:// or https://" });
+
+            var timeoutSec = parameters?["timeout"]?.Value<int>() ?? 15;
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSec) })
+                {
+                    client.DefaultRequestHeaders.Add("User-Agent",
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
+                    client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/json,text/plain,*/*");
+
+                    var resp = await client.GetAsync(url);
+                    var raw = await resp.Content.ReadAsStringAsync();
+                    var contentType = resp.Content.Headers.ContentType?.MediaType ?? "";
+
+                    string text;
+                    if (contentType.Contains("html"))
+                    {
+                        // Strip script/style blocks, then all tags, collapse whitespace
+                        text = System.Text.RegularExpressions.Regex.Replace(raw, @"<script[\s\S]*?</script>", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        text = System.Text.RegularExpressions.Regex.Replace(text, @"<style[\s\S]*?</style>", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        text = System.Text.RegularExpressions.Regex.Replace(text, @"<[^>]+>", " ");
+                        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s{2,}", " ").Trim();
+                    }
+                    else
+                    {
+                        text = raw;
+                    }
+
+                    const int maxChars = 30000;
+                    bool truncated = text.Length > maxChars;
+                    if (truncated) text = text.Substring(0, maxChars);
+
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        url,
+                        statusCode = (int)resp.StatusCode,
+                        contentType,
+                        length = text.Length,
+                        truncated,
+                        content = text
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { success = false, url, error = ex.Message });
+            }
+        }
+
         private async Task<string> ExecuteMCPMethodAsync(string methodName, JObject parameters)
         {
             // Handle local tools (knowledge base) - don't need MCP
@@ -3051,6 +3108,10 @@ namespace RevitMCPBridge2026.AgentFramework
             // BIM Monkey: climate zone + design conditions lookup
             if (methodName == "climateLookup")
                 return await HandleClimateLookupAsync(parameters);
+
+            // Web fetch — Barrett can paste any URL and Claude will read its text content
+            if (methodName == "fetchUrl")
+                return await HandleFetchUrlAsync(parameters);
 
             // BIM Monkey: web app redline library
             if (methodName == "listRedlineSessions")
