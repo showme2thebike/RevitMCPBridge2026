@@ -1291,6 +1291,14 @@ namespace RevitMCPBridge
                     : Line.CreateBound(wallStart, extendedPoint);
 
                 // Find intersection with target
+#if REVIT2027
+                var intersectResult1 = extendedLine.Intersect(targetCurve, CurveIntersectResultOption.Detailed);
+                if (intersectResult1.Result != SetComparisonResult.Overlap || intersectResult1.GetOverlaps().Count == 0)
+                {
+                    return ResponseBuilder.Error("Wall line does not intersect with target element", "INVALID_GEOMETRY").Build();
+                }
+                var intersectionPoint = intersectResult1.GetOverlaps()[0].Point;
+#else
                 var resultArray = new IntersectionResultArray();
                 var setCompResult = extendedLine.Intersect(targetCurve, out resultArray);
 
@@ -1300,6 +1308,7 @@ namespace RevitMCPBridge
                 }
 
                 var intersectionPoint = resultArray.get_Item(0).XYZPoint;
+#endif
 
                 using (var trans = new Transaction(doc, "Extend Wall"))
                 {
@@ -1410,6 +1419,14 @@ namespace RevitMCPBridge
                 }
 
                 // Find intersection
+#if REVIT2027
+                var intersectResult2 = curve.Intersect(targetCurve, CurveIntersectResultOption.Detailed);
+                if (intersectResult2.Result != SetComparisonResult.Overlap || intersectResult2.GetOverlaps().Count == 0)
+                {
+                    return ResponseBuilder.Error("Wall does not intersect with target element", "INVALID_GEOMETRY").Build();
+                }
+                var intersectionPoint = intersectResult2.GetOverlaps()[0].Point;
+#else
                 var resultArray = new IntersectionResultArray();
                 var setCompResult = curve.Intersect(targetCurve, out resultArray);
 
@@ -1419,6 +1436,7 @@ namespace RevitMCPBridge
                 }
 
                 var intersectionPoint = resultArray.get_Item(0).XYZPoint;
+#endif
                 var wallStart = curve.GetEndPoint(0);
                 var wallEnd = curve.GetEndPoint(1);
 

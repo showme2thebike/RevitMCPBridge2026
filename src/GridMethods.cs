@@ -504,11 +504,18 @@ namespace RevitMCPBridge
                 var curve1 = grid1.Curve;
                 var curve2 = grid2.Curve;
 
+#if REVIT2027
+                var intersectResult = curve1.Intersect(curve2, CurveIntersectResultOption.Detailed);
+                if (intersectResult.Result == SetComparisonResult.Overlap && intersectResult.GetOverlaps().Count > 0)
+                {
+                    var intersection = intersectResult.GetOverlaps()[0].Point;
+#else
                 var results = curve1.Intersect(curve2, out IntersectionResultArray resultArray);
 
                 if (results == SetComparisonResult.Overlap && resultArray != null && resultArray.Size > 0)
                 {
                     var intersection = resultArray.get_Item(0).XYZPoint;
+#endif
                     return JsonConvert.SerializeObject(new
                     {
                         success = true,

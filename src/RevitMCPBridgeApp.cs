@@ -2165,13 +2165,23 @@ namespace RevitMCPBridge
                     Log.Information($"Generic dialog shown: {e.DialogId}");
 
                     // DocWarnDialog appears during transaction commits with overlap/join warnings.
-                    // Always override with OK (1) so the commit can proceed instead of rolling back.
+                    // Only override when a transaction is active — the same dialog ID fires during
+                    // model loads/upgrades where result 1 means Cancel, not OK, causing "Load Cancelled".
                     if (e.DialogId == "Dialog_Revit_DocWarnDialog")
                     {
-                        e.OverrideResult(1);
-                        record.ResultClicked = 1;
-                        record.ResultName = "OK (auto)";
-                        Log.Information("Auto-dismissed Dialog_Revit_DocWarnDialog with OK to allow commit");
+                        var activeDoc = _uiApplication?.ActiveUIDocument?.Document;
+                        bool inTransaction = activeDoc != null && activeDoc.IsModifiable;
+                        if (inTransaction)
+                        {
+                            e.OverrideResult(1);
+                            record.ResultClicked = 1;
+                            record.ResultName = "OK (auto)";
+                            Log.Information("Auto-dismissed Dialog_Revit_DocWarnDialog with OK to allow commit");
+                        }
+                        else
+                        {
+                            Log.Information("Dialog_Revit_DocWarnDialog shown outside transaction — skipping auto-dismiss");
+                        }
                     }
                     else if (_autoHandleDialogs)
                     {

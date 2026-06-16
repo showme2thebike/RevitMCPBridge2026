@@ -15,9 +15,16 @@
     <DefineConstants Condition="'$(RevitYear)' == '2024'">$(DefineConstants);REVIT2024;REVIT2025</DefineConstants>
     <DefineConstants Condition="'$(RevitYear)' == '2025'">$(DefineConstants);REVIT2025</DefineConstants>
     <DefineConstants Condition="'$(RevitYear)' == '2026'">$(DefineConstants);REVIT2026</DefineConstants>
+    <DefineConstants Condition="'$(RevitYear)' == '2027'">$(DefineConstants);REVIT2027</DefineConstants>
     <RootNamespace>RevitMCPBridge</RootNamespace>
     <NoWarn>MSB3277</NoWarn>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <!-- Revit 2027 requires .NET 10; 2024/2025/2026 stay on .NET 8 -->
+  <PropertyGroup Condition="'$(RevitYear)' == '2027'">
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
   <!-- Exclude old files, archives, and test projects -->
@@ -56,8 +63,12 @@
   </ItemGroup>
 
   <!-- NuGet Revit API stubs — fallback when matching Revit version is not installed locally -->
-  <!-- Used for 2024/2025 builds on a machine that only has Revit 2026 installed -->
-  <ItemGroup Condition="!Exists('C:\Program Files\Autodesk\Revit $(RevitYear)\RevitAPI.dll')">
+  <!-- 2027: pin to 2027.0.2 (earliest available in the 2027 series on NuGet) -->
+  <ItemGroup Condition="'$(RevitYear)' == '2027' AND !Exists('C:\Program Files\Autodesk\Revit 2027\RevitAPI.dll')">
+    <PackageReference Include="Revit_All_Main_Versions_API_x64" Version="2027.0.2" />
+  </ItemGroup>
+  <!-- 2024/2025: fall back to NuGet stubs when only a newer Revit is installed -->
+  <ItemGroup Condition="'$(RevitYear)' != '2027' AND !Exists('C:\Program Files\Autodesk\Revit $(RevitYear)\RevitAPI.dll')">
     <PackageReference Include="Revit_All_Main_Versions_API_x64" Version="$(RevitYear).0.0" />
   </ItemGroup>
 
