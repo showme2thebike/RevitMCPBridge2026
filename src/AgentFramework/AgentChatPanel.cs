@@ -3090,10 +3090,29 @@ namespace RevitMCPBridge2026.AgentFramework
                     osmClient.DefaultRequestHeaders.Add("User-Agent", "BimMonkey/1.0 (contact@bimmonkey.ai)");
 
                     var query = $"[out:json];way[\"building\"](around:100,{lat},{lng});out geom;";
-                    var osmResp = await osmClient.PostAsync(
+                    var postContent = new System.Net.Http.StringContent($"data={Uri.EscapeDataString(query)}", System.Text.Encoding.UTF8, "application/x-www-form-urlencoded");
+
+                    // Try primary then fallback mirror
+                    string[] overpassEndpoints = {
                         "https://overpass-api.de/api/interpreter",
-                        new System.Net.Http.StringContent($"data={Uri.EscapeDataString(query)}", System.Text.Encoding.UTF8, "application/x-www-form-urlencoded"));
-                    var osmData = JObject.Parse(await osmResp.Content.ReadAsStringAsync());
+                        "https://overpass.kumi.systems/api/interpreter"
+                    };
+                    string osmRaw = null;
+                    string usedEndpoint = null;
+                    foreach (var endpoint in overpassEndpoints)
+                    {
+                        try
+                        {
+                            var r = await osmClient.PostAsync(endpoint,
+                                new System.Net.Http.StringContent($"data={Uri.EscapeDataString(query)}", System.Text.Encoding.UTF8, "application/x-www-form-urlencoded"));
+                            var raw = await r.Content.ReadAsStringAsync();
+                            if (raw.TrimStart().StartsWith("{")) { osmRaw = raw; usedEndpoint = endpoint; break; }
+                        }
+                        catch { /* try next mirror */ }
+                    }
+                    if (osmRaw == null)
+                        return JsonConvert.SerializeObject(new { success = false, lat, lng, error = "Overpass API is temporarily unavailable (both mirrors returned errors). Try again in a few minutes." });
+                    var osmData = JObject.Parse(osmRaw);
                     var elements = osmData["elements"] as JArray;
 
                     if (elements == null || !elements.Any())
