@@ -151,20 +151,20 @@ You can pass 'address' for geocoding, or pass 'lat'+'lng' directly (from a prior
                 new ToolDefinition
                 {
                     Name = "lookupZillowPhotos",
-                    Description = @"Fetch photos from a Zillow listing by zpid (Zillow Property ID). Returns up to 30 photo URLs covering interior rooms, exterior, and garage.
+                    Description = @"Fetch photos from an active Zillow listing by zpid or address. Returns up to 30 photo URLs.
 
-USE THIS for as-built documentation workflows:
-- After digitizing a footprint, call this to get interior photos of the actual current conditions
-- Pass the photos to Claude vision to observe: story count, room layout, mechanical systems (water heater, furnace, mini-splits), unusual fixtures, materials, ceiling heights
-- For each observation, ask the user whether to model it
+IMPORTANT: Only works for currently active (for-sale) listings. Off-market and sold properties return 0 photos from the API.
 
-Extract the zpid from a Zillow URL: https://www.zillow.com/homedetails/.../48677810_zpid/ → zpid = 48677810
+FOR OFF-MARKET / SOLD PROPERTIES (the common renovation case):
+Do NOT call this tool. Instead ask the user to paste the Zillow URL into the chat — Claude can fetch the live listing page directly and describe photos from it even when the API returns nothing. Example response: 'Paste the Zillow URL here and I can read the photos directly.'
 
-OBSERVE + NARRATE workflow:
-1. lookupZillowPhotos(zpid) → get photo URLs
-2. Analyze photos: notice mechanical systems, unusual fixtures, materials, spatial constraints
-3. Narrate observations conversationally — one at a time, ask before modeling each
-4. For door/window/fixture matches, query getFamilies to suggest the closest Revit family",
+FOR ACTIVE LISTINGS:
+Extract the zpid from the URL: https://www.zillow.com/homedetails/.../48677810_zpid/ → zpid = 48677810
+
+OBSERVE + NARRATE workflow (once photos are available either way):
+1. Analyze photos: story count, room layout, mechanical systems, ceiling heights, materials, spatial constraints
+2. Narrate observations conversationally — one room at a time, ask before modeling each element
+3. For door/window/fixture matches, query getFamilies to suggest the closest Revit family",
                     InputSchema = new
                     {
                         type = "object",
