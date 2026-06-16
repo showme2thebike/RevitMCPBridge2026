@@ -151,17 +151,15 @@ You can pass 'address' for geocoding, or pass 'lat'+'lng' directly (from a prior
                 new ToolDefinition
                 {
                     Name = "lookupZillowPhotos",
-                    Description = @"Fetch photos from an active Zillow listing by zpid or address. Returns up to 30 photo URLs.
+                    Description = @"Fetch photos from a Zillow listing by zpid or address. Returns up to 30 photo URLs.
 
-IMPORTANT: Only works for currently active (for-sale) listings. Off-market and sold properties return 0 photos from the API.
+NOTE: Only returns photos for active (currently for-sale) listings. Off-market and sold properties return 0 photos — this is a Zillow API limitation, not an error.
 
-FOR OFF-MARKET / SOLD PROPERTIES (the common renovation case):
-Do NOT call this tool. Instead ask the user to paste the Zillow URL into the chat — Claude can fetch the live listing page directly and describe photos from it even when the API returns nothing. Example response: 'Paste the Zillow URL here and I can read the photos directly.'
+IF 0 PHOTOS RETURNED: Tell the user the listing is off-market and photos aren't available via the API. Ask them to share photos directly in the chat (screenshots from Zillow, Redfin, or their own site photos) so you can analyze them via vision.
 
-FOR ACTIVE LISTINGS:
-Extract the zpid from the URL: https://www.zillow.com/homedetails/.../48677810_zpid/ → zpid = 48677810
+Extract the zpid from a Zillow URL: https://www.zillow.com/homedetails/.../48677810_zpid/ → zpid = 48677810
 
-OBSERVE + NARRATE workflow (once photos are available either way):
+OBSERVE + NARRATE workflow once photos are available:
 1. Analyze photos: story count, room layout, mechanical systems, ceiling heights, materials, spatial constraints
 2. Narrate observations conversationally — one room at a time, ask before modeling each element
 3. For door/window/fixture matches, query getFamilies to suggest the closest Revit family",
