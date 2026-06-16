@@ -969,6 +969,27 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { }
         }
 
+        public void PreloadDigitizePrompt(RevitMCPBridge.Commands.ParcelResult parcel)
+        {
+            try
+            {
+                var address = parcel.MatchedAddress ?? parcel.Address;
+                var latLng  = (parcel.Lat.HasValue && parcel.Lng.HasValue)
+                    ? $"lat={parcel.Lat:F6}, lng={parcel.Lng:F6}"
+                    : "coordinates unavailable";
+                var prompt =
+                    $"Digitize the building footprint for {address} into the current Revit model.\n\n" +
+                    $"Parcel coordinates: {latLng}\n\n" +
+                    "Steps:\n" +
+                    "1. Call lookupBuildingFootprint with the coordinates above (pass lat and lng directly — no geocoding needed)\n" +
+                    "2. Call getLevels to find the ground floor levelId\n" +
+                    "3. Call createWallsFromPolyline with the points array, levelId, height=10, closed=true\n\n" +
+                    "After placing walls, report the wall count, approximate footprint dimensions, and suggest switching to a non-existing-phase view to see them clearly.";
+                Dispatcher.Invoke(() => { if (_inputTextBox != null) _inputTextBox.Text = prompt; });
+            }
+            catch { }
+        }
+
         private void HandleComplianceRun(string runId, JArray checks)
         {
             try

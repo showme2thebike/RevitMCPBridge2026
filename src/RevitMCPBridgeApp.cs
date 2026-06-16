@@ -419,6 +419,12 @@ namespace RevitMCPBridge
                   LargeImage = CreateButtonIcon("vicinitymap", 32), Image = CreateButtonIcon("vicinitymap", 16) };
             siteDataPanel.AddItem(vicinityMapButtonData);
 
+            var digitizeButtonData = new PushButtonData("Digitize", "Digitize\nFootprint", asm,
+                "RevitMCPBridge.Commands.DigitizeCommand")
+                { ToolTip = "Look up a building footprint from OpenStreetMap and place exterior walls in Revit — enter an address, get the polygon, walls are created automatically",
+                  LargeImage = CreateButtonIcon("digitize", 32), Image = CreateButtonIcon("digitize", 16) };
+            siteDataPanel.AddItem(digitizeButtonData);
+
             siteDataPanel.AddSlideOut();  // ▼ on "Site Data" panel title; everything below is hidden until clicked
 
             // AddStackedItems = compact bar format: small icon left, text right, stacked vertically in the popup
@@ -499,6 +505,7 @@ namespace RevitMCPBridge
                 { "ModelCheck",        "M" },
                 { "Standards",         "A" },
                 { "VicinityMap",       "V" },
+                { "Digitize",          "D" },
                 { "Zoning",            "Z" },
                 { "Parcel",            "P" },
                 { "Permits",           "T" },
@@ -809,6 +816,9 @@ namespace RevitMCPBridge
                             break;
                         case "vicinitymap":
                             DrawVicinityMapIcon(dc, size);
+                            break;
+                        case "digitize":
+                            DrawDigitizeIcon(dc, size);
                             break;
                         case "compliance":
                             DrawComplianceIcon(dc, size);
@@ -1932,6 +1942,34 @@ namespace RevitMCPBridge
             // Corner marker — two short tick lines at top-left corner of setback rect
             dc.DrawLine(pen, new Point(7*s, 4*s), new Point(7*s, 7*s));
             dc.DrawLine(pen, new Point(4*s, 7*s), new Point(7*s, 7*s));
+        }
+
+        private void DrawDigitizeIcon(DrawingContext dc, int size)
+        {
+            // Building polygon with vertex dots — flat white fill + dark outline
+            double s   = size / 32.0;
+            var fill   = new SolidColorBrush(Colors.White);
+            var pen    = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(1, 1.5 * s));
+            var dotPen = new Pen(new SolidColorBrush(Color.FromRgb(75, 75, 75)), Math.Max(0.7, 1.0 * s));
+
+            // L-shaped footprint polygon (6 points)
+            var pts = new Point[]
+            {
+                new Point( 4*s, 28*s),
+                new Point( 4*s,  6*s),
+                new Point(20*s,  6*s),
+                new Point(20*s, 16*s),
+                new Point(28*s, 16*s),
+                new Point(28*s, 28*s),
+            };
+            var fig = new PathFigure { StartPoint = pts[0], IsClosed = true };
+            for (int i = 1; i < pts.Length; i++) fig.Segments.Add(new LineSegment(pts[i], true));
+            var geo = new PathGeometry(new[] { fig });
+            dc.DrawGeometry(fill, pen, geo);
+
+            // Vertex dots
+            double r = 2.0 * s;
+            foreach (var p in pts) dc.DrawEllipse(fill, dotPen, p, r, r);
         }
 
         private void DrawParcelIcon(DrawingContext dc, int size)
