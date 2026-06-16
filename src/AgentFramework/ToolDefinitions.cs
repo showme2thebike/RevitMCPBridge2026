@@ -150,6 +150,34 @@ You can pass 'address' for geocoding, or pass 'lat'+'lng' directly (from a prior
                 },
                 new ToolDefinition
                 {
+                    Name = "lookupZillowPhotos",
+                    Description = @"Fetch photos from a Zillow listing by zpid (Zillow Property ID). Returns up to 30 photo URLs covering interior rooms, exterior, and garage.
+
+USE THIS for as-built documentation workflows:
+- After digitizing a footprint, call this to get interior photos of the actual current conditions
+- Pass the photos to Claude vision to observe: story count, room layout, mechanical systems (water heater, furnace, mini-splits), unusual fixtures, materials, ceiling heights
+- For each observation, ask the user whether to model it
+
+Extract the zpid from a Zillow URL: https://www.zillow.com/homedetails/.../48677810_zpid/ → zpid = 48677810
+
+OBSERVE + NARRATE workflow:
+1. lookupZillowPhotos(zpid) → get photo URLs
+2. Analyze photos: notice mechanical systems, unusual fixtures, materials, spatial constraints
+3. Narrate observations conversationally — one at a time, ask before modeling each
+4. For door/window/fixture matches, query getFamilies to suggest the closest Revit family",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            zpid    = new { type = "string", description = "Zillow Property ID from the URL (e.g. '48677810' from ...48677810_zpid/). Use this if you have it." },
+                            address = new { type = "string", description = "Full address with city and state. Used to look up the zpid automatically if you don't have it (e.g. '3421 28th Ave W, Seattle, WA')." }
+                        },
+                        required = new string[] { }
+                    }
+                },
+                new ToolDefinition
+                {
                     Name = "listRedlineSessions",
                     Description = "List all redline review sessions uploaded to the BIM Monkey web app for this firm. Returns session IDs, project names, filenames, page counts, pages with redlines, and upload dates. Call this first to find the session ID before calling getRedlineSession or viewRedlinePage.",
                     InputSchema = new

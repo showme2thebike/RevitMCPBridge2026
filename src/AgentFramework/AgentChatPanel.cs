@@ -2942,6 +2942,53 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { return null; }
         }
 
+        private async Task<string> HandleLookupZillowPhotosAsync(JObject parameters)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+                return JsonConvert.SerializeObject(new { success = false, error = "BIM Monkey API key not configured." });
+
+            var zpid    = parameters?["zpid"]?.ToString()?.Trim();
+            var address = parameters?["address"]?.ToString()?.Trim();
+            if (string.IsNullOrEmpty(zpid) && string.IsNullOrEmpty(address))
+                return JsonConvert.SerializeObject(new { success = false, error = "Provide either zpid (e.g. '48677810') or address (e.g. '3421 28th Ave W, Seattle, WA')" });
+
+            try
+            {
+                var query = !string.IsNullOrEmpty(zpid)
+                    ? $"zpid={Uri.EscapeDataString(zpid)}"
+                    : $"address={Uri.EscapeDataString(address)}";
+                using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+                client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                var resp = await client.GetAsync($"https://bimmonkey-production.up.railway.app/api/zillow/analyze?{query}");
+                var body = await resp.Content.ReadAsStringAsync();
+                if (!resp.IsSuccessStatusCode)
+                    return JsonConvert.SerializeObject(new { success = false, error = $"Photo lookup failed: {body}" });
+
+                var data         = JObject.Parse(body);
+                var photos       = data["photos"] as JArray ?? new JArray();
+                var matchedAddr  = data["address"]?.ToString();
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success    = true,
+                    zpid,
+                    address    = matchedAddr,
+                    photoCount = photos.Count,
+                    photos     = photos.Select(p => new
+                    {
+                        url         = p["url"]?.ToString(),
+                        caption     = p["caption"]?.ToString(),
+                        subjectType = p["subjectType"]?.ToString()
+                    }).ToList(),
+                    note = "Photos are publicly accessible JPEGs — pass the URLs directly to Claude vision for analysis. Analyze all photos and narrate what you observe room by room: mechanical systems, unusual fixtures, materials, spatial constraints, ceiling heights. Ask before modeling each item."
+                });
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { success = false, error = ex.Message });
+            }
+        }
+
         private async Task<string> HandleParcelLookupAsync(JObject parameters)
         {
             if (string.IsNullOrEmpty(_bimMonkeyApiKey))
@@ -3271,6 +3318,10 @@ namespace RevitMCPBridge2026.AgentFramework
             // Building footprint from OpenStreetMap — works for any US/global address
             if (methodName == "lookupBuildingFootprint")
                 return await HandleLookupBuildingFootprintAsync(parameters);
+
+            // Zillow listing photos for as-built vision analysis
+            if (methodName == "lookupZillowPhotos")
+                return await HandleLookupZillowPhotosAsync(parameters);
 
             // BIM Monkey: web app redline library
             if (methodName == "listRedlineSessions")
