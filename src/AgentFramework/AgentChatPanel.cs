@@ -3049,6 +3049,121 @@ namespace RevitMCPBridge2026.AgentFramework
             }
         }
 
+        private async Task<string> HandleLookupBuildingFootprintAsync(JObject parameters)
+        {
+            double lat = 0, lng = 0;
+            string displayName = null;
+
+            // Use provided coordinates if available (skips geocoding — use after parcelLookup)
+            if (parameters?["lat"] != null && parameters?["lng"] != null)
+            {
+                lat = parameters["lat"].Value<double>();
+                lng = parameters["lng"].Value<double>();
+            }
+            else
+            {
+                var address = parameters?["address"]?.ToString();
+                if (string.IsNullOrEmpty(address))
+                    return JsonConvert.SerializeObject(new { success = false, error = "Either 'address' or 'lat'+'lng' is required" });
+                try
+                {
+                    using (var geoClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+                    {
+                        geoClient.DefaultRequestHeaders.Add("User-Agent", "BimMonkey/1.0 (contact@bimmonkey.ai)");
+                        var geoUrl = $"https://nominatim.openstreetmap.org/search?q={Uri.EscapeDataString(address)}&format=json&limit=1";
+                        var geoJson = await (await geoClient.GetAsync(geoUrl)).Content.ReadAsStringAsync();
+                        var geoData = JArray.Parse(geoJson);
+                        if (!geoData.Any())
+                            return JsonConvert.SerializeObject(new { success = false, error = $"Could not geocode: {address}. Include city and state, e.g. '3421 28th Ave W, Seattle, WA'." });
+                        lat = geoData[0]["lat"].Value<double>();
+                        lng = geoData[0]["lon"].Value<double>();
+                        displayName = geoData[0]["display_name"]?.ToString();
+                    }
+                }
+                catch (Exception ex) { return JsonConvert.SerializeObject(new { success = false, error = $"Geocoding failed: {ex.Message}" }); }
+            }
+
+            try
+            {
+                using (var osmClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) })
+                {
+                    osmClient.DefaultRequestHeaders.Add("User-Agent", "BimMonkey/1.0 (contact@bimmonkey.ai)");
+
+                    var query = $"[out:json];way[\"building\"](around:100,{lat},{lng});out geom;";
+                    var osmResp = await osmClient.PostAsync(
+                        "https://overpass-api.de/api/interpreter",
+                        new System.Net.Http.StringContent($"data={Uri.EscapeDataString(query)}", System.Text.Encoding.UTF8, "application/x-www-form-urlencoded"));
+                    var osmData = JObject.Parse(await osmResp.Content.ReadAsStringAsync());
+                    var elements = osmData["elements"] as JArray;
+
+                    if (elements == null || !elements.Any())
+                        return JsonConvert.SerializeObject(new
+                        {
+                            success = false, lat, lng,
+                            error = "No building footprint found in OpenStreetMap at this location. The building may not yet be mapped in OSM (coverage is ~90% for US structures). Try parcelLookup to get permit drawings instead."
+                        });
+
+                    // Pick the building whose centroid is closest to the query point
+                    JObject bestBuilding = null;
+                    JArray bestGeometry = null;
+                    double bestDist = double.MaxValue;
+                    foreach (JObject elem in elements)
+                    {
+                        var geom = elem["geometry"] as JArray;
+                        if (geom == null || !geom.Any()) continue;
+                        var cLat = geom.Average(g => g["lat"].Value<double>());
+                        var cLng = geom.Average(g => g["lon"].Value<double>());
+                        var dist = (cLat - lat) * (cLat - lat) + (cLng - lng) * (cLng - lng);
+                        if (dist < bestDist) { bestDist = dist; bestBuilding = elem; bestGeometry = geom; }
+                    }
+
+                    if (bestGeometry == null)
+                        return JsonConvert.SerializeObject(new { success = false, lat, lng, error = "Building found in OSM but geometry is missing." });
+
+                    // Convert lat/lng polygon → feet relative to building centroid
+                    var centLat = bestGeometry.Average(g => g["lat"].Value<double>());
+                    var centLng = bestGeometry.Average(g => g["lon"].Value<double>());
+                    const double FT_PER_DEG_LAT = 364320.0;
+                    var ftPerDegLng = FT_PER_DEG_LAT * Math.Cos(centLat * Math.PI / 180.0);
+
+                    var allVerts = bestGeometry.Select(g => new
+                    {
+                        x = Math.Round((g["lon"].Value<double>() - centLng) * ftPerDegLng, 3),
+                        y = Math.Round((g["lat"].Value<double>() - centLat) * FT_PER_DEG_LAT, 3)
+                    }).ToList();
+
+                    // OSM polygons repeat first node at end — remove the duplicate
+                    var verts = (allVerts.Count > 1 && allVerts[0].x == allVerts[allVerts.Count - 1].x && allVerts[0].y == allVerts[allVerts.Count - 1].y)
+                        ? allVerts.Take(allVerts.Count - 1).ToList()
+                        : allVerts;
+
+                    var xs = verts.Select(v => v.x).ToList();
+                    var ys = verts.Select(v => v.y).ToList();
+                    var tags = bestBuilding["tags"] as JObject;
+
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        source = "OpenStreetMap",
+                        displayName,
+                        lat, lng,
+                        osmId = bestBuilding["id"]?.ToString(),
+                        buildingType = tags?["building"]?.ToString() ?? "yes",
+                        levels = tags?["building:levels"]?.ToString(),
+                        approximateWidthFt = Math.Round(xs.Max() - xs.Min(), 1),
+                        approximateDepthFt = Math.Round(ys.Max() - ys.Min(), 1),
+                        vertexCount = verts.Count,
+                        points = verts.Select(v => new double[] { v.x, v.y, 0.0 }).ToList(),
+                        note = "Pass 'points' to callMCPMethod('createWallsFromPolyline', {points, levelId, height:10, closed:true}) to place exterior walls."
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { success = false, lat, lng, error = $"OSM query failed: {ex.Message}" });
+            }
+        }
+
         private async Task<string> ExecuteMCPMethodAsync(string methodName, JObject parameters)
         {
             // Handle local tools (knowledge base) - don't need MCP
@@ -3112,6 +3227,10 @@ namespace RevitMCPBridge2026.AgentFramework
             // Web fetch — Barrett can paste any URL and Claude will read its text content
             if (methodName == "fetchUrl")
                 return await HandleFetchUrlAsync(parameters);
+
+            // Building footprint from OpenStreetMap — works for any US/global address
+            if (methodName == "lookupBuildingFootprint")
+                return await HandleLookupBuildingFootprintAsync(parameters);
 
             // BIM Monkey: web app redline library
             if (methodName == "listRedlineSessions")

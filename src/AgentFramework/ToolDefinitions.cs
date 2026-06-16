@@ -124,6 +124,32 @@ Returns: what matches the firm standard, what differs, and quality/compliance is
                 },
                 new ToolDefinition
                 {
+                    Name = "lookupBuildingFootprint",
+                    Description = @"Look up the building footprint polygon for any address using OpenStreetMap. Works for any city in the U.S. and worldwide — no city-specific setup needed.
+
+Returns polygon vertices as a 'points' array in [[x, y, 0], ...] format (feet, relative to building centroid), ready to pass directly to createWallsFromPolyline.
+
+DIGITIZE FROM ADDRESS workflow:
+1. Call parcelLookup(address) → get lat/lng, year built, building area, permit history
+2. Call lookupBuildingFootprint(lat, lng) → get polygon
+3. Call getLevels → get ground floor levelId
+4. Call createWallsFromPolyline(points, levelId, height, closed:true) → place exterior walls
+
+You can pass 'address' for geocoding, or pass 'lat'+'lng' directly (from a prior parcelLookup) to skip geocoding.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            address = new { type = "string", description = "Full address with city and state (e.g. '3421 28th Ave W, Seattle, WA'). Not needed if lat/lng provided." },
+                            lat     = new { type = "number", description = "Latitude from a prior parcelLookup result (skips geocoding)" },
+                            lng     = new { type = "number", description = "Longitude from a prior parcelLookup result (skips geocoding)" }
+                        },
+                        required = new string[] { }
+                    }
+                },
+                new ToolDefinition
+                {
                     Name = "listRedlineSessions",
                     Description = "List all redline review sessions uploaded to the BIM Monkey web app for this firm. Returns session IDs, project names, filenames, page counts, pages with redlines, and upload dates. Call this first to find the session ID before calling getRedlineSession or viewRedlinePage.",
                     InputSchema = new
