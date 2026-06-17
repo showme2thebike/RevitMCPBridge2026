@@ -287,7 +287,7 @@ namespace RevitMCPBridge
         /// - targetPosition: Look-at point {x, y, z} in feet.
         /// - upDirection (optional): Up vector {x, y, z}. Default {0, 0, 1}.
         /// </param>
-        [MCPMethod("setCamera", Category = "ViewportCapture", Description = "Set camera position and orientation for a 3D view")]
+        [MCPMethod("setCamera", "setCameraPosition", Category = "ViewportCapture", Description = "Set camera position and orientation for a 3D view")]
         public static string SetCamera(UIApplication uiApp, JObject parameters)
         {
             try
@@ -414,7 +414,7 @@ namespace RevitMCPBridge
         /// <summary>
         /// Get current camera position and orientation for a 3D view.
         /// </summary>
-        [MCPMethod("getCamera", Category = "ViewportCapture", Description = "Get current camera position and orientation for a 3D view")]
+        [MCPMethod("getCamera", "getCameraPosition", Category = "ViewportCapture", Description = "Get current camera position and orientation for a 3D view")]
         public static string GetCamera(UIApplication uiApp, JObject parameters)
         {
             try
@@ -781,6 +781,10 @@ namespace RevitMCPBridge
         {
             try
             {
+                // If neither key was injected by AgentChatPanel, fall back to reading from disk
+                if (string.IsNullOrEmpty(bimMonkeyApiKey))
+                    bimMonkeyApiKey = ReadBimMonkeyApiKey();
+
                 if (string.IsNullOrEmpty(apiKey) && string.IsNullOrEmpty(bimMonkeyApiKey))
                 {
                     return JsonConvert.SerializeObject(new
@@ -856,6 +860,37 @@ namespace RevitMCPBridge
                 var result = JObject.Parse(body);
                 return result["analysis"]?.ToString() ?? "No analysis available";
             }
+        }
+
+        private static string ReadBimMonkeyApiKey()
+        {
+            try
+            {
+                var path = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".claude", "settings.json");
+                if (System.IO.File.Exists(path))
+                {
+                    var obj = Newtonsoft.Json.Linq.JObject.Parse(System.IO.File.ReadAllText(path));
+                    var key = obj["env"]?["BIM_MONKEY_API_KEY"]?.ToString();
+                    if (!string.IsNullOrEmpty(key)) return key;
+                }
+            }
+            catch { }
+            var env = Environment.GetEnvironmentVariable("BIM_MONKEY_API_KEY");
+            if (!string.IsNullOrEmpty(env)) return env;
+            try
+            {
+                var md = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                    "BIM Monkey", "CLAUDE.md");
+                if (System.IO.File.Exists(md))
+                    foreach (var line in System.IO.File.ReadAllLines(md))
+                        if (line.StartsWith("BIM_MONKEY_API_KEY="))
+                            return line.Substring("BIM_MONKEY_API_KEY=".Length).Trim();
+            }
+            catch { }
+            return null;
         }
 
         /// <summary>

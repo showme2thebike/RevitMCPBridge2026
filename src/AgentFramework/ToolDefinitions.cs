@@ -83,7 +83,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 new ToolDefinition
                 {
                     Name = "analyzeView",
-                    Description = "VISUAL VERIFICATION: Capture the current view/sheet and analyze it with AI vision. Use after placing elements to confirm they appear correctly.",
+                    Description = "VISUAL VERIFICATION: Capture the active Revit view/sheet and analyze it with AI vision. Use after placing elements to confirm they appear correctly. IMPORTANT: This captures the Revit viewport only — it does NOT see the browser, Street View, or any other application. To analyze a browser screenshot or local image file, use browser_take_screenshot or analyzeImage instead.",
                     InputSchema = new
                     {
                         type = "object",
@@ -155,12 +155,37 @@ You can pass 'address' for geocoding, or pass 'lat'+'lng' directly (from a prior
 
 NOTE: Only returns photos for active (currently for-sale) listings. Off-market and sold properties return 0 photos — this is a Zillow API limitation, not an error.
 
-IF 0 PHOTOS RETURNED: Tell the user the listing is off-market and photos aren't available via the API. Ask them to share photos directly in the chat (screenshots from Zillow, Redfin, or their own site photos) so you can analyze them via vision.
+IF 0 PHOTOS RETURNED — this is an off-market property. Attempt ALL steps below automatically without asking the user first:
+
+STEP 1 — Google Street View thumbnails (no auth required, always works). Navigate to https://www.google.com/maps/search/{address-urlencoded} via browser_navigate, extract the panoid from the URL (format: !1s{panoid}!), then fetch these thumbnail URLs directly and analyze via vision:
+  https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid={id}&yaw=0&pitch=15&w=1200&h=800&cb_client=maps_sv.tactile (north face)
+  https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid={id}&yaw=90&pitch=15&w=1200&h=800&cb_client=maps_sv.tactile (east face)
+  https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid={id}&yaw=180&pitch=15&w=1200&h=800&cb_client=maps_sv.tactile (south face)
+  https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid={id}&yaw=270&pitch=15&w=1200&h=800&cb_client=maps_sv.tactile (west face)
+Use pitch=15-25 for roof research. Narrate facade material, roof form, story count, window placement.
+
+STEP 2 — Wayback Machine archive. Construct the URL: https://web.archive.org/web/2024*/redfin.com/WA/Seattle/{street-slug}/{zip}/home/{listing-id} and call browser_navigate. If you get a calendar/snapshot page, click the most recent snapshot from 2024. Then call browser_network_requests and look for image URLs containing 'ssl.cdn-redfin.com' or 'photos.zillowstatic.com' or 'bigphoto'. Fetch any found image URLs and analyze via vision.
+
+STEP 3 — Live Redfin attempt. Call browser_navigate to the Redfin listing URL. Call browser_network_requests and look for CDN image URLs. If you find them, fetch and analyze.
+
+STEP 4 — If STEP 3 gets a 429 or Cloudflare block, tell the user: ""Redfin is blocking automated access. Open the listing in your regular Chrome browser, press F12 -> Network tab -> filter by Img, reload the page, then right-click any photo -> Copy image address and paste the URLs here. I can fetch those CDN links directly.""
+
+STEP 5 — If the user pastes CDN image URLs (ssl.cdn-redfin.com/... or photos.zillowstatic.com/...), use fetchUrl to download each image and analyze via vision.
+
+STEP 6 — Only ask for manual screenshots as a last resort if all above fail.
 
 Extract the zpid from a Zillow URL: https://www.zillow.com/homedetails/.../48677810_zpid/ → zpid = 48677810
 
+PROPERTY FACTS — always read these from the response `features` object BEFORE making any modeling assumptions:
+- resoFacts.stories → number of above-grade floors (use this, do not guess from photos)
+- resoFacts.bedrooms, resoFacts.bathrooms → room count
+- resoFacts.livingArea → gross floor area in SF
+- resoFacts.yearBuilt → construction era (informs structural assumptions)
+- homeType → Single Family, Condo, etc.
+State these facts explicitly before starting any modeling narration.
+
 OBSERVE + NARRATE workflow once photos are available:
-1. Analyze photos: story count, room layout, mechanical systems, ceiling heights, materials, spatial constraints
+1. Confirm story count and floor area from features, then analyze photos: room layout, mechanical systems, ceiling heights, materials, spatial constraints
 2. Narrate observations conversationally — one room at a time, ask before modeling each element
 3. For door/window/fixture matches, query getFamilies to suggest the closest Revit family",
                     InputSchema = new

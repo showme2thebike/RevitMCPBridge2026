@@ -78,6 +78,8 @@ namespace __RevitScriptHost__
 
                 var refs = AppDomain.CurrentDomain.GetAssemblies()
                     .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
+                    .GroupBy(a => a.GetName().Name)
+                    .Select(g => g.First())
                     .Select(a =>
                     {
                         try { return MetadataReference.CreateFromFile(a.Location) as MetadataReference; }

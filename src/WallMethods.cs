@@ -2224,5 +2224,125 @@ namespace RevitMCPBridge
                 "NOT_SUPPORTED").Build();
 #endif
         }
+
+        [MCPMethod("createProfileWall", Category = "Wall", Description = "Create a wall with an arbitrary profile shape from a closed polygon of 3D points. Use for gable end walls, shed dormers, or any non-rectangular wall. Points define the closed boundary in the wall plane. Requires at least 3 non-collinear points. Parameters: profilePoints (array of {x,y,z} or [[x,y,z]]), wallTypeId or wallTypeName, levelId, optional normal {x,y,z}, optional structural (bool).")]
+        public static string CreateProfileWall(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+
+                var profilePointsToken = parameters["profilePoints"];
+                if (profilePointsToken == null)
+                    return ResponseBuilder.Error("profilePoints is required", "MISSING_PARAM").Build();
+
+                var pts = new List<XYZ>();
+                foreach (var pt in profilePointsToken)
+                {
+                    pts.Add(pt is JArray arr
+                        ? new XYZ(arr[0].Value<double>(), arr[1].Value<double>(), arr[2].Value<double>())
+                        : new XYZ(pt["x"].Value<double>(), pt["y"].Value<double>(), pt["z"].Value<double>()));
+                }
+                if (pts.Count < 3)
+                    return ResponseBuilder.Error("profilePoints must have at least 3 points", "INVALID_PARAM").Build();
+
+                WallType wallType = null;
+                if (parameters["wallTypeId"] != null)
+                    wallType = ElementLookup.GetWallType(doc, parameters["wallTypeId"].Value<int>());
+                else if (parameters["wallTypeName"] != null)
+                    wallType = ElementLookup.GetWallType(doc, parameters["wallTypeName"].Value<string>());
+                else
+                    wallType = ElementLookup.GetDefaultWallType(doc);
+
+                if (wallType == null)
+                    return ResponseBuilder.Error("No valid wall type found", "NO_WALL_TYPE").Build();
+
+                var levelId = parameters["levelId"] != null
+                    ? new ElementId(parameters["levelId"].Value<int>())
+                    : doc.ActiveView?.GenLevel?.Id ?? ElementId.InvalidElementId;
+
+                var level = doc.GetElement(levelId) as Level;
+                if (level == null)
+                    return ResponseBuilder.Error("levelId is required and must refer to a valid Level", "INVALID_LEVEL").Build();
+
+                var profile = new List<Curve>();
+                for (int i = 0; i < pts.Count; i++)
+                {
+                    var next = pts[(i + 1) % pts.Count];
+                    if (pts[i].DistanceTo(next) < 0.001) continue;
+                    profile.Add(Line.CreateBound(pts[i], next));
+                }
+                if (profile.Count < 3)
+                    return ResponseBuilder.Error("Profile has fewer than 3 non-zero-length segments", "INVALID_PROFILE").Build();
+
+                var structural = parameters["structural"]?.Value<bool>() ?? false;
+
+                using (var trans = new Transaction(doc, "Create Profile Wall"))
+                {
+                    trans.Start();
+                    var failureOptions = trans.GetFailureHandlingOptions();
+                    failureOptions.SetFailuresPreprocessor(new WarningSwallower());
+                    trans.SetFailureHandlingOptions(failureOptions);
+
+                    Wall wall;
+                    var normalToken = parameters["normal"];
+                    if (normalToken != null)
+                    {
+                        var n = new XYZ(normalToken["x"].Value<double>(), normalToken["y"].Value<double>(), normalToken["z"].Value<double>());
+                        wall = Wall.Create(doc, profile, wallType.Id, level.Id, structural, n);
+                    }
+                    else
+                    {
+                        wall = Wall.Create(doc, profile, wallType.Id, level.Id, structural);
+                    }
+
+                    trans.Commit();
+
+                    return ResponseBuilder.Success()
+                        .With("wallId", (int)wall.Id.Value)
+                        .With("wallType", wallType.Name)
+                        .With("level", level.Name)
+                        .With("profileSegments", profile.Count)
+                        .With("sketchId", wall.SketchId != ElementId.InvalidElementId ? (int)wall.SketchId.Value : -1)
+                        .Build();
+                }
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        [MCPMethod("getWallTypeByName", Category = "Wall", Description = "Find wall types by name — returns all wall types whose name contains the search string (case-insensitive). More efficient than calling getWallTypes() and scanning manually. Parameter: name (string, partial match supported).")]
+        public static string GetWallTypeByName(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                var search = parameters["name"]?.ToString() ?? "";
+
+                var matches = new FilteredElementCollector(doc)
+                    .OfClass(typeof(WallType))
+                    .Cast<WallType>()
+                    .Where(wt => wt.Name.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0)
+                    .Select(wt => new {
+                        wallTypeId = (int)wt.Id.Value,
+                        name = wt.Name,
+                        kind = wt.Kind.ToString(),
+                        widthFt = Math.Round(wt.Width, 4)
+                    })
+                    .OrderBy(wt => wt.name)
+                    .ToList();
+
+                return ResponseBuilder.Success()
+                    .With("count", matches.Count)
+                    .With("wallTypes", matches)
+                    .Build();
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
     }
 }

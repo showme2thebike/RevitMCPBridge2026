@@ -3924,7 +3924,8 @@ namespace RevitMCPBridge
                     var name = kvp.Key;
                     var category = kvp.Value.Category ?? "Uncategorized";
                     if (!string.IsNullOrEmpty(categoryFilter) &&
-                        !category.Equals(categoryFilter, StringComparison.OrdinalIgnoreCase)) continue;
+                        !category.StartsWith(categoryFilter, StringComparison.OrdinalIgnoreCase) &&
+                        !categoryFilter.StartsWith(category, StringComparison.OrdinalIgnoreCase)) continue;
                     if (!string.IsNullOrEmpty(searchFilter) &&
                         name.IndexOf(searchFilter, StringComparison.OrdinalIgnoreCase) < 0) continue;
                     if (!grouped.ContainsKey(category))

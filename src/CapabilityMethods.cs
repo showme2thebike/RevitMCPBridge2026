@@ -17,7 +17,9 @@ namespace RevitMCPBridge
     /// </summary>
     public static class CapabilityMethods
     {
-        private static readonly string CapabilitySystemPath = @"D:\RevitMCPBridge2026\capability_system";
+        private static readonly string CapabilitySystemPath = Path.Combine(
+            Path.GetDirectoryName(typeof(CapabilityMethods).Assembly.Location) ?? AppDomain.CurrentDomain.BaseDirectory,
+            "capability_system");
         private static readonly string ToolSpecsPath = Path.Combine(CapabilitySystemPath, "tool_specs");
         private static readonly string MethodRegistryPath = Path.Combine(CapabilitySystemPath, "method_registry");
         private static readonly string MethodGymPath = Path.Combine(CapabilitySystemPath, "method_gym");

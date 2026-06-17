@@ -47,7 +47,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     StartInfo = new ProcessStartInfo
                     {
                         FileName = "cmd.exe",
-                        Arguments = "/C npx --no-install @playwright/mcp --headless --browser=chromium",
+                        Arguments = "/C npx --no-install @playwright/mcp --browser=chromium",
                         UseShellExecute = false,
                         RedirectStandardInput = true,
                         RedirectStandardOutput = true,
