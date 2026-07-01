@@ -209,12 +209,11 @@ namespace RevitMCPBridge2026.AgentFramework
             Unloaded += (s, e) =>
             {
                 _isClosing = true;
+                _pipePaused = true; // signal OnShown() to reconnect when pane is reopened
                 _agent?.NotifyInterrupted();
                 SaveSession();
                 DisconnectMCP();
                 _thinkingTimer?.Stop();
-
-                // Reopen logic is handled in OnShown(), called by LaunchAgentCommand.
             };
 
             // Drag-and-drop: PDFs → Training Library upload; images → attach as vision context
@@ -2608,6 +2607,10 @@ namespace RevitMCPBridge2026.AgentFramework
                 _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2024", PipeDirection.InOut);
 #elif REVIT2025
                 _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2025", PipeDirection.InOut);
+#elif REVIT2026
+                _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2026", PipeDirection.InOut);
+#elif REVIT2027
+                _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2027", PipeDirection.InOut);
 #else
                 _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2026", PipeDirection.InOut);
 #endif

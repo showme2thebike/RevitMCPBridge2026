@@ -21,12 +21,12 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 var uiApp = commandData.Application;
 
-                // Ensure the panel has a UIApplication reference (set on first ribbon click if
-                // ApplicationInitialized fired before the pane's SetupDockablePane was called)
-                BananaChatDockablePane.Instance?.InitializeUiApp(uiApp);
-
                 var pane = uiApp.GetDockablePane(BananaChatDockablePane.PaneId);
                 pane.Show();
+
+                // InitializeUiApp must come AFTER pane.Show() — Show() triggers SetupDockablePane
+                // which creates the AgentChatPanel; calling it before means _panel is always null.
+                BananaChatDockablePane.Instance?.InitializeUiApp(uiApp);
 
                 // Auto-resume the pipe if it was paused when BC was last closed.
                 // Loaded/Unloaded events don't reliably fire on Revit dockable pane show/hide,

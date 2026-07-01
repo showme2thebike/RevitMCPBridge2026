@@ -25,6 +25,10 @@ namespace RevitMCPBridge
         private readonly string _pipeName = "RevitMCPBridge2024";
 #elif REVIT2025
         private readonly string _pipeName = "RevitMCPBridge2025";
+#elif REVIT2026
+        private readonly string _pipeName = "RevitMCPBridge2026";
+#elif REVIT2027
+        private readonly string _pipeName = "RevitMCPBridge2027";
 #else
         private readonly string _pipeName = "RevitMCPBridge2026";
 #endif
