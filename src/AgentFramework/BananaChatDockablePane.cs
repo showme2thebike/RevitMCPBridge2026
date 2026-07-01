@@ -24,9 +24,9 @@ namespace RevitMCPBridge2026.AgentFramework
             data.FrameworkElement = _panel;
             data.InitialState = new DockablePaneState
             {
-                DockPosition = DockPosition.Right,
-                MinimumWidth = 350,
-                MinimumHeight = 400
+                DockPosition  = DockPosition.Floating,
+                MinimumWidth  = 400,
+                MinimumHeight = 500
             };
         }
 
