@@ -100,12 +100,11 @@ namespace RevitMCPBridge2026.AgentFramework
         private System.Windows.Threading.DispatcherTimer _proactiveTimer;
         private readonly HashSet<string> _promptedViewKeys = new HashSet<string>();
 
-        // Available models
-        private static readonly Dictionary<string, string> AvailableModels = new Dictionary<string, string>
+        // Fallback model list used when the API fetch fails
+        private static readonly Dictionary<string, string> FallbackModels = new Dictionary<string, string>
         {
-            { "claude-sonnet-4-6",          "Sonnet 4.6 - Recommended ($3/$15 per 1M tokens)" },
-            { "claude-opus-4-6",            "Opus 4.6 - Smartest ($15/$75 per 1M tokens)" },
-            { "claude-haiku-4-5-20251001",  "Haiku 4.5 - Fast & cheap ($0.80/$4 per 1M tokens)" },
+            { "claude-sonnet-5",           "Sonnet 5 — Recommended ($3/$15 per 1M tokens)" },
+            { "claude-haiku-4-5-20251001", "Haiku 4.5 — Fast & inexpensive ($0.80/$4 per 1M tokens)" },
         };
 
         // Persistent MCP connection
@@ -1196,7 +1195,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private static readonly string ConfigDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops");
         private static readonly string ConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "config.json");
         private static readonly string SessionPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "session.json");
-        private static readonly string DefaultModel = "claude-sonnet-4-6";
+        private static readonly string DefaultModel = "claude-sonnet-5";
 
         // Session data for persistence
         private List<ChatMessage> _sessionMessages = new List<ChatMessage>();
@@ -1246,7 +1245,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         _bimMonkeyApiKey = savedBmKey;
 
                     var savedModel = config["selected_model"]?.ToString();
-                    if (!string.IsNullOrEmpty(savedModel) && AvailableModels.ContainsKey(savedModel))
+                    if (!string.IsNullOrEmpty(savedModel) && savedModel.StartsWith("claude-"))
                         _selectedModel = savedModel;
                 }
             }
@@ -1722,21 +1721,52 @@ namespace RevitMCPBridge2026.AgentFramework
                 FontSize = 14
             };
 
-            foreach (var model in AvailableModels)
+            // Populate with fallback immediately so the combo is never empty
+            void PopulateModels(Dictionary<string, string> models)
             {
-                modelCombo.Items.Add(new System.Windows.Controls.ComboBoxItem
+                modelCombo.Items.Clear();
+                foreach (var model in models)
                 {
-                    Content = model.Value,
-                    Tag = model.Key,
-                    IsSelected = model.Key == _selectedModel
-                });
+                    modelCombo.Items.Add(new System.Windows.Controls.ComboBoxItem
+                    {
+                        Content = model.Value,
+                        Tag = model.Key,
+                        IsSelected = model.Key == _selectedModel
+                    });
+                }
+                if (modelCombo.SelectedItem == null && modelCombo.Items.Count > 0)
+                    modelCombo.SelectedIndex = 0;
             }
+
+            PopulateModels(FallbackModels);
             stack.Children.Add(modelCombo);
+
+            // Fetch live model list from API in background; update combo if successful
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) })
+                    {
+                        var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/config/models");
+                        if (!resp.IsSuccessStatusCode) return;
+                        var json = await resp.Content.ReadAsStringAsync();
+                        var data = Newtonsoft.Json.Linq.JObject.Parse(json);
+                        var catalog = data["models"] as Newtonsoft.Json.Linq.JArray;
+                        if (catalog == null || catalog.Count == 0) return;
+                        var live = new Dictionary<string, string>();
+                        foreach (var item in catalog)
+                            live[item["id"].ToString()] = $"{item["label"]} ({item["pricing"]})";
+                        Dispatcher.Invoke(() => PopulateModels(live));
+                    }
+                }
+                catch { /* keep fallback list */ }
+            });
 
             // Model info
             stack.Children.Add(new TextBlock
             {
-                Text = "Opus = Smartest (expensive), Sonnet = Balanced, Haiku = Cheapest (for testing)",
+                Text = "Sonnet = Recommended. Haiku = Fastest for testing.",
                 Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
                 FontSize = 11,
                 Margin = new Thickness(0, 5, 0, 0),
