@@ -310,6 +310,7 @@ namespace RevitMCPBridge2026.AgentFramework
         public void OnShown()
         {
             _isClosing = false;
+            _ = FetchModelsAndPricingAsync(); // refresh pricing in background on every open
             if (!_pipePaused) return;
 
             var server = RevitMCPBridgeApp.GetServer();
@@ -1741,27 +1742,8 @@ namespace RevitMCPBridge2026.AgentFramework
             PopulateModels(FallbackModels);
             stack.Children.Add(modelCombo);
 
-            // Fetch live model list from API in background; update combo if successful
-            _ = System.Threading.Tasks.Task.Run(async () =>
-            {
-                try
-                {
-                    using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) })
-                    {
-                        var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/config/models");
-                        if (!resp.IsSuccessStatusCode) return;
-                        var json = await resp.Content.ReadAsStringAsync();
-                        var data = Newtonsoft.Json.Linq.JObject.Parse(json);
-                        var catalog = data["models"] as Newtonsoft.Json.Linq.JArray;
-                        if (catalog == null || catalog.Count == 0) return;
-                        var live = new Dictionary<string, string>();
-                        foreach (var item in catalog)
-                            live[item["id"].ToString()] = $"{item["label"]} ({item["pricing"]})";
-                        Dispatcher.Invoke(() => PopulateModels(live));
-                    }
-                }
-                catch { /* keep fallback list */ }
-            });
+            // Fetch live model list + pricing from API; update combo and cost tracker
+            _ = FetchModelsAndPricingAsync(modelCombo, PopulateModels);
 
             // Model info
             stack.Children.Add(new TextBlock
@@ -2592,16 +2574,61 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private string GetModelDisplayName(string modelId)
         {
-            if (modelId.Contains("opus"))   return "Opus 4.6";
-            if (modelId.Contains("sonnet")) return "Sonnet 4.6";
-            if (modelId.Contains("haiku"))  return "Haiku 4.5";
+            if (modelId == "claude-sonnet-5")            return "Sonnet 5";
+            if (modelId == "claude-sonnet-4-6")          return "Sonnet 4.6";
+            if (modelId == "claude-opus-4-8")            return "Opus 4.8";
+            if (modelId == "claude-opus-4-6")            return "Opus 4.6";
+            if (modelId == "claude-haiku-4-5-20251001")  return "Haiku 4.5";
+            if (modelId.Contains("sonnet"))              return "Sonnet";
+            if (modelId.Contains("opus"))                return "Opus";
+            if (modelId.Contains("haiku"))               return "Haiku";
             return modelId;
         }
 
-        // Pricing per million tokens (dollars)
-        private static readonly Dictionary<string, (double input, double output)> _modelPricing = new Dictionary<string, (double, double)>
+        private async System.Threading.Tasks.Task FetchModelsAndPricingAsync(
+            System.Windows.Controls.ComboBox comboToUpdate = null,
+            Action<Dictionary<string, string>> populateCombo = null)
         {
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) })
+                {
+                    var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/config/models");
+                    if (!resp.IsSuccessStatusCode) return;
+                    var json = await resp.Content.ReadAsStringAsync();
+                    var data = Newtonsoft.Json.Linq.JObject.Parse(json);
+                    var catalog = data["models"] as Newtonsoft.Json.Linq.JArray;
+                    if (catalog == null || catalog.Count == 0) return;
+
+                    // Update pricing dict from API so cost tracker stays accurate
+                    foreach (var item in catalog)
+                    {
+                        var id = item["id"]?.ToString();
+                        var inputCost  = item["inputCost"]?.ToObject<double>();
+                        var outputCost = item["outputCost"]?.ToObject<double>();
+                        if (id != null && inputCost.HasValue && outputCost.HasValue)
+                            _modelPricing[id] = (inputCost.Value, outputCost.Value);
+                    }
+
+                    // Update settings combo if open
+                    if (comboToUpdate != null && populateCombo != null)
+                    {
+                        var live = new Dictionary<string, string>();
+                        foreach (var item in catalog)
+                            live[item["id"].ToString()] = $"{item["label"]} ({item["pricing"]})";
+                        Dispatcher.Invoke(() => populateCombo(live));
+                    }
+                }
+            }
+            catch { /* keep fallback values */ }
+        }
+
+        // Pricing per million tokens (dollars) — updated dynamically from /api/config/models
+        private static Dictionary<string, (double input, double output)> _modelPricing = new Dictionary<string, (double, double)>
+        {
+            { "claude-sonnet-5",            (2.00,  10.00) }, // intro pricing until 2026-08-31
             { "claude-sonnet-4-6",          (3.00,  15.00) },
+            { "claude-opus-4-8",            (15.00, 75.00) },
             { "claude-opus-4-6",            (15.00, 75.00) },
             { "claude-haiku-4-5-20251001",  (0.80,  4.00)  },
         };
@@ -2609,7 +2636,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private double? EstimateSessionCost(int inputTokens, int outputTokens, int cacheRead, int cacheCreation, string modelId)
         {
             if (string.IsNullOrEmpty(modelId)) return null;
-            (double input, double output) pricing = (3.00, 15.00); // default: Sonnet
+            (double input, double output) pricing = (2.00, 10.00); // default: Sonnet 5 intro
             foreach (var kv in _modelPricing)
             {
                 if (modelId.StartsWith(kv.Key, StringComparison.OrdinalIgnoreCase) || modelId == kv.Key)
