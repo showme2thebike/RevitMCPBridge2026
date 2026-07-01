@@ -129,7 +129,8 @@ namespace RevitMCPBridge
 
         [MCPMethod("createVicinityMapLines", Category = "Detail",
             Description = "Import vicinity_map.json as editable detail lines and text notes in a new drafting view. " +
-                          "Run generate_vicinity_map.py via runScript first to produce the JSON.")]
+                          "ALWAYS call generateVicinityMapData first with the project address to produce a fresh JSON. " +
+                          "Pass the same address in the 'address' parameter so stale JSON from a previous project is rejected.")]
         public static string CreateVicinityMapLines(UIApplication uiApp, JObject parameters)
         {
             try
@@ -141,19 +142,33 @@ namespace RevitMCPBridge
                               ?? Path.Combine(OutputDir, "vicinity_map.json");
                 var viewName = parameters["viewName"]?.ToString();
 
+                // Caller must pass the project address so we can detect stale JSON from a prior run.
+                var expectedAddress = parameters["address"]?.ToString()?.Trim();
+
                 Log.Information("createVicinityMapLines: jsonPath={Path}", jsonPath);
 
                 if (!File.Exists(jsonPath))
                 {
                     Log.Warning("createVicinityMapLines: JSON not found at {Path}", jsonPath);
                     return ResponseBuilder.Error(
-                        $"JSON not found: {jsonPath}. Run generate_vicinity_map.py via runScript first.").Build();
+                        $"JSON not found: {jsonPath}. Call generateVicinityMapData with the project address first.").Build();
                 }
 
                 var data    = JObject.Parse(File.ReadAllText(jsonPath));
                 var lines   = (JArray)(data["lines"]  ?? new JArray());
                 var labels  = (JArray)(data["labels"] ?? new JArray());
                 var address = data["address"]?.ToString() ?? "";
+
+                // Reject stale JSON from a different project address.
+                if (!string.IsNullOrWhiteSpace(expectedAddress) &&
+                    !address.Equals(expectedAddress, StringComparison.OrdinalIgnoreCase))
+                {
+                    Log.Warning("createVicinityMapLines: address mismatch — JSON has '{Json}', expected '{Expected}'",
+                        address, expectedAddress);
+                    return ResponseBuilder.Error(
+                        $"Stale vicinity_map.json detected. JSON was generated for '{address}' but project address is '{expectedAddress}'. " +
+                        "Call generateVicinityMapData with the correct address first, then retry createVicinityMapLines.").Build();
+                }
 
                 Log.Information("createVicinityMapLines: JSON loaded — {Lines} lines, {Labels} labels, address={Address}",
                     lines.Count, labels.Count, address);
