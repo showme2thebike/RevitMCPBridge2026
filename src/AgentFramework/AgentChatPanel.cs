@@ -4750,15 +4750,30 @@ namespace RevitMCPBridge2026.AgentFramework
         // Sprint 8/9 — session startup intelligence
         private void ShowStartupGreeting()
         {
-            try
+            // Show placeholder immediately so the panel is usable while the model query runs
+            AddAssistantMessage("Hello! Loading your project summary…");
+            var placeholder = _chatHistory.Children.Count > 0
+                ? _chatHistory.Children[_chatHistory.Children.Count - 1] : null;
+            var uiApp = _uiApp;
+            Task.Run(() =>
             {
-                var summary = IssuanceDateMethods.GetStartupSummary(_uiApp);
-                AddAssistantMessage(BuildSmartGreeting(summary));
-            }
-            catch
-            {
-                AddAssistantMessage("Hello! I'm your Revit AI assistant. What would you like to work on today?");
-            }
+                string greeting;
+                try
+                {
+                    var summary = IssuanceDateMethods.GetStartupSummary(uiApp);
+                    greeting = BuildSmartGreeting(summary);
+                }
+                catch
+                {
+                    greeting = "Hello! I'm your Revit AI assistant. What would you like to work on today?";
+                }
+                Dispatcher.Invoke(() =>
+                {
+                    if (placeholder != null && _chatHistory.Children.Contains(placeholder))
+                        _chatHistory.Children.Remove(placeholder);
+                    AddAssistantMessage(greeting);
+                });
+            });
         }
 
         private void TryPushModelSnapshot()
@@ -4773,13 +4788,14 @@ namespace RevitMCPBridge2026.AgentFramework
             if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
             try
             {
-                var summary = IssuanceDateMethods.GetStartupSummary(_uiApp);
-                var snapshotJson = BuildSnapshotPayload(summary).ToString(Newtonsoft.Json.Formatting.None);
                 var key = _bimMonkeyApiKey;
+                var uiAppSnap = _uiApp;
                 System.Threading.ThreadPool.QueueUserWorkItem(_ =>
                 {
                     try
                     {
+                        var summary = IssuanceDateMethods.GetStartupSummary(uiAppSnap);
+                        var snapshotJson = BuildSnapshotPayload(summary).ToString(Newtonsoft.Json.Formatting.None);
                         File.AppendAllText(log, $"{DateTime.Now:o} ThreadPool starting HTTP POST\r\n");
                         using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(20) };
                         client.DefaultRequestHeaders.Add("Authorization", $"Bearer {key}");
