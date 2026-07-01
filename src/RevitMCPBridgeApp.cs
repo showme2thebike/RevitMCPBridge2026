@@ -419,11 +419,13 @@ namespace RevitMCPBridge
                   LargeImage = CreateButtonIcon("vicinitymap", 32), Image = CreateButtonIcon("vicinitymap", 16) };
             siteDataPanel.AddItem(vicinityMapButtonData);
 
+#if BETA
             var digitizeButtonData = new PushButtonData("Digitize", "Digitize\nFootprint", asm,
                 "RevitMCPBridge.Commands.DigitizeCommand")
                 { ToolTip = "Look up a building footprint from OpenStreetMap and place exterior walls in Revit — enter an address, get the polygon, walls are created automatically",
                   LargeImage = CreateButtonIcon("digitize", 32), Image = CreateButtonIcon("digitize", 16) };
             siteDataPanel.AddItem(digitizeButtonData);
+#endif
 
             siteDataPanel.AddSlideOut();  // ▼ on "Site Data" panel title; everything below is hidden until clicked
 

@@ -16,6 +16,7 @@
     <DefineConstants Condition="'$(RevitYear)' == '2025'">$(DefineConstants);REVIT2025</DefineConstants>
     <DefineConstants Condition="'$(RevitYear)' == '2026'">$(DefineConstants);REVIT2026</DefineConstants>
     <DefineConstants Condition="'$(RevitYear)' == '2027'">$(DefineConstants);REVIT2027</DefineConstants>
+    <DefineConstants Condition="'$(BetaBuild)' == 'true'">$(DefineConstants);BETA</DefineConstants>
     <RootNamespace>RevitMCPBridge</RootNamespace>
     <NoWarn>MSB3277</NoWarn>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
