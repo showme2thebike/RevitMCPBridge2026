@@ -41,6 +41,7 @@ namespace RevitMCPBridge.AgentFramework
         public static bool SubscriptionExpired => _subscriptionExpired;
         public static string ContentKey => _contentKey;
         public static string Instructions => _instructions;
+        public static string ApiKey => _apiKey;
 
         public static void Start(string bimMonkeyApiKey)
         {
