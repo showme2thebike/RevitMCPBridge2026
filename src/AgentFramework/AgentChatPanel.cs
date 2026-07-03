@@ -3411,6 +3411,40 @@ namespace RevitMCPBridge2026.AgentFramework
                 return memoryResult;
             }
 
+            // saveScript — POST to Railway /api/scripts; runs from ribbon with zero tokens
+            if (methodName == "saveScript")
+            {
+                try
+                {
+                    var name        = parameters?["name"]?.ToString()?.Trim();
+                    var description = parameters?["description"]?.ToString()?.Trim() ?? "";
+                    var code        = parameters?["code"]?.ToString()?.Trim();
+                    var usings      = parameters?["usings"] as Newtonsoft.Json.Linq.JArray ?? new Newtonsoft.Json.Linq.JArray();
+
+                    if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(code))
+                        return JsonConvert.SerializeObject(new { success = false, error = "saveScript requires name and code" });
+
+                    using (var client = new System.Net.Http.HttpClient())
+                    {
+                        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                        var payload = new System.Net.Http.StringContent(
+                            JsonConvert.SerializeObject(new { name, description, code, usings }),
+                            System.Text.Encoding.UTF8,
+                            "application/json");
+                        var resp = await client.PostAsync(
+                            "https://bimmonkey-production.up.railway.app/api/scripts", payload);
+                        var respText = await resp.Content.ReadAsStringAsync();
+                        if (!resp.IsSuccessStatusCode)
+                            return JsonConvert.SerializeObject(new { success = false, error = $"API error {(int)resp.StatusCode}: {respText}" });
+                        return JsonConvert.SerializeObject(new { success = true, message = $"Script '{name}' saved to your automation library. Run it anytime from BIM Monkey → Automation → Scripts — zero tokens." });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    return JsonConvert.SerializeObject(new { success = false, error = ex.Message });
+                }
+            }
+
             // saveSkill — POST to Railway /api/skills so it appears in the web app and ribbon
             if (methodName == "saveSkill")
             {
@@ -6159,16 +6193,16 @@ STYLE:
 - Follow the WORKFLOWS exactly as specified above
 - VERIFY your work visually when placing elements on sheets
 
-SKILL SAVE OFFER — MANDATORY:
+SCRIPT SAVE OFFER — MANDATORY:
 After any successful callMCPMethod where method=executeRevitScript (Roslyn C# execution), if the script ran without errors, you MUST ask:
-""That script worked. Would you like me to save it as a reusable skill? If so, give it a name (or just say yes for an auto-generated one).""
-If the user confirms (yes, sure, save it, etc.), call saveSkill with:
-- slug: kebab-case version of the name (e.g. door-audit)
-- name: the human-readable name
+""That script worked. Would you like me to save it as a reusable script? It will run from the BIM Monkey ribbon with zero tokens. If so, give it a name (or just say yes for an auto-generated one).""
+If the user confirms (yes, sure, save it, etc.), call saveScript with:
+- name: the human-readable name (e.g. ""Wall Counter"")
 - description: one sentence describing what the script does
-- type: revit-script
-- content: the exact C# code that ran successfully
-Do not ask for saveSkill parameters separately — infer them from the script and conversation.
+- code: the exact C# body that ran successfully (no using statements, no class wrapper)
+- usings: any extra namespaces used beyond the defaults (usually omit)
+Do not ask for saveScript parameters separately — infer them from the script and conversation.
+Do NOT call saveSkill for C# scripts — saveSkill is for natural-language workflow shortcuts only.
 
 CLARIFY-FIRST — MANDATORY FOR SPATIAL AND REDLINE TASKS:
 Before executing any spatial-layout task (placing viewports, dimensions, annotations, casework, furniture) or any redline-execution task (model changes based on markup or verbal description), ask at least one targeted question first:

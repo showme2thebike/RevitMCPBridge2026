@@ -666,12 +666,25 @@ Captures key outcomes, decisions, problems solved, and next steps.",
                 },
                 new ToolDefinition
                 {
+                    Name = "saveScript",
+                    Description = @"Save a C# Revit script to the firm's automation library so it can be run later from the BIM Monkey ribbon with zero tokens. Call this after a script runs successfully via executeRevitScript and the user confirms they want to keep it. The script will appear under BIM Monkey → Automation → Scripts in Revit and at app.bimmonkey.ai/scripts.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            name        = new { type = "string", description = "Short human-readable name, e.g. 'Wall Counter'" },
+                            description = new { type = "string", description = "One sentence describing what the script does" },
+                            code        = new { type = "string", description = "The raw C# body exactly as passed to executeRevitScript — no using statements, no class wrapper" },
+                            usings      = new { type = "array",  items = new { type = "string" }, description = "Extra namespaces needed beyond the defaults (usually empty)" }
+                        },
+                        required = new[] { "name", "code" }
+                    }
+                },
+                new ToolDefinition
+                {
                     Name = "saveSkill",
-                    Description = @"Save a reusable skill to the local skill toolbox. Call this when Barrett confirms he wants to save a workflow or C# Roslyn script as a reusable skill.
-Type 'workflow' = natural-language instructions Barrett wants repeatable.
-Type 'revit-script' = raw C# code that ran successfully via executeRevitScript.
-The slug becomes the /command Barrett uses to invoke it (e.g. slug='door-audit' → /door-audit).
-Always generate a slug from the name: lowercase, hyphens only, no spaces.",
+                    Description = @"Save a reusable natural-language workflow to the skill toolbox. Use this ONLY for type='workflow' (repeatable multi-step instructions). For C# Roslyn scripts use saveScript instead — it stores code in the automation library and runs with zero tokens from the ribbon.",
                     InputSchema = new
                     {
                         type = "object",
