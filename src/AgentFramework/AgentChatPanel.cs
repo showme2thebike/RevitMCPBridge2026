@@ -1215,22 +1215,26 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             _selectedModel = DefaultModel;
 
-            // Primary: read both keys from Claude Code's settings.json (~/.claude/settings.json)
+            // 1. Claude Code settings.json (~/.claude/settings.json)
             var (claudeApiKey, claudeBmKey) = ReadClaudeCodeSettings();
             _apiKey = claudeApiKey;
             _bimMonkeyApiKey = claudeBmKey;
 
-            // Fallback: environment variables
+            // 2. Environment variables
             if (string.IsNullOrEmpty(_apiKey))
                 _apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
             if (string.IsNullOrEmpty(_bimMonkeyApiKey))
                 _bimMonkeyApiKey = Environment.GetEnvironmentVariable("BIM_MONKEY_API_KEY");
 
-            // Fallback: installer-written CLAUDE.md for BIM Monkey key
-            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
-                _bimMonkeyApiKey = ReadBimMonkeyKeyFromClaudeMd();
+            // 3. Installer-written CLAUDE.md — always load it as the canonical BM key.
+            //    The installer updates this on every install, so it reflects the current subscription key.
+            var installerBmKey = ReadBimMonkeyKeyFromClaudeMd();
+            if (!string.IsNullOrEmpty(installerBmKey))
+                _bimMonkeyApiKey = installerBmKey;
 
-            // Fallback: local config file (user overrides from Settings dialog)
+            // 4. User config file — Anthropic key and model always win from here.
+            //    BM key only wins if the user has *manually* changed it in Settings
+            //    (flagged by bm_key_manually_set=true); otherwise the installer key above stays.
             try
             {
                 if (File.Exists(ConfigPath))
@@ -1241,8 +1245,9 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (!string.IsNullOrEmpty(savedKey))
                         _apiKey = savedKey;
 
-                    var savedBmKey = config["bim_monkey_api_key"]?.ToString();
-                    if (!string.IsNullOrEmpty(savedBmKey))
+                    var bmManuallySet = config["bm_key_manually_set"]?.Value<bool>() ?? false;
+                    var savedBmKey    = config["bim_monkey_api_key"]?.ToString();
+                    if (bmManuallySet && !string.IsNullOrEmpty(savedBmKey))
                         _bimMonkeyApiKey = savedBmKey;
 
                     var savedModel = config["selected_model"]?.ToString();
@@ -1327,10 +1332,11 @@ namespace RevitMCPBridge2026.AgentFramework
                 }
 
                 // Update settings
-                config["anthropic_api_key"] = _apiKey;
-                config["bim_monkey_api_key"] = _bimMonkeyApiKey;
-                config["selected_model"] = _selectedModel;
-                config["last_updated"] = DateTime.Now.ToString("o");
+                config["anthropic_api_key"]   = _apiKey;
+                config["bim_monkey_api_key"]  = _bimMonkeyApiKey;
+                config["bm_key_manually_set"] = true; // user saved this via Settings dialog
+                config["selected_model"]      = _selectedModel;
+                config["last_updated"]        = DateTime.Now.ToString("o");
 
                 // Save
                 File.WriteAllText(ConfigPath, config.ToString(Formatting.Indented));
@@ -6030,6 +6036,11 @@ namespace RevitMCPBridge2026.AgentFramework
                           "createVicinityMap does not exist — never use it. No API key needed. " +
                           "Warn the user the script takes 60-90 seconds before step 1.]\n\n" + message;
             }
+
+            // Inject last ribbon-run script result so the user can ask about it
+            var _lastScriptCtx = RevitMCPBridge.Commands.LastScriptResult.GetContextIfRecent();
+            if (!string.IsNullOrEmpty(_lastScriptCtx))
+                message = _lastScriptCtx + "\n\n" + message;
 
             SendToAgent:
             SetProcessing(true);
