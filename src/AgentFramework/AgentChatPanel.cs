@@ -65,6 +65,9 @@ namespace RevitMCPBridge2026.AgentFramework
         private bool _isClosing;
         private bool _allowClose;
         private bool _subscriptionBlocked;
+        private bool _isOffline;
+        private Border _offlineBanner;
+        private System.Threading.Timer _connectivityTimer;
         private string _firmMemory;
         private string _projectNotes;
         private PlaywrightMCPClient _playwright;
@@ -2266,7 +2269,12 @@ namespace RevitMCPBridge2026.AgentFramework
                     }
                 }
             }
-            catch { /* fail open — network issues should never block plugin */ }
+            catch (Exception ex)
+            {
+                if (ex is System.Net.Http.HttpRequestException || ex is TaskCanceledException)
+                    ShowOfflineBanner();
+                /* other errors fail open */
+            }
         }
 
         private void ShowSubscriptionBanner()
@@ -2334,6 +2342,76 @@ namespace RevitMCPBridge2026.AgentFramework
             stack.Children.Add(renewBtn);
             banner.Child = stack;
             _chatHistory.Children.Insert(0, banner);
+        }
+
+        private void ShowOfflineBanner()
+        {
+            Dispatcher.Invoke(() =>
+            {
+                if (_isOffline) return;
+                _isOffline = true;
+                _sendButton.IsEnabled = false;
+                _statusText.Text = "No internet";
+
+                var banner = new Border
+                {
+                    Margin = new Thickness(8, 8, 8, 4),
+                    Padding = new Thickness(14, 12, 14, 12),
+                    Background = new SolidColorBrush(Color.FromRgb(40, 32, 10)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(160, 120, 30)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(6),
+                };
+                var msg = new TextBlock
+                {
+                    Text = "No internet connection — Banana Chat requires a connection to work. Revit tools still work normally.",
+                    Foreground = new SolidColorBrush(Color.FromRgb(210, 180, 100)),
+                    FontSize = 12,
+                    TextWrapping = TextWrapping.Wrap,
+                };
+                banner.Child = msg;
+                _offlineBanner = banner;
+                _chatHistory.Children.Insert(0, banner);
+            });
+            StartConnectivityCheck();
+        }
+
+        private void HideOfflineBanner()
+        {
+            _connectivityTimer?.Change(System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+            Dispatcher.Invoke(() =>
+            {
+                _isOffline = false;
+                if (_offlineBanner != null)
+                {
+                    _chatHistory.Children.Remove(_offlineBanner);
+                    _offlineBanner = null;
+                }
+                if (!_subscriptionBlocked)
+                {
+                    _sendButton.IsEnabled = true;
+                    _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
+                }
+            });
+        }
+
+        private void StartConnectivityCheck()
+        {
+            _connectivityTimer?.Dispose();
+            _connectivityTimer = new System.Threading.Timer(async _ =>
+            {
+                if (_isClosing) return;
+                try
+                {
+                    using (var client = new System.Net.Http.HttpClient())
+                    {
+                        client.Timeout = TimeSpan.FromSeconds(5);
+                        await client.GetAsync("https://bimmonkey-production.up.railway.app/api/auth/verify");
+                        HideOfflineBanner();
+                    }
+                }
+                catch { /* still offline, keep checking */ }
+            }, null, 30000, 30000);
         }
 
         private async Task FetchFirmStandardsAsync()
@@ -2424,6 +2502,8 @@ namespace RevitMCPBridge2026.AgentFramework
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Failed to load firm standards/corrections: {ex.Message}");
+                if (ex is System.Net.Http.HttpRequestException || ex is TaskCanceledException)
+                    ShowOfflineBanner();
             }
         }
 
@@ -5583,7 +5663,7 @@ namespace RevitMCPBridge2026.AgentFramework
             }
 
             // Ctrl+Enter or plain Enter (Shift+Enter adds newline) to submit
-            if (e.Key == System.Windows.Input.Key.Enter && !_isProcessing && !_subscriptionBlocked)
+            if (e.Key == System.Windows.Input.Key.Enter && !_isProcessing && !_subscriptionBlocked && !_isOffline)
             {
                 bool shiftPressed = (System.Windows.Input.Keyboard.Modifiers & System.Windows.Input.ModifierKeys.Shift) != 0;
                 if (ctrl || !shiftPressed)
@@ -5869,7 +5949,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private async Task SendMessage()
         {
             var message = _inputTextBox.Text.Trim();
-            if (string.IsNullOrEmpty(message) || _isProcessing || _subscriptionBlocked) return;
+            if (string.IsNullOrEmpty(message) || _isProcessing || _subscriptionBlocked || _isOffline) return;
 
             // ── If previous message was a bare memory command, treat this as the note ──
             if (_pendingRememberMode && !message.StartsWith("/"))
@@ -6924,7 +7004,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
         private void SetProcessing(bool isProcessing)
         {
             _isProcessing = isProcessing;
-            _sendButton.IsEnabled = !isProcessing && !_subscriptionBlocked;
+            _sendButton.IsEnabled = !isProcessing && !_subscriptionBlocked && !_isOffline;
             _stopButton.Visibility = isProcessing ? Visibility.Visible : Visibility.Collapsed;
             if (!_subscriptionBlocked)
                 _statusText.Text = isProcessing ? "Processing..." : $"Connected ({GetModelDisplayName(_selectedModel)})";

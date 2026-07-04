@@ -955,7 +955,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     request.ContentType = "application/json";
                     request.Headers.Add("x-api-key", _apiKey);
                     request.Headers.Add("anthropic-version", "2023-06-01");
-                    request.Timeout = 300000;
+                    request.Timeout = 30000;
 
                     var data = Encoding.UTF8.GetBytes(json);
                     request.ContentLength = data.Length;
