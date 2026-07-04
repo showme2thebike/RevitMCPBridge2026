@@ -216,6 +216,8 @@ namespace RevitMCPBridge2026.AgentFramework
                 SaveSession();
                 DisconnectMCP();
                 _thinkingTimer?.Stop();
+                _connectivityTimer?.Dispose();
+                _connectivityTimer = null;
             };
 
             // Drag-and-drop: PDFs → Training Library upload; images → attach as vision context
@@ -304,6 +306,8 @@ namespace RevitMCPBridge2026.AgentFramework
             SaveSession();
             DisconnectMCP();
             _thinkingTimer?.Stop();
+            _connectivityTimer?.Dispose();
+            _connectivityTimer = null;
         }
 
         /// <summary>
@@ -314,6 +318,20 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             _isClosing = false;
             _ = FetchModelsAndPricingAsync(); // refresh pricing in background on every open
+
+            // Unloaded disposes the recovery timer; if the pane was closed while offline,
+            // re-check immediately instead of leaving the banner latched forever.
+            if (_isOffline)
+            {
+                _ = Task.Run(async () =>
+                {
+                    if (await HasInternetConnectivityAsync())
+                        HideOfflineBanner();
+                    else
+                        StartConnectivityCheck();
+                });
+            }
+
             if (!_pipePaused) return;
 
             var server = RevitMCPBridgeApp.GetServer();
@@ -1337,7 +1355,15 @@ namespace RevitMCPBridge2026.AgentFramework
                 // Update settings
                 config["anthropic_api_key"]   = _apiKey;
                 config["bim_monkey_api_key"]  = _bimMonkeyApiKey;
-                config["bm_key_manually_set"] = true; // user saved this via Settings dialog
+                // Flag the BM key as manual only when it actually differs from the
+                // installer-written key — a Settings save for an unrelated change (e.g.
+                // model switch) must not pin the current key forever, or a future
+                // re-subscribe's fresh CLAUDE.md key would be silently ignored.
+                // Self-heals: saving a key that matches the installer clears the flag.
+                var installerBmKey = ReadBimMonkeyKeyFromClaudeMd();
+                config["bm_key_manually_set"] = !string.IsNullOrEmpty(_bimMonkeyApiKey) &&
+                    (string.IsNullOrEmpty(installerBmKey) ||
+                     !string.Equals(_bimMonkeyApiKey, installerBmKey, StringComparison.Ordinal));
                 config["selected_model"]      = _selectedModel;
                 config["last_updated"]        = DateTime.Now.ToString("o");
 
@@ -2271,10 +2297,34 @@ namespace RevitMCPBridge2026.AgentFramework
             }
             catch (Exception ex)
             {
+                // A Railway failure alone must fail open — chat talks directly to
+                // api.anthropic.com and works fine during a backend-only outage.
                 if (ex is System.Net.Http.HttpRequestException || ex is TaskCanceledException)
-                    ShowOfflineBanner();
+                {
+                    if (!await HasInternetConnectivityAsync())
+                        ShowOfflineBanner();
+                }
                 /* other errors fail open */
             }
+        }
+
+        /// <summary>
+        /// Probe chat's actual dependency (api.anthropic.com). Any HTTP response —
+        /// including 4xx — means the network path is up; only connect/DNS/timeout
+        /// failures count as offline.
+        /// </summary>
+        private static async Task<bool> HasInternetConnectivityAsync()
+        {
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.Timeout = TimeSpan.FromSeconds(5);
+                    await client.GetAsync("https://api.anthropic.com");
+                    return true;
+                }
+            }
+            catch { return false; }
         }
 
         private void ShowSubscriptionBanner()
@@ -2401,16 +2451,10 @@ namespace RevitMCPBridge2026.AgentFramework
             _connectivityTimer = new System.Threading.Timer(async _ =>
             {
                 if (_isClosing) return;
-                try
-                {
-                    using (var client = new System.Net.Http.HttpClient())
-                    {
-                        client.Timeout = TimeSpan.FromSeconds(5);
-                        await client.GetAsync("https://bimmonkey-production.up.railway.app/api/auth/verify");
-                        HideOfflineBanner();
-                    }
-                }
-                catch { /* still offline, keep checking */ }
+                // Recovery must not depend on the Railway backend — probe the same
+                // endpoint the offline decision was made on.
+                if (await HasInternetConnectivityAsync())
+                    HideOfflineBanner();
             }, null, 30000, 30000);
         }
 
@@ -2503,7 +2547,10 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Failed to load firm standards/corrections: {ex.Message}");
                 if (ex is System.Net.Http.HttpRequestException || ex is TaskCanceledException)
-                    ShowOfflineBanner();
+                {
+                    if (!await HasInternetConnectivityAsync())
+                        ShowOfflineBanner();
+                }
             }
         }
 
@@ -3512,6 +3559,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
                     using (var client = new System.Net.Http.HttpClient())
                     {
+                        client.Timeout = TimeSpan.FromSeconds(15);
                         client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
                         var payload = new System.Net.Http.StringContent(
                             JsonConvert.SerializeObject(new { name, description, code, usings }),

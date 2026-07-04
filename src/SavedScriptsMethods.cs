@@ -58,8 +58,7 @@ namespace RevitMCPBridge2026
                 };
                 var result = ScriptMethods.ExecuteRevitScript(uiApp, execParams);
 
-                // Log the run fire-and-forget
-                _ = LogRunAsync(apiKey, scriptId);
+                LogRunIfSuccessful(apiKey, scriptId, result);
 
                 return result;
             }
@@ -67,6 +66,69 @@ namespace RevitMCPBridge2026
             {
                 return ResponseBuilder.FromException(ex).Build();
             }
+        }
+
+        /// <summary>
+        /// Pipe-thread entry point used by MCPServer dispatch: all HTTP runs off Revit's
+        /// UI thread; only the script execution itself is marshalled into the Revit API
+        /// context via executeInRevit. Keeps a slow backend from freezing Revit.
+        /// </summary>
+        public static async Task<string> RunSavedScriptAsync(JObject parameters, Func<JObject, Task<string>> executeInRevit)
+        {
+            try
+            {
+                var scriptId = parameters["scriptId"]?.ToString();
+                if (string.IsNullOrWhiteSpace(scriptId))
+                    return ResponseBuilder.Error("scriptId is required").Build();
+
+                var apiKey = SessionTokenManager.ApiKey;
+                if (string.IsNullOrEmpty(apiKey))
+                    return ResponseBuilder.Error("No BIM Monkey API key — cannot fetch saved scripts").Build();
+
+                JObject script;
+                try
+                {
+                    var req = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/api/scripts/{scriptId}");
+                    req.Headers.Add("Authorization", $"Bearer {apiKey}");
+                    var resp = await _http.SendAsync(req).ConfigureAwait(false);
+                    if (!resp.IsSuccessStatusCode)
+                        return ResponseBuilder.Error($"Script not found (HTTP {(int)resp.StatusCode})").Build();
+                    var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    script = JObject.Parse(body);
+                }
+                catch (Exception ex)
+                {
+                    return ResponseBuilder.Error($"Failed to fetch script: {ex.Message}").Build();
+                }
+
+                var execParams = new JObject
+                {
+                    ["code"]   = script["code"]?.ToString() ?? "",
+                    ["usings"] = script["usings"] ?? new JArray()
+                };
+                var result = await executeInRevit(execParams).ConfigureAwait(false);
+
+                LogRunIfSuccessful(apiKey, scriptId, result);
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        // The backend run endpoint counts successful executions only — a script that
+        // fails to compile must not accrue run_count / last_run_at.
+        internal static void LogRunIfSuccessful(string apiKey, string scriptId, string resultJson)
+        {
+            try
+            {
+                var parsed = JObject.Parse(resultJson);
+                if (parsed["success"]?.Value<bool>() == true)
+                    _ = LogRunAsync(apiKey, scriptId);
+            }
+            catch { /* unparseable result — treat as failure, don't log */ }
         }
 
         [MCPMethod("listSavedScripts", Category = "Script",
@@ -84,8 +146,13 @@ namespace RevitMCPBridge2026
                 req.Headers.Add("Authorization", $"Bearer {apiKey}");
                 var resp = _http.SendAsync(req).GetAwaiter().GetResult();
                 var body = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                if (!resp.IsSuccessStatusCode)
+                    return ResponseBuilder.Error(FormatHttpError((int)resp.StatusCode, body)).Build();
                 var parsed = JObject.Parse(body);
-                return ResponseBuilder.Success().With("scripts", parsed["scripts"]).Build();
+                return ResponseBuilder.Success()
+                    .With("scripts", parsed["scripts"])
+                    .With("platformScripts", parsed["platformScripts"] ?? new JArray())
+                    .Build();
             }
             catch (Exception ex)
             {
@@ -170,7 +237,22 @@ namespace RevitMCPBridge2026
             req.Headers.Add("Authorization", $"Bearer {apiKey}");
             var resp = _http.SendAsync(req).GetAwaiter().GetResult();
             var body = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            // Without this check a 401 error body parses fine, "scripts" is null, and the
+            // caller shows "No saved scripts yet" to a firm whose auth actually failed.
+            if (!resp.IsSuccessStatusCode)
+                throw new Exception(FormatHttpError((int)resp.StatusCode, body));
             return JObject.Parse(body);
+        }
+
+        private static string FormatHttpError(int statusCode, string body)
+        {
+            if (statusCode == 401 || statusCode == 403)
+                return $"BIM Monkey rejected your API key (HTTP {statusCode}). " +
+                       "Your subscription may have expired — check Settings or re-run the installer.";
+            string detail = null;
+            try { detail = JObject.Parse(body)?["error"]?.ToString(); } catch { }
+            return $"BIM Monkey backend error (HTTP {statusCode})" +
+                   (string.IsNullOrEmpty(detail) ? "" : $": {detail}");
         }
 
         internal static JObject FetchScript(string apiKey, string scriptId)

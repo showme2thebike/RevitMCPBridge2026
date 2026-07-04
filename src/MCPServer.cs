@@ -3843,6 +3843,22 @@ namespace RevitMCPBridge
                         return statusObj.ToString(Newtonsoft.Json.Formatting.None);
                     }
 
+                    // Saved-script methods are HTTP-bound: dispatch them here on the pipe
+                    // thread instead of via the registry, whose ExecuteInRevitContext wrapper
+                    // would block Revit's UI thread on the network (up to 15s) and stall the
+                    // serial MCP queue. Only the script execution itself enters Revit context.
+                    case "listSavedScripts":
+                        return RevitMCPBridge2026.SavedScriptsMethods.ListSavedScripts(null, parameters);
+
+                    case "saveScript":
+                        return RevitMCPBridge2026.SavedScriptsMethods.SaveScript(null, parameters);
+
+                    case "runSavedScript":
+                        return await RevitMCPBridge2026.SavedScriptsMethods.RunSavedScriptAsync(parameters,
+                            execParams => ExecuteInRevitContext(uiApp =>
+                                RevitMCPBridge2026.ScriptMethods.ExecuteRevitScript(uiApp, execParams),
+                                600_000)); // scripts can run long ops — match executeRevitScript's timeout
+
                     default:
                         // Check registry for dynamically registered methods (BMO, CIPS, etc.)
                         if (_methodRegistry.Count == 0)

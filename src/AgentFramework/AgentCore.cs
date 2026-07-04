@@ -955,7 +955,10 @@ namespace RevitMCPBridge2026.AgentFramework
                     request.ContentType = "application/json";
                     request.Headers.Add("x-api-key", _apiKey);
                     request.Headers.Add("anthropic-version", "2023-06-01");
-                    request.Timeout = 30000;
+                    // Bounds upload + time-to-response-headers. Anthropic can take >30s to send
+                    // headers on large cache-write prompts or under load (SDK default is ~600s);
+                    // true offline fails fast on DNS/connect, so a short value buys nothing.
+                    request.Timeout = 120000;
 
                     var data = Encoding.UTF8.GetBytes(json);
                     request.ContentLength = data.Length;

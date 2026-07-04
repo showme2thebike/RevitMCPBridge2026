@@ -21,6 +21,8 @@ namespace RevitMCPBridge.Commands
         {
             var uiApp  = commandData.Application;
             var apiKey = SessionTokenManager.ApiKey;
+            if (string.IsNullOrEmpty(apiKey))
+                apiKey = ResolveApiKeyFallback();
 
             if (string.IsNullOrEmpty(apiKey))
             {
@@ -33,6 +35,8 @@ namespace RevitMCPBridge.Commands
             {
                 var resp = RevitMCPBridge2026.SavedScriptsMethods.FetchScriptList(apiKey);
                 scripts  = resp["scripts"] as JArray ?? new JArray();
+                if (resp["platformScripts"] is JArray platform)
+                    foreach (var p in platform) scripts.Add(p);
             }
             catch (Exception ex)
             {
@@ -49,6 +53,9 @@ namespace RevitMCPBridge.Commands
             }
 
             var picker = new SavedScriptPickerWindow(scripts);
+            // Ownerless WPF dialogs fall behind Revit's Win32 main window on a stray
+            // click, leaving Revit looking hung while Execute() is blocked in ShowDialog.
+            new System.Windows.Interop.WindowInteropHelper(picker) { Owner = uiApp.MainWindowHandle };
             if (picker.ShowDialog() != true || picker.SelectedScriptId == null)
                 return Result.Cancelled;
 
@@ -72,9 +79,11 @@ namespace RevitMCPBridge.Commands
             var resultJson = RevitMCPBridge2026.ScriptMethods.ExecuteRevitScript(uiApp, execParams);
             var result     = JObject.Parse(resultJson);
 
-            RevitMCPBridge2026.SavedScriptsMethods.LogRunFireAndForget(apiKey, picker.SelectedScriptId);
-
             var success = result["success"]?.Value<bool>() ?? false;
+            // Backend run endpoint counts successful executions only — a script that
+            // fails to compile must not accrue run_count / last_run_at.
+            if (success)
+                RevitMCPBridge2026.SavedScriptsMethods.LogRunFireAndForget(apiKey, picker.SelectedScriptId);
             string outputText;
             if (success)
             {
@@ -92,9 +101,58 @@ namespace RevitMCPBridge.Commands
             LastScriptResult.Set(picker.SelectedScriptName, picker.SelectedScriptDescription, outputText, success);
 
             var resultWindow = new ScriptResultWindow(picker.SelectedScriptName, outputText, success);
+            new System.Windows.Interop.WindowInteropHelper(resultWindow) { Owner = uiApp.MainWindowHandle };
             resultWindow.ShowDialog();
 
             return Result.Succeeded;
+        }
+
+        /// <summary>
+        /// SessionTokenManager only sees keys from CLAUDE.md / env var at startup, but
+        /// Banana Chat also honors ~/.bimops/config.json (Settings dialog) and Claude
+        /// Code's settings.json — without this fallback, users whose key lives only in
+        /// those sources get "Sign in" here while chat works fine.
+        /// </summary>
+        private static string ResolveApiKeyFallback()
+        {
+            var key = SessionTokenManager.ReadBimMonkeyApiKey(); // CLAUDE.md, then env var
+
+            try
+            {
+                var configPath = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".bimops", "config.json");
+                if (System.IO.File.Exists(configPath))
+                {
+                    var config = JObject.Parse(System.IO.File.ReadAllText(configPath));
+                    var manual = config["bm_key_manually_set"]?.Value<bool>() ?? false;
+                    var saved  = config["bim_monkey_api_key"]?.ToString();
+                    // Same precedence as AgentChatPanel.LoadConfig: a manually-set config
+                    // key beats the installer key; otherwise config only fills a gap.
+                    if (!string.IsNullOrEmpty(saved) && (manual || string.IsNullOrEmpty(key)))
+                        key = saved;
+                }
+            }
+            catch { }
+
+            if (string.IsNullOrEmpty(key))
+            {
+                try
+                {
+                    var settingsPath = System.IO.Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                        ".claude", "settings.json");
+                    if (System.IO.File.Exists(settingsPath))
+                    {
+                        var env = JObject.Parse(System.IO.File.ReadAllText(settingsPath))["env"] as JObject;
+                        var settingsKey = env?["BIM_MONKEY_API_KEY"]?.ToString();
+                        if (!string.IsNullOrEmpty(settingsKey)) key = settingsKey;
+                    }
+                }
+                catch { }
+            }
+
+            return string.IsNullOrEmpty(key) ? null : key;
         }
     }
 
@@ -184,6 +242,7 @@ namespace RevitMCPBridge.Commands
                 var name = item["name"]?.ToString() ?? "(unnamed)";
                 var desc = item["description"]?.ToString() ?? "";
                 var runs = item["run_count"]?.Value<int>() ?? 0;
+                var isPlatform = item["is_platform"]?.Value<bool>() ?? false;
 
                 var panel = new System.Windows.Controls.StackPanel
                     { Margin = new System.Windows.Thickness(14, 9, 10, 9) };
@@ -206,7 +265,7 @@ namespace RevitMCPBridge.Commands
                     });
                 panel.Children.Add(new System.Windows.Controls.TextBlock
                 {
-                    Text       = $"{runs} run{(runs != 1 ? "s" : "")}",
+                    Text       = (isPlatform ? "Platform · " : "") + $"{runs} run{(runs != 1 ? "s" : "")}",
                     FontSize   = 9.5,
                     Foreground = ScriptColors.LightGray,
                     Margin     = new System.Windows.Thickness(0, 2, 0, 0),
@@ -435,8 +494,17 @@ namespace RevitMCPBridge.Commands
             copyBtn.Margin = new System.Windows.Thickness(0, 0, 8, 0);
             copyBtn.Click += (s, e) =>
             {
-                System.Windows.Clipboard.SetText(output);
-                ((System.Windows.Controls.Button)s).Content = "Copied ✓";
+                try
+                {
+                    System.Windows.Clipboard.SetText(output);
+                    ((System.Windows.Controls.Button)s).Content = "Copied ✓";
+                }
+                catch
+                {
+                    // CLIPBRD_E_CANT_OPEN when another process holds the clipboard
+                    // (RDP, clipboard managers) — must not escape into Revit's dispatcher.
+                    ((System.Windows.Controls.Button)s).Content = "Copy failed — retry";
+                }
             };
             btnRow.Children.Add(copyBtn);
 
