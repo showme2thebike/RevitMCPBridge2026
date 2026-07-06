@@ -106,7 +106,9 @@ namespace RevitMCPBridge2026.AgentFramework
         // Fallback model list used when the API fetch fails
         private static readonly Dictionary<string, string> FallbackModels = new Dictionary<string, string>
         {
-            { "claude-sonnet-5",           "Sonnet 5 — Recommended ($3/$15 per 1M tokens)" },
+            { "claude-sonnet-5",           "Sonnet 5 — Recommended ($2/$10 per 1M tokens)" },
+            { "claude-opus-4-8",           "Opus 4.8 — Most capable ($5/$25 per 1M tokens)" },
+            { "claude-fable-5",            "Fable 5 — Most powerful ($10/$50 per 1M tokens)" },
             { "claude-haiku-4-5-20251001", "Haiku 4.5 — Fast & inexpensive ($0.80/$4 per 1M tokens)" },
         };
 
@@ -2709,9 +2711,12 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             if (modelId == "claude-sonnet-5")            return "Sonnet 5";
             if (modelId == "claude-sonnet-4-6")          return "Sonnet 4.6";
+            if (modelId == "claude-fable-5")             return "Fable 5";
             if (modelId == "claude-opus-4-8")            return "Opus 4.8";
             if (modelId == "claude-opus-4-6")            return "Opus 4.6";
             if (modelId == "claude-haiku-4-5-20251001")  return "Haiku 4.5";
+            if (modelId.Contains("fable"))               return "Fable";
+            if (modelId.Contains("opus"))                return "Opus";
             if (modelId.Contains("sonnet"))              return "Sonnet";
             if (modelId.Contains("opus"))                return "Opus";
             if (modelId.Contains("haiku"))               return "Haiku";
@@ -2761,8 +2766,9 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             { "claude-sonnet-5",            (2.00,  10.00) }, // intro pricing until 2026-08-31
             { "claude-sonnet-4-6",          (3.00,  15.00) },
-            { "claude-opus-4-8",            (15.00, 75.00) },
-            { "claude-opus-4-6",            (15.00, 75.00) },
+            { "claude-fable-5",             (10.00, 50.00) },
+            { "claude-opus-4-8",            (5.00,  25.00) },
+            { "claude-opus-4-6",            (5.00,  25.00) },
             { "claude-haiku-4-5-20251001",  (0.80,  4.00)  },
         };
 
