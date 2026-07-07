@@ -50,6 +50,9 @@ namespace RevitMCPBridge2026.AgentFramework
         private UIApplication _uiApp;
         private string _apiKey;
         private string _bimMonkeyApiKey;
+        // Private AI (Enterprise): inference routes through the backend to the
+        // firm's own AWS Bedrock; no Anthropic key needed on this machine.
+        private bool _useInferenceProxy = false;
         private string _userFirstName;         // contact_name from /api/auth/verify
         private StartupSummary _startupSummary; // cached at first SendMessage, injected into system prompt
         private string _selectedModel;
@@ -154,9 +157,10 @@ namespace RevitMCPBridge2026.AgentFramework
             // Load config (API key and model selection)
             LoadConfig();
 
-            if (string.IsNullOrEmpty(_apiKey))
+            if (string.IsNullOrEmpty(_apiKey) && !(_useInferenceProxy && !string.IsNullOrEmpty(_bimMonkeyApiKey)))
             {
-                // Defer until after window is shown — Owner = this requires the window to be visible first
+                // Defer until after window is shown — Owner = this requires the window to be visible first.
+                // Private AI firms don't need an Anthropic key — inference is proxied.
                 Loaded += (s, e) => ShowSettingsDialog();
             }
             else
@@ -1276,6 +1280,10 @@ namespace RevitMCPBridge2026.AgentFramework
                     var savedModel = config["selected_model"]?.ToString();
                     if (!string.IsNullOrEmpty(savedModel) && savedModel.StartsWith("claude-"))
                         _selectedModel = savedModel;
+
+                    // Private AI: cached from the last /api/plugin/inference-config
+                    // fetch so a keyless Enterprise workstation starts up proxied.
+                    _useInferenceProxy = config["inference_proxy"]?.Value<bool>() ?? false;
                 }
             }
             catch (Exception ex)
@@ -1367,6 +1375,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     (string.IsNullOrEmpty(installerBmKey) ||
                      !string.Equals(_bimMonkeyApiKey, installerBmKey, StringComparison.Ordinal));
                 config["selected_model"]      = _selectedModel;
+                config["inference_proxy"]     = _useInferenceProxy;
                 config["last_updated"]        = DateTime.Now.ToString("o");
 
                 // Save
@@ -1803,9 +1812,9 @@ namespace RevitMCPBridge2026.AgentFramework
                 if (selectedItem != null)
                     _selectedModel = selectedItem.Tag.ToString();
 
-                if (string.IsNullOrEmpty(_apiKey))
+                if (string.IsNullOrEmpty(_apiKey) && !(_useInferenceProxy && !string.IsNullOrEmpty(_bimMonkeyApiKey)))
                 {
-                    MessageBox.Show("Anthropic API key is required.", "Missing Key",
+                    MessageBox.Show("Anthropic API key is required (not needed if your firm's Private AI is enabled — set the BIM Monkey key instead).", "Missing Key",
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
@@ -2039,6 +2048,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private void InitializeAgent()
         {
             _agent = new AgentCore(_apiKey, _selectedModel, _bimMonkeyApiKey);
+            _agent.UseInferenceProxy = _useInferenceProxy;
             _agent.VisualVerifyEnabled = _visualVerifyEnabled;
             var allTools = new System.Collections.Generic.List<ToolDefinition>(ToolDefinitions.GetAllTools());
             _agent.RegisterTools(allTools);
@@ -2759,6 +2769,59 @@ namespace RevitMCPBridge2026.AgentFramework
                 }
             }
             catch { /* keep fallback values */ }
+
+            await FetchInferenceConfigAsync();
+        }
+
+        // Private AI (Enterprise): ask the backend whether this firm's inference
+        // should route through it (firm's own AWS Bedrock) instead of calling
+        // api.anthropic.com directly. Cached in config so a keyless Enterprise
+        // workstation works from panel startup on the next session.
+        private async System.Threading.Tasks.Task FetchInferenceConfigAsync()
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) })
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", "Bearer " + _bimMonkeyApiKey);
+                    var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/plugin/inference-config");
+                    if (!resp.IsSuccessStatusCode) return;
+                    var data = Newtonsoft.Json.Linq.JObject.Parse(await resp.Content.ReadAsStringAsync());
+                    var proxy = data["proxy"]?.ToObject<bool>() ?? false;
+                    if (proxy != _useInferenceProxy)
+                    {
+                        _useInferenceProxy = proxy;
+                        if (_agent != null) _agent.UseInferenceProxy = proxy;
+                        SaveConfig(); // persist for keyless startup next session
+                    }
+                }
+            }
+            catch { /* keep cached value */ }
+        }
+
+        // Non-streaming Anthropic Messages call that honors Private AI routing:
+        // proxied through the backend to the firm's AWS Bedrock when enabled,
+        // direct to api.anthropic.com with the local key otherwise.
+        private async Task<JObject> PostAnthropicMessageAsync(object requestBody, int timeoutSeconds)
+        {
+            using var anthropic = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+            string url;
+            if (_useInferenceProxy)
+            {
+                url = AgentCore.InferenceProxyUrl;
+                anthropic.DefaultRequestHeaders.Add("Authorization", "Bearer " + _bimMonkeyApiKey);
+            }
+            else
+            {
+                url = "https://api.anthropic.com/v1/messages";
+                anthropic.DefaultRequestHeaders.Add("x-api-key", _apiKey);
+                anthropic.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
+            }
+            var resp = await anthropic.PostAsync(url,
+                new System.Net.Http.StringContent(JsonConvert.SerializeObject(requestBody), System.Text.Encoding.UTF8, "application/json"));
+            var body = await resp.Content.ReadAsStringAsync();
+            return JObject.Parse(body);
         }
 
         // Pricing per million tokens (dollars) — updated dynamically from /api/config/models
@@ -2877,7 +2940,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private async Task<string> HandleCompareViewToLibraryAsync(JObject parameters)
         {
-            if (string.IsNullOrEmpty(_apiKey))
+            if (string.IsNullOrEmpty(_apiKey) && !_useInferenceProxy)
                 return JsonConvert.SerializeObject(new { success = false, error = "Anthropic API key not configured." });
             if (string.IsNullOrEmpty(_bimMonkeyApiKey))
                 return JsonConvert.SerializeObject(new { success = false, error = "BIM Monkey API key not configured." });
@@ -2966,16 +3029,8 @@ namespace RevitMCPBridge2026.AgentFramework
                         }
                     };
 
-                    var reqJson  = JsonConvert.SerializeObject(requestBody);
-                    var reqBody  = new System.Net.Http.StringContent(reqJson, System.Text.Encoding.UTF8, "application/json");
-                    using var anthropic = new System.Net.Http.HttpClient();
-                    anthropic.Timeout = TimeSpan.FromSeconds(90);
-                    anthropic.DefaultRequestHeaders.Add("x-api-key", _apiKey);
-                    anthropic.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
-                    var response = await anthropic.PostAsync("https://api.anthropic.com/v1/messages", reqBody);
-                    var respBody = await response.Content.ReadAsStringAsync();
-                    var parsed   = JObject.Parse(respBody);
-                    var analysis = parsed["content"]?[0]?["text"]?.ToString() ?? respBody;
+                    var parsed   = await PostAnthropicMessageAsync(requestBody, 90);
+                    var analysis = parsed["content"]?[0]?["text"]?.ToString() ?? parsed.ToString();
 
                     return JsonConvert.SerializeObject(new
                     {
@@ -3101,7 +3156,7 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             try
             {
-                if (string.IsNullOrEmpty(_apiKey)) return null;
+                if (string.IsNullOrEmpty(_apiKey) && !_useInferenceProxy) return null;
 
                 using var imgClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) };
                 var imageUrl = $"https://bimmonkey-production.up.railway.app/api/redlines/{sessionId}/pages/{pageNumber}/image?key={Uri.EscapeDataString(_bimMonkeyApiKey)}";
@@ -3129,13 +3184,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         }
                     }
                 };
-                using var anthropic = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(60) };
-                anthropic.DefaultRequestHeaders.Add("x-api-key", _apiKey);
-                anthropic.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01");
-                var vResp  = await anthropic.PostAsync("https://api.anthropic.com/v1/messages",
-                    new System.Net.Http.StringContent(JsonConvert.SerializeObject(requestBody), System.Text.Encoding.UTF8, "application/json"));
-                var vBody  = await vResp.Content.ReadAsStringAsync();
-                var parsed = JObject.Parse(vBody);
+                var parsed = await PostAnthropicMessageAsync(requestBody, 60);
                 return parsed["content"]?[0]?["text"]?.ToString();
             }
             catch { return null; }

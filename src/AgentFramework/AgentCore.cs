@@ -29,6 +29,14 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private readonly string _apiKey;
         private string _model; // Not readonly - can be changed by budget mode
+
+        // Private AI (Enterprise): when the firm's AWS Bedrock is active, the
+        // backend tells the plugin to route inference through it instead of
+        // calling api.anthropic.com directly — chat then runs in the firm's
+        // own AWS account and no Anthropic key is needed on the workstation.
+        // Authenticated with the BIM Monkey key. Standard/Pro stay direct.
+        public bool UseInferenceProxy { get; set; } = false;
+        public const string InferenceProxyUrl = "https://bimmonkey-production.up.railway.app/api/plugin/claude/messages";
         private readonly List<ToolDefinition> _tools;
         private Func<string, JObject, Task<string>> _executeToolAsync;
 
@@ -950,11 +958,21 @@ namespace RevitMCPBridge2026.AgentFramework
                         NullValueHandling = NullValueHandling.Ignore
                     });
 
-                    var request = (HttpWebRequest)WebRequest.Create("https://api.anthropic.com/v1/messages");
+                    // Private AI: route through the BIM Monkey backend → the firm's
+                    // own AWS Bedrock. Same request body, same SSE response format.
+                    var endpoint = UseInferenceProxy ? InferenceProxyUrl : "https://api.anthropic.com/v1/messages";
+                    var request = (HttpWebRequest)WebRequest.Create(endpoint);
                     request.Method = "POST";
                     request.ContentType = "application/json";
-                    request.Headers.Add("x-api-key", _apiKey);
-                    request.Headers.Add("anthropic-version", "2023-06-01");
+                    if (UseInferenceProxy)
+                    {
+                        request.Headers.Add("Authorization", "Bearer " + _bimMonkeyApiKey);
+                    }
+                    else
+                    {
+                        request.Headers.Add("x-api-key", _apiKey);
+                        request.Headers.Add("anthropic-version", "2023-06-01");
+                    }
                     // Bounds upload + time-to-response-headers. Anthropic can take >30s to send
                     // headers on large cache-write prompts or under load (SDK default is ~600s);
                     // true offline fails fast on DNS/connect, so a short value buys nothing.

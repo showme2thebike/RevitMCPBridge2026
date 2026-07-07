@@ -1,6 +1,11 @@
-# RevitMCPBridge2026 Architecture
+# RevitMCPBridge Architecture
+_Last updated: July 2026 — v0.4.20260703_
 
 ## System Overview
+
+Supports Revit **2024, 2025, 2026, and 2027**. Each year gets its own DLL compiled with the matching Revit API and .NET target:
+- 2024/2025/2026: .NET Framework 4.8, NuGet API stubs for 2024/2025, local Revit API for 2026
+- 2027: .NET 10 (`net10.0-windows`), local Revit 2027 API
 
 Two independent paths exist for AI-driven Revit automation:
 
@@ -28,13 +33,13 @@ PATH A: Claude Code + MCP wrapper (external terminal)
 │                         Named Pipe Server                            │
 │                    \\.\pipe\RevitMCPBridge2026                       │
 │  • Request parsing and routing                                       │
-│  • Method dispatch (705 methods)                                     │
+│  • Method dispatch (700+ methods)                                    │
 │  • Response serialization                                            │
 └─────────────────────────────────────┬───────────────────────────────┘
                                       │ Revit Idling Event
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                          Revit 2026 API                              │
+│                       Revit 2024–2027 API                            │
 └─────────────────────────────────────────────────────────────────────┘
 
 
@@ -172,6 +177,28 @@ Step 3: Create sheets in NCS order (G0→G1→A0→A1→…→E)
 Step 4: Place viewports; always append ` *` to sheet names
 Step 5: Audit for stacked viewports; fix label offsets
 ```
+
+**Offline detection (July 2026 — v0.4.20260703):**
+
+When the panel opens, both `CheckSubscriptionAsync` and `FetchFirmStandardsAsync` catch `HttpRequestException` and `TaskCanceledException` and call `ShowOfflineBanner()`.
+
+Three new fields in `AgentChatPanel.cs`:
+```csharp
+private bool _isOffline;
+private Border _offlineBanner;
+private System.Threading.Timer _connectivityTimer;
+```
+
+Three new methods:
+- `ShowOfflineBanner()` — inserts amber warning banner at top of chat history; disables send button; calls `StartConnectivityCheck()`
+- `HideOfflineBanner()` — removes banner; re-enables send button; stops timer
+- `StartConnectivityCheck()` — pings `/api/auth/verify` every 30 seconds; calls `HideOfflineBanner()` on success
+
+`SendMessage()`, Enter key handler, and `SetProcessing()` all gate on `_isOffline`.
+
+**Known gap:** Banner only fires when the panel opens offline. If the user opens the panel while online then loses connectivity mid-session, they get a generic API error rather than the offline banner.
+
+**AgentCore.cs timeout:** Claude API `HttpWebRequest.Timeout` reduced from 300,000ms (5 min) to 30,000ms (30 sec). Prevents infinite hang when hitting captive portals (e.g. airplane Wi-Fi that hasn't been authenticated yet).
 
 ### 5. Compliance Data Pipeline (Sprint 12 — May 2026)
 
