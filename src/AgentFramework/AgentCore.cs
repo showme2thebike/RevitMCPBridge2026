@@ -37,6 +37,77 @@ namespace RevitMCPBridge2026.AgentFramework
         // Authenticated with the BIM Monkey key. Standard/Pro stay direct.
         public bool UseInferenceProxy { get; set; } = false;
         public const string InferenceProxyUrl = "https://bimmonkey-production.up.railway.app/api/plugin/claude/messages";
+
+        // ── Session performance guards ────────────────────────────────────────
+        // Long sessions were accumulating multi-million-token histories; after
+        // any pause past the prompt-cache TTL the full prompt re-writes before
+        // the first response byte, which reads as "slow thinking" and can trip
+        // the request timeout. Cap individual tool results and trim the oldest
+        // turns once the history exceeds a budget — preserving tool_use/
+        // tool_result pairing and user-first ordering (the API rejects both
+        // violations).
+        private const int MaxToolResultChars = 24000;   // ~6K tokens per tool result
+        private const int HistoryCharBudget  = 400000;  // ~110K tokens — trim above this
+        private const int HistoryCharTrimTo  = 280000;  // target after trimming
+
+        private static string CapToolResult(string result)
+        {
+            if (string.IsNullOrEmpty(result) || result.Length <= MaxToolResultChars) return result;
+            return result.Substring(0, MaxToolResultChars - 3000)
+                + "\n…[tool result truncated — " + result.Length + " chars total; re-query with narrower filters if the omitted portion is needed]…\n"
+                + result.Substring(result.Length - 1000);
+        }
+
+        private static int EstimateMessageChars(Message m)
+        {
+            try { return JsonConvert.SerializeObject(m.Content)?.Length ?? 0; }
+            catch { return 0; }
+        }
+
+        private void TrimConversationHistory()
+        {
+            try
+            {
+                int total = 0;
+                foreach (var m in _conversationHistory) total += EstimateMessageChars(m);
+                if (total <= HistoryCharBudget) return;
+
+                int removed = 0;
+                // Always keep the most recent exchanges intact.
+                while (_conversationHistory.Count > 4 && total > HistoryCharTrimTo)
+                {
+                    total -= EstimateMessageChars(_conversationHistory[0]);
+                    _conversationHistory.RemoveAt(0);
+                    removed++;
+                }
+                // First message must be a plain user turn: drop any leading
+                // assistant message or orphaned tool_result user message.
+                while (_conversationHistory.Count > 0)
+                {
+                    var first = _conversationHistory[0];
+                    bool orphanToolResult = first.Role == "user"
+                        && first.Content is List<object> lo && lo.Count > 0 && lo[0] is ToolResultBlock;
+                    if (first.Role == "assistant" || orphanToolResult)
+                    {
+                        _conversationHistory.RemoveAt(0);
+                        removed++;
+                    }
+                    else break;
+                }
+                if (removed > 0 && _conversationHistory.Count > 0)
+                {
+                    var marker = $"[Note: {removed} older message(s) from this session were trimmed to keep responses fast. Work from those messages is already applied in the Revit model — do not redo it.]";
+                    var first = _conversationHistory[0];
+                    if (first.Content is string s)
+                        first.Content = marker + "\n\n" + s;
+                    else if (first.Content is List<object> rawList)
+                        rawList.Insert(0, new { type = "text", text = marker });
+                    else if (first.Content is List<ContentBlock> blocks)
+                        blocks.Insert(0, new ContentBlock { Type = "text", Text = marker });
+                }
+            }
+            catch { /* trimming must never break a session */ }
+        }
         private readonly List<ToolDefinition> _tools;
         private Func<string, JObject, Task<string>> _executeToolAsync;
 
@@ -593,7 +664,7 @@ namespace RevitMCPBridge2026.AgentFramework
                                 {
                                     Type = "tool_result",
                                     ToolUseId = block.Id,
-                                    Content = result
+                                    Content = CapToolResult(result)
                                 });
                             }
                             catch (Exception ex)
@@ -937,16 +1008,24 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 try
                 {
+                    // Keep the history under budget before every request — see
+                    // the session performance guards above.
+                    TrimConversationHistory();
+
+                    // 1-hour cache TTL: costs 2x on cache writes but survives the
+                    // pauses typical of Revit work (the 5-minute default expired
+                    // between most user messages, forcing a full prompt re-write
+                    // and a long "thinking" wait on every return to the chat).
                     var systemBlock = new[]
                     {
-                        new { type = "text", text = systemPrompt ?? GetDefaultSystemPrompt(), cache_control = new { type = "ephemeral" } }
+                        new { type = "text", text = systemPrompt ?? GetDefaultSystemPrompt(), cache_control = new { type = "ephemeral", ttl = "1h" } }
                     };
 
                     var requestBody = new
                     {
                         model = _model,
                         max_tokens = 8192,
-                        cache_control = new { type = "ephemeral" },
+                        cache_control = new { type = "ephemeral", ttl = "1h" },
                         system = systemBlock,
                         messages = FormatMessagesForAPI(),
                         tools = FormatToolsForAPI(),
@@ -973,10 +1052,12 @@ namespace RevitMCPBridge2026.AgentFramework
                         request.Headers.Add("x-api-key", _apiKey);
                         request.Headers.Add("anthropic-version", "2023-06-01");
                     }
-                    // Bounds upload + time-to-response-headers. Anthropic can take >30s to send
-                    // headers on large cache-write prompts or under load (SDK default is ~600s);
-                    // true offline fails fast on DNS/connect, so a short value buys nothing.
-                    request.Timeout = 120000;
+                    // Bounds upload + time-to-response-headers. Large cache-write prompts
+                    // legitimately exceed 120s under load (observed in the field) — and an
+                    // abort makes it worse, because the retry re-writes the cache again.
+                    // True offline still fails fast on DNS/connect.
+                    request.Timeout = 300000;
+                    request.ReadWriteTimeout = 300000;
 
                     var data = Encoding.UTF8.GetBytes(json);
                     request.ContentLength = data.Length;
@@ -1158,7 +1239,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     ["input_schema"] = JToken.FromObject(t.InputSchema)
                 };
                 if (i == _tools.Count - 1)
-                    obj["cache_control"] = JObject.FromObject(new { type = "ephemeral" });
+                    obj["cache_control"] = JObject.FromObject(new { type = "ephemeral", ttl = "1h" });
                 result.Add(obj);
             }
             return result;
