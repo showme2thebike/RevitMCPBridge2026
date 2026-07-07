@@ -7080,6 +7080,21 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                             _statusStrip.Background = executing
                                 ? new SolidColorBrush(Color.FromRgb(229, 57, 53))   // red — Revit API held
                                 : new SolidColorBrush(Color.FromRgb(255, 152, 0));  // amber — Claude thinking
+                        // Long quiet waits are usually Claude's (invisible) thinking phase on a
+                        // heavy session, not a hang — say so, or users kill healthy sessions.
+                        // Only touch the detail line when it's empty or ours (tool progress owns it otherwise).
+                        if (!executing && _progressDetail != null)
+                        {
+                            var d = _progressDetail.Text ?? "";
+                            bool ours = d.Length == 0 || d.StartsWith("Claude is thinking") || d.StartsWith("Still going");
+                            if (ours)
+                            {
+                                if (elapsed >= 300)
+                                    _progressDetail.Text = "Still going — if nothing has happened by ~8 minutes, press Stop and resend.";
+                                else if (elapsed >= 45)
+                                    _progressDetail.Text = "Claude is thinking through a complex step — multi-minute quiet pauses are normal on large sessions.";
+                            }
+                        }
                     };
                 }
                 _timerText.Text = "0s";
