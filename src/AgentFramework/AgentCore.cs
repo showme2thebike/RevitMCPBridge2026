@@ -82,6 +82,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 int total = 0;
                 foreach (var m in _conversationHistory) total += EstimateMessageChars(m);
                 if (total <= HistoryCharBudget) return;
+                int charsBefore = total;
 
                 // Never trim the current exchange: everything from the LAST
                 // user-authored message onward is protected. ALSO protect the
@@ -148,6 +149,14 @@ namespace RevitMCPBridge2026.AgentFramework
                         rawList.Insert(0, new { type = "text", text = marker });
                     else if (first.Content is List<ContentBlock> blocks)
                         blocks.Insert(0, new ContentBlock { Type = "text", Text = marker });
+
+                    TelemetryService.Track(_bimMonkeyApiKey, "compaction", metadata: new
+                    {
+                        messages_trimmed = removed,
+                        images_trimmed = removedImages,
+                        chars_before = charsBefore,
+                        chars_after = total,
+                    }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
                 }
             }
             catch { /* trimming must never break a session */ }
@@ -232,6 +241,11 @@ namespace RevitMCPBridge2026.AgentFramework
             _apiKey = apiKey;
             _model = model;
             _bimMonkeyApiKey = bimMonkeyApiKey;
+
+            // Telemetry session context: one GUID per AgentCore lifetime, stamped
+            // on every event (incl. panel-side ones) via TelemetryService.
+            TelemetryService.CurrentSessionId = Guid.NewGuid().ToString("N");
+            TelemetryService.DefaultRevitVersion = _revitVersion;
             _tools = new List<ToolDefinition>();
             _conversationHistory = new List<Message>();
 
@@ -650,6 +664,11 @@ namespace RevitMCPBridge2026.AgentFramework
                             if (_verifyAfterTools.Contains(block.Name)) anyPlacementTool = true;
 
                             OnToolCall?.Invoke($"Calling: {block.Name}");
+
+                            // Fires BEFORE execution so a hung tool is visible in
+                            // telemetry as a start with no matching tool_call.
+                            TelemetryService.Track(_bimMonkeyApiKey, "tool_call_start",
+                                toolName: block.Name, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
 
                             var toolStart = DateTime.UtcNow;
                             bool toolSuccess = true;
@@ -1116,12 +1135,16 @@ namespace RevitMCPBridge2026.AgentFramework
                     int cacheReadTokens = 0, cacheCreationTokens = 0;
                     string stopReason = null;
 
+                    var apiCallStart = DateTime.UtcNow;
+                    long ttfbMs = -1;
+
                     using (var response = (HttpWebResponse)request.GetResponse())
                     using (var reader = new StreamReader(response.GetResponseStream()))
                     {
                         string line;
                         while ((line = reader.ReadLine()) != null)
                         {
+                            if (ttfbMs < 0) ttfbMs = (long)(DateTime.UtcNow - apiCallStart).TotalMilliseconds;
                             if (token.IsCancellationRequested) break;
                             if (!line.StartsWith("data: ")) continue;
                             var payload = line.Substring(6).Trim();
@@ -1171,6 +1194,29 @@ namespace RevitMCPBridge2026.AgentFramework
                                     break;
                             }
                         }
+                    }
+
+                    // Per-call telemetry: latency + token/cache economics + routing.
+                    // ttfb is the "invisible thinking / cache write" wait the user feels.
+                    TelemetryService.Track(_bimMonkeyApiKey, "api_call",
+                        durationMs: (long)(DateTime.UtcNow - apiCallStart).TotalMilliseconds,
+                        success: true,
+                        metadata: new
+                        {
+                            ttfb_ms = ttfbMs,
+                            model = _model,
+                            input_tokens = inputTokens,
+                            output_tokens = outputTokens,
+                            cache_read_tokens = cacheReadTokens,
+                            cache_creation_tokens = cacheCreationTokens,
+                            proxy = UseInferenceProxy,
+                            stop_reason = stopReason,
+                        }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
+                    if (stopReason == "refusal")
+                    {
+                        TelemetryService.Track(_bimMonkeyApiKey, "quality_failure",
+                            metadata: new { reason = "refusal", model = _model },
+                            revitVersion: _revitVersion, pluginVersion: _pluginVersion);
                     }
 
                     // Assemble ClaudeResponse from accumulated stream data

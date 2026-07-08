@@ -3538,13 +3538,29 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 parameters = parameters ?? new JObject();
                 parameters["model"] = _selectedModel;
-                if (!string.IsNullOrEmpty(_apiKey))
+                // Private AI firms route vision through the backend proxy (their
+                // Bedrock) — never the local Anthropic key, which would bypass it.
+                if (!string.IsNullOrEmpty(_apiKey) && !_useInferenceProxy)
                     parameters["apiKey"] = _apiKey;
                 else if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
                     parameters["bimMonkeyApiKey"] = _bimMonkeyApiKey;
                 else
                     return JsonConvert.SerializeObject(new { success = false, error = "Vision analysis requires a BIM Monkey API key. Open Settings and enter your key." });
-                return await ExecuteMCPWithRetryAsync("analyzeView", parameters);
+                var visionResult = await ExecuteMCPWithRetryAsync("analyzeView", parameters);
+                try
+                {
+                    var vr = JObject.Parse(visionResult);
+                    var analysisText = vr["result"]?["analysis"]?.ToString() ?? "";
+                    if (vr["success"]?.ToObject<bool>() == true &&
+                        (analysisText.Length < 10 || analysisText == "No analysis available"))
+                    {
+                        // Content-level failure: transport succeeded but vision saw nothing useful.
+                        TelemetryService.Track(_bimMonkeyApiKey, "quality_failure",
+                            toolName: "analyzeView", metadata: new { reason = "empty_analysis" });
+                    }
+                }
+                catch { }
+                return visionResult;
             }
 
             // BIM Monkey: query the approved library on Railway
@@ -3802,6 +3818,8 @@ namespace RevitMCPBridge2026.AgentFramework
                 catch (MCPConnectionException connEx)
                 {
                     lastError = connEx.Message;
+                    TelemetryService.Track(_bimMonkeyApiKey, "pipe_reconnect",
+                        toolName: methodName, metadata: new { reason = "write_failed", attempt });
                     if (attempt < MaxRetryAttempts)
                     {
                         await Task.Delay(InitialRetryDelayMs * attempt);
@@ -3811,6 +3829,8 @@ namespace RevitMCPBridge2026.AgentFramework
                 catch (MCPTimeoutException timeoutEx)
                 {
                     lastError = timeoutEx.Message;
+                    TelemetryService.Track(_bimMonkeyApiKey, "pipe_reconnect",
+                        toolName: methodName, metadata: new { reason = "read_timeout", attempt });
                     // Timeouts often indicate Revit is busy - give it time
                     if (attempt < MaxRetryAttempts)
                     {
@@ -6025,6 +6045,12 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             _pendingAttachments.Add(img);
             RefreshAttachmentPreview();
+            TelemetryService.Track(_bimMonkeyApiKey, "image_attached", metadata: new
+            {
+                media_type = img.MediaType,
+                size_chars = img.Base64Data?.Length ?? 0,
+                label = img.Label,
+            });
         }
 
         private void RemoveAttachment(AttachedImage img)

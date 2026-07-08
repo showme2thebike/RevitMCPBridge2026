@@ -11,12 +11,26 @@ namespace RevitMCPBridge2026.AgentFramework
         private const string ApiBase = "https://bimmonkey-production.up.railway.app";
         private static readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
 
+        // Session GUID stamped on every event — set by AgentCore at session start
+        // so all events from one chat session group without time-window guessing.
+        public static string CurrentSessionId { get; set; }
+
+        // Fallbacks so no event ships without version context (fixed the
+        // null-plugin_version rows: call sites that omitted the params).
+        public static string DefaultRevitVersion { get; set; }
+        private static readonly string _assemblyVersion =
+            (System.Reflection.Assembly.GetExecutingAssembly()
+                .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                is System.Reflection.AssemblyInformationalVersionAttribute[] attrs && attrs.Length > 0)
+            ? attrs[0].InformationalVersion : null;
+
         public static void Track(string bimMonkeyApiKey, string eventType,
             object metadata = null, string toolName = null, long? durationMs = null,
             bool? success = null, string revitVersion = null, string pluginVersion = null)
         {
             if (string.IsNullOrEmpty(bimMonkeyApiKey)) return;
-            _ = TrackAsync(bimMonkeyApiKey, eventType, metadata, toolName, durationMs, success, revitVersion, pluginVersion);
+            _ = TrackAsync(bimMonkeyApiKey, eventType, metadata, toolName, durationMs, success,
+                revitVersion ?? DefaultRevitVersion, pluginVersion ?? _assemblyVersion);
         }
 
         private static async Task TrackAsync(string bimMonkeyApiKey, string eventType,
@@ -34,6 +48,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     revitVersion,
                     pluginVersion,
                     metadata,
+                    sessionId = CurrentSessionId,
                     source = "banana-chat"
                 };
                 var json = JsonConvert.SerializeObject(body, new JsonSerializerSettings
