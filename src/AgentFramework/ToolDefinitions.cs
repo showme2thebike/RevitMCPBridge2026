@@ -153,7 +153,9 @@ You can pass 'address' for geocoding, or pass 'lat'+'lng' directly (from a prior
                     Name = "analyzeImage",
                     Description = @"SEE any image on the web: downloads image URL(s) and analyzes them with Claude vision. Use this for Zillow listing photos, Street View thumbnails, or any http(s) JPEG/PNG/WebP — this is the ONLY tool that can look at images from URLs (analyzeView sees only the Revit viewport; browser screenshots are not visible to you).
 
-Pass up to 6 urls per call and one focused question. For a photo set (e.g. 30 listing photos), batch by purpose: first call 3-4 exterior shots asking about stories/roof/cladding/openings, then interiors as needed.",
+Pass up to 6 urls per call and one focused question. For a photo set (e.g. 30 listing photos), batch by purpose: first call 3-4 exterior shots asking about stories/roof/cladding/openings, then interiors as needed.
+
+When you need real DIMENSIONS from photos (window sizes, stair footprints, island lengths), load getKnowledgeFile('photo-metrology.md') first and follow its anchor/counting protocol — never state a dimension without naming its anchor.",
                     InputSchema = new
                     {
                         type = "object",
