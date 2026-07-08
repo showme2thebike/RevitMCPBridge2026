@@ -84,21 +84,42 @@ namespace RevitMCPBridge2026.AgentFramework
                 if (total <= HistoryCharBudget) return;
 
                 // Never trim the current exchange: everything from the LAST
-                // user-authored message onward is protected. Without this, a
-                // freshly pasted screenshot (whose base64 alone exceeds the
-                // budget) gets trimmed mid-turn and Claude reports it "can't
-                // see" the image the user just sent.
+                // user-authored message onward is protected. ALSO protect the
+                // most recent user message carrying an attached image — field
+                // report: paste image, ask follow-ups → the image message ages
+                // past "current" and gets trimmed → Claude goes blind on the
+                // screenshot the user is still discussing.
                 int lastUserIdx = -1;
+                int lastImageIdx = -1;
                 for (int i = _conversationHistory.Count - 1; i >= 0; i--)
                 {
-                    if (IsUserAuthoredMessage(_conversationHistory[i])) { lastUserIdx = i; break; }
+                    var m = _conversationHistory[i];
+                    if (!IsUserAuthoredMessage(m)) continue;
+                    if (lastUserIdx < 0) lastUserIdx = i;
+                    if (lastImageIdx < 0 && m.Content is List<object>)
+                    {
+                        string ser;
+                        try { ser = JsonConvert.SerializeObject(m.Content); } catch { ser = ""; }
+                        if (ser.Contains("\"type\":\"image\"")) lastImageIdx = i;
+                    }
+                    if (lastUserIdx >= 0 && lastImageIdx >= 0) break;
                 }
-                int protectedFrom = lastUserIdx >= 0 ? lastUserIdx : Math.Max(0, _conversationHistory.Count - 4);
+                int anchor = lastUserIdx >= 0 ? lastUserIdx : Math.Max(0, _conversationHistory.Count - 4);
+                if (lastImageIdx >= 0 && lastImageIdx < anchor) anchor = lastImageIdx;
+                int protectedFrom = anchor;
 
                 int removed = 0;
+                bool removedImages = false;
                 while (protectedFrom > 0 && _conversationHistory.Count > 1 && total > HistoryCharTrimTo)
                 {
-                    total -= EstimateMessageChars(_conversationHistory[0]);
+                    var victim = _conversationHistory[0];
+                    if (!removedImages && victim.Content is List<object>)
+                    {
+                        string ser;
+                        try { ser = JsonConvert.SerializeObject(victim.Content); } catch { ser = ""; }
+                        if (ser.Contains("\"type\":\"image\"")) removedImages = true;
+                    }
+                    total -= EstimateMessageChars(victim);
                     _conversationHistory.RemoveAt(0);
                     removed++;
                     protectedFrom--;
@@ -119,7 +140,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 }
                 if (removed > 0 && _conversationHistory.Count > 0)
                 {
-                    var marker = $"[Note: {removed} older message(s) from this session were trimmed to keep responses fast. Work from those messages is already applied in the Revit model — do not redo it.]";
+                    var marker = $"[Note: {removed} older message(s) from this session were trimmed to keep responses fast. Work from those messages is already applied in the Revit model — do not redo it.{(removedImages ? " Some earlier attached images were removed with them — if you need one, ask the user to re-paste it rather than saying you cannot see images." : "")}]";
                     var first = _conversationHistory[0];
                     if (first.Content is string s)
                         first.Content = marker + "\n\n" + s;
