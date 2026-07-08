@@ -1004,13 +1004,14 @@ namespace RevitMCPBridge2026.AgentFramework
                     ? $"lat={parcel.Lat:F6}, lng={parcel.Lng:F6}"
                     : "coordinates unavailable";
                 var prompt =
-                    $"Digitize the building footprint for {address} into the current Revit model.\n\n" +
+                    $"Digitize {address} into the current Revit model as an as-built starting point.\n\n" +
                     $"Parcel coordinates: {latLng}\n\n" +
-                    "Steps:\n" +
-                    "1. Call lookupBuildingFootprint with the coordinates above (pass lat and lng directly — no geocoding needed)\n" +
-                    "2. Call getLevels to find the ground floor levelId\n" +
-                    "3. Call createWallsFromPolyline with the points array, levelId, height=10, closed=true\n\n" +
-                    "After placing walls, report the wall count, approximate footprint dimensions, and suggest switching to a non-existing-phase view to see them clearly.";
+                    "STAGE 0 — safety check: call getWalls. If this model already contains building geometry, STOP and warn me — digitizing is meant for an empty project, and OSM footprints are NOT georeferenced to an existing model's base point. Only proceed in a populated model if I explicitly confirm.\n\n" +
+                    "STAGE 1 — footprint: lookupBuildingFootprint with the coordinates above (pass lat and lng directly — no geocoding needed). Report vertex count and approximate dimensions BEFORE placing anything.\n\n" +
+                    "STAGE 2 — walls: getLevels for the ground floor levelId. Check firm/project standards (corrections, firm memory) for the preferred exterior wall type and use getWallTypes to pick the closest match — do not accept an arbitrary default. Then createWallsFromPolyline with the points, levelId, height=10, closed=true.\n\n" +
+                    "STAGE 3 — photos: lookupZillowPhotos for the address. Analyze exterior photos with analyzeImage (3-4 URLs per call): story count, roof form, cladding, window/door placement on the street facade.\n\n" +
+                    "STAGE 4 — massing: if photos show more than one story, add the upper level(s) and walls. Place approximate windows and doors on the street facade per the photos — best-guess sizes, standard types. Flag every assumption.\n\n" +
+                    "STAGE 5 — verify: run analyzeView on a 3D or elevation view and summarize what was built, wall counts, dimensions, and all assumptions needing field verification.";
                 Dispatcher.Invoke(() => { if (_inputTextBox != null) _inputTextBox.Text = prompt; });
             }
             catch { }
@@ -2800,6 +2801,72 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { /* keep cached value */ }
         }
 
+        private async Task<string> HandleAnalyzeImageAsync(JObject parameters)
+        {
+            var question = parameters?["question"]?.ToString();
+            if (string.IsNullOrWhiteSpace(question))
+                question = "Describe this image in detail.";
+
+            // Accept urls (array) or url (single)
+            var urls = new List<string>();
+            if (parameters?["urls"] is JArray arr)
+                foreach (var u in arr) { var v = u?.ToString(); if (!string.IsNullOrWhiteSpace(v)) urls.Add(v.Trim()); }
+            var single = parameters?["url"]?.ToString();
+            if (!string.IsNullOrWhiteSpace(single)) urls.Add(single.Trim());
+            if (urls.Count == 0)
+                return JsonConvert.SerializeObject(new { success = false, error = "Provide 'url' (string) or 'urls' (array). Max 6 images per call." });
+            if (urls.Count > 6) urls = urls.Take(6).ToList();
+
+            try
+            {
+                var blocks = new List<object>();
+                var fetched = new List<string>();
+                using (var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) })
+                {
+                    http.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) BIMMonkey/1.0");
+                    foreach (var u in urls)
+                    {
+                        if (!u.StartsWith("http://") && !u.StartsWith("https://"))
+                            return JsonConvert.SerializeObject(new { success = false, error = $"Not an http(s) URL: {u}" });
+                        var resp = await http.GetAsync(u);
+                        if (!resp.IsSuccessStatusCode)
+                            return JsonConvert.SerializeObject(new { success = false, error = $"Image fetch failed ({(int)resp.StatusCode}) for {u}" });
+                        var bytes = await resp.Content.ReadAsByteArrayAsync();
+                        if (bytes.Length > 8_000_000)
+                            return JsonConvert.SerializeObject(new { success = false, error = $"Image too large ({bytes.Length / 1_000_000}MB, max 8MB): {u}" });
+                        var mime = resp.Content.Headers.ContentType?.MediaType ?? "";
+                        if (!mime.StartsWith("image/"))
+                            mime = u.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png"
+                                 : u.EndsWith(".webp", StringComparison.OrdinalIgnoreCase) ? "image/webp"
+                                 : "image/jpeg";
+                        blocks.Add(new { type = "image", source = new { type = "base64", media_type = mime, data = Convert.ToBase64String(bytes) } });
+                        fetched.Add(u);
+                    }
+                }
+                blocks.Add(new { type = "text", text = $"Analyze the {fetched.Count} image(s) above.\n\nQuestion: {question}\n\nBe specific and factual — describe only what is actually visible. Number your observations per image (Image 1, Image 2, ...) in the order provided." });
+
+                var requestBody = new
+                {
+                    model = _selectedModel,
+                    max_tokens = 3000,
+                    messages = new object[] { new { role = "user", content = blocks } }
+                };
+                var parsed = await PostAnthropicMessageAsync(requestBody, 120);
+                var analysis = ExtractTextBlock(parsed);
+                if (string.IsNullOrWhiteSpace(analysis))
+                {
+                    TelemetryService.Track(_bimMonkeyApiKey, "quality_failure",
+                        toolName: "analyzeImage", metadata: new { reason = "empty_analysis" });
+                    analysis = $"Analysis produced no text (stop_reason: {parsed?["stop_reason"]}). Try fewer images or a simpler question.";
+                }
+                return JsonConvert.SerializeObject(new { success = true, result = new { imageCount = fetched.Count, urls = fetched, question, analysis } });
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { success = false, error = ex.Message });
+            }
+        }
+
         // Thinking models (Sonnet 5+) put a thinking block first — content[0] is
         // not the text. Always find the text block.
         private static string ExtractTextBlock(JObject anthropicMessage)
@@ -3542,6 +3609,14 @@ namespace RevitMCPBridge2026.AgentFramework
             // Compare current Revit view against a library reference screenshot
             if (methodName == "compareViewToLibrary")
                 return await HandleCompareViewToLibraryAsync(parameters);
+
+            // Vision on arbitrary image URLs (Zillow photos, Street View, any
+            // web JPEG/PNG) — the gap that left agents unable to "see" listing
+            // photos: analyzeView is viewport-only and screenshots never enter
+            // the conversation. Downloads server-side then sends base64 via
+            // PostAnthropicMessageAsync (honors Private AI proxy routing).
+            if (methodName == "analyzeImage")
+                return await HandleAnalyzeImageAsync(parameters);
 
             // Handle vision analysis — inject whichever key is available
             if (methodName == "analyzeView")

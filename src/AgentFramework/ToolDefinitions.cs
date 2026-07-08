@@ -150,8 +150,26 @@ You can pass 'address' for geocoding, or pass 'lat'+'lng' directly (from a prior
                 },
                 new ToolDefinition
                 {
+                    Name = "analyzeImage",
+                    Description = @"SEE any image on the web: downloads image URL(s) and analyzes them with Claude vision. Use this for Zillow listing photos, Street View thumbnails, or any http(s) JPEG/PNG/WebP — this is the ONLY tool that can look at images from URLs (analyzeView sees only the Revit viewport; browser screenshots are not visible to you).
+
+Pass up to 6 urls per call and one focused question. For a photo set (e.g. 30 listing photos), batch by purpose: first call 3-4 exterior shots asking about stories/roof/cladding/openings, then interiors as needed.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            urls     = new { type = "array", items = new { type = "string" }, description = "Image URLs to analyze (max 6 per call)" },
+                            url      = new { type = "string", description = "Single image URL (alternative to urls)" },
+                            question = new { type = "string", description = "What to determine from the image(s) — be specific" }
+                        },
+                        required = new string[] { }
+                    }
+                },
+                new ToolDefinition
+                {
                     Name = "lookupZillowPhotos",
-                    Description = @"Fetch photos from a Zillow listing by zpid or address. Returns up to 30 photo URLs.
+                    Description = @"Fetch photos from a Zillow listing by zpid or address. Returns up to 30 photo URLs. To SEE the photos, pass their URLs to the analyzeImage tool (a few at a time with a focused question).
 
 NOTE: Only returns photos for active (currently for-sale) listings. Off-market and sold properties return 0 photos — this is a Zillow API limitation, not an error.
 
