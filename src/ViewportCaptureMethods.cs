@@ -251,6 +251,17 @@ namespace RevitMCPBridge
                 var imageBytes = File.ReadAllBytes(filePath);
                 var base64 = Convert.ToBase64String(imageBytes);
 
+                // Diagnostic: keep a copy of the most recent capture so "vision
+                // sees a blank image" reports can be verified by opening exactly
+                // what Claude was sent (%TEMP%\RevitMCPCaptures\last_capture.png).
+                try
+                {
+                    var diagDir = Path.Combine(Path.GetTempPath(), "RevitMCPCaptures");
+                    Directory.CreateDirectory(diagDir);
+                    File.Copy(filePath, Path.Combine(diagDir, "last_capture.png"), true);
+                }
+                catch { }
+
                 // Clean up temp file
                 try { File.Delete(filePath); } catch { }
 
