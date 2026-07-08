@@ -5986,7 +5986,7 @@ namespace RevitMCPBridge2026.AgentFramework
         }
 
         // Sprint 2B — capture clipboard image and add to pending attachments.
-        // Encoded as JPEG (q80, long edge capped at 2000px): PNG-encoding pasted
+        // Encoded as JPEG (q85, long edge capped at 2000px): PNG-encoding pasted
         // photos produced base64 payloads 5-10x larger — slow sends, expensive
         // vision tokens, and instant history-trim pressure.
         private void HandleImagePaste()
@@ -6005,7 +6005,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         bitmapSource, new System.Windows.Media.ScaleTransform(scale, scale));
                 }
 
-                var encoder = new System.Windows.Media.Imaging.JpegBitmapEncoder { QualityLevel = 80 };
+                var encoder = new System.Windows.Media.Imaging.JpegBitmapEncoder { QualityLevel = 85 };
                 encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmapSource));
                 using (var ms = new System.IO.MemoryStream())
                 {
