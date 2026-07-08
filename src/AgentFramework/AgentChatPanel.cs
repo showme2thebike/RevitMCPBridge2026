@@ -5985,21 +5985,33 @@ namespace RevitMCPBridge2026.AgentFramework
                 _slashPalette.IsOpen = false;
         }
 
-        // Sprint 2B — capture clipboard image and add to pending attachments
+        // Sprint 2B — capture clipboard image and add to pending attachments.
+        // Encoded as JPEG (q80, long edge capped at 2000px): PNG-encoding pasted
+        // photos produced base64 payloads 5-10x larger — slow sends, expensive
+        // vision tokens, and instant history-trim pressure.
         private void HandleImagePaste()
         {
             try
             {
-                var bitmapSource = System.Windows.Clipboard.GetImage();
+                System.Windows.Media.Imaging.BitmapSource bitmapSource = System.Windows.Clipboard.GetImage();
                 if (bitmapSource == null) return;
 
-                var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                const double maxEdge = 2000.0;
+                double longest = Math.Max(bitmapSource.PixelWidth, bitmapSource.PixelHeight);
+                if (longest > maxEdge)
+                {
+                    double scale = maxEdge / longest;
+                    bitmapSource = new System.Windows.Media.Imaging.TransformedBitmap(
+                        bitmapSource, new System.Windows.Media.ScaleTransform(scale, scale));
+                }
+
+                var encoder = new System.Windows.Media.Imaging.JpegBitmapEncoder { QualityLevel = 80 };
                 encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmapSource));
                 using (var ms = new System.IO.MemoryStream())
                 {
                     encoder.Save(ms);
                     var base64 = Convert.ToBase64String(ms.ToArray());
-                    AddAttachment(new AttachedImage { Base64Data = base64, MediaType = "image/png", Label = "Screenshot" });
+                    AddAttachment(new AttachedImage { Base64Data = base64, MediaType = "image/jpeg", Label = "Screenshot" });
                 }
             }
             catch (Exception ex)

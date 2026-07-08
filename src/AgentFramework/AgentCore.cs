@@ -64,6 +64,17 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { return 0; }
         }
 
+        // A message the USER authored (typed text, or typed text + attached
+        // images) — as opposed to tool_result turns the agent loop generates.
+        private static bool IsUserAuthoredMessage(Message m)
+        {
+            if (m.Role != "user") return false;
+            if (m.Content is string) return true;
+            if (m.Content is List<object> lo)
+                return lo.Count == 0 || !(lo[0] is ToolResultBlock);
+            return false;
+        }
+
         private void TrimConversationHistory()
         {
             try
@@ -72,13 +83,25 @@ namespace RevitMCPBridge2026.AgentFramework
                 foreach (var m in _conversationHistory) total += EstimateMessageChars(m);
                 if (total <= HistoryCharBudget) return;
 
+                // Never trim the current exchange: everything from the LAST
+                // user-authored message onward is protected. Without this, a
+                // freshly pasted screenshot (whose base64 alone exceeds the
+                // budget) gets trimmed mid-turn and Claude reports it "can't
+                // see" the image the user just sent.
+                int lastUserIdx = -1;
+                for (int i = _conversationHistory.Count - 1; i >= 0; i--)
+                {
+                    if (IsUserAuthoredMessage(_conversationHistory[i])) { lastUserIdx = i; break; }
+                }
+                int protectedFrom = lastUserIdx >= 0 ? lastUserIdx : Math.Max(0, _conversationHistory.Count - 4);
+
                 int removed = 0;
-                // Always keep the most recent exchanges intact.
-                while (_conversationHistory.Count > 4 && total > HistoryCharTrimTo)
+                while (protectedFrom > 0 && _conversationHistory.Count > 1 && total > HistoryCharTrimTo)
                 {
                     total -= EstimateMessageChars(_conversationHistory[0]);
                     _conversationHistory.RemoveAt(0);
                     removed++;
+                    protectedFrom--;
                 }
                 // First message must be a plain user turn: drop any leading
                 // assistant message or orphaned tool_result user message.
