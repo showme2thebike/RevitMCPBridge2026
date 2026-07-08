@@ -2800,6 +2800,16 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { /* keep cached value */ }
         }
 
+        // Thinking models (Sonnet 5+) put a thinking block first — content[0] is
+        // not the text. Always find the text block.
+        private static string ExtractTextBlock(JObject anthropicMessage)
+        {
+            if (anthropicMessage?["content"] is JArray blocks)
+                foreach (var b in blocks)
+                    if (b["type"]?.ToString() == "text") return b["text"]?.ToString();
+            return null;
+        }
+
         // Non-streaming Anthropic Messages call that honors Private AI routing:
         // proxied through the backend to the firm's AWS Bedrock when enabled,
         // direct to api.anthropic.com with the local key otherwise.
@@ -3030,7 +3040,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     };
 
                     var parsed   = await PostAnthropicMessageAsync(requestBody, 90);
-                    var analysis = parsed["content"]?[0]?["text"]?.ToString() ?? parsed.ToString();
+                    var analysis = ExtractTextBlock(parsed) ?? parsed.ToString();
 
                     return JsonConvert.SerializeObject(new
                     {
@@ -3185,7 +3195,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     }
                 };
                 var parsed = await PostAnthropicMessageAsync(requestBody, 60);
-                return parsed["content"]?[0]?["text"]?.ToString();
+                return ExtractTextBlock(parsed);
             }
             catch { return null; }
         }

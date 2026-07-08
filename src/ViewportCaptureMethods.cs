@@ -918,7 +918,7 @@ namespace RevitMCPBridge
                 var requestBody = new
                 {
                     model = model,
-                    max_tokens = 1024,
+                    max_tokens = 3000, // room for adaptive thinking before the text block
                     messages = new[]
                     {
                         new
@@ -966,7 +966,15 @@ namespace RevitMCPBridge
                 }
 
                 var result = JObject.Parse(responseBody);
-                var analysisText = result["content"]?[0]?["text"]?.ToString() ?? "No analysis available";
+                // Thinking models (Sonnet 5+) put a thinking block FIRST — content[0]
+                // is not the text. Find the text block; content[0].text returned null
+                // ("No analysis available") on every call for Sonnet 5 users.
+                string analysisText = null;
+                if (result["content"] is JArray blocks)
+                    foreach (var b in blocks)
+                        if (b["type"]?.ToString() == "text") { analysisText = b["text"]?.ToString(); break; }
+                if (string.IsNullOrEmpty(analysisText))
+                    analysisText = $"Analysis produced no text (stop_reason: {result["stop_reason"]}). Try a simpler question.";
 
                 return analysisText;
             }
