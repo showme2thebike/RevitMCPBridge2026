@@ -2048,7 +2048,13 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private void InitializeAgent()
         {
+            // Settings save rebuilds the agent (new model/keys) — carry the live
+            // conversation over so a mid-task model switch doesn't lose context.
+            var priorHistory = _agent?.ExportConversationHistory();
+
             _agent = new AgentCore(_apiKey, _selectedModel, _bimMonkeyApiKey);
+            if (priorHistory != null && priorHistory.Count > 0)
+                _agent.ImportConversationHistory(priorHistory);
             _agent.UseInferenceProxy = _useInferenceProxy;
             _agent.VisualVerifyEnabled = _visualVerifyEnabled;
             var allTools = new System.Collections.Generic.List<ToolDefinition>(ToolDefinitions.GetAllTools());

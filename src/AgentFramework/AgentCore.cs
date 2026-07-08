@@ -501,6 +501,22 @@ namespace RevitMCPBridge2026.AgentFramework
         }
 
         /// <summary>
+        /// Carry the live conversation across an agent rebuild (settings save /
+        /// model switch). Losing context on a mid-task model change surprises
+        /// users — Claude Code preserves it across /model, so do we. History
+        /// holds only text/tool_use/tool_result blocks, which replay cleanly
+        /// across models.
+        /// </summary>
+        public List<Message> ExportConversationHistory() => _conversationHistory;
+
+        public void ImportConversationHistory(List<Message> history)
+        {
+            if (history == null || history.Count == 0) return;
+            _conversationHistory.Clear();
+            _conversationHistory.AddRange(history);
+        }
+
+        /// <summary>
         /// Restore conversation history from a previous session
         /// This allows the AI to maintain context across sessions
         /// </summary>
