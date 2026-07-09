@@ -2868,10 +2868,42 @@ namespace RevitMCPBridge2026.AgentFramework
                 JObject importObj;
                 try { importObj = JObject.Parse(importResult); } catch { importObj = new JObject { ["raw"] = importResult }; }
 
-                // Texts stay out of the SVG (stripped server-side) — hand them to
-                // the agent as data so annotations become native Revit elements.
+                // Compact the import result: importSvgToDetail returns per-element
+                // records for every placed curve (60KB+ on a real detail), which
+                // blew the tool-result cap and truncated the texts. The agent
+                // needs counts, not 1,093 element IDs.
+                var res = importObj["result"] as JObject;
+                var elements = res?["elements"] as JArray;
+                var compactImport = new JObject
+                {
+                    ["success"] = importObj["success"] ?? true,
+                    ["elementsPlaced"] = res?["successCount"] ?? (JToken)(elements?.Count ?? 0),
+                    ["elementsSkipped"] = res?["errorCount"] ?? 0,
+                    ["sampleElementIds"] = elements != null
+                        ? new JArray(elements.Take(5).Select(e => e["id"] ?? e))
+                        : new JArray(),
+                };
+
+                // Texts stay out of the SVG (stripped server-side). Return them
+                // PRE-TRANSFORMED into view coordinates (feet) using the exact
+                // mapping the importer applied — the agent places notes with no
+                // coordinate math (raw-vs-transformed mismatch misplaced every
+                // note on first field contact).
+                double pageH = vec["heightPt"]?.ToObject<double>() ?? 0;
                 var texts = vec["texts"] as JArray ?? new JArray();
                 if (texts.Count > 300) texts = new JArray(texts.Take(300));
+                var textsView = new JArray();
+                foreach (var t in texts)
+                {
+                    double tx = t["x"]?.ToObject<double>() ?? 0;
+                    double ty = t["y"]?.ToObject<double>() ?? 0;
+                    textsView.Add(new JObject
+                    {
+                        ["text"] = t["text"],
+                        ["viewX_ft"] = Math.Round(tx * scaleFactor, 4),
+                        ["viewY_ft"] = Math.Round((pageH - ty) * scaleFactor, 4),
+                    });
+                }
 
                 TelemetryService.Track(_bimMonkeyApiKey, "tool_call", toolName: "importDetailVector",
                     success: importObj["success"]?.ToObject<bool>() ?? false,
@@ -2882,12 +2914,12 @@ namespace RevitMCPBridge2026.AgentFramework
                     success = true,
                     result = new
                     {
-                        import_result = importObj,
+                        import_result = compactImport,
                         pathCount = vec["pathCount"],
                         pageSizePt = new { width = vec["widthPt"], height = vec["heightPt"] },
                         scaleFactorUsed = scaleFactor,
-                        texts,
-                        note = "Linework imported. Place the annotation texts as native Revit text notes/dimensions at their coordinates (PDF points, y-down — multiply by the same scaleFactor and flip Y to match the imported geometry).",
+                        texts = textsView,
+                        note = "Linework imported. Place each text as a native Revit text note at (viewX_ft, viewY_ft) — these are ALREADY in the drafting view's coordinate system, no conversion needed. Coordinates are the text's top-left; nudge down by the text height if alignment matters.",
                     }
                 });
             }

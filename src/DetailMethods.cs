@@ -7532,7 +7532,7 @@ namespace RevitMCPBridge2026
                     failureOptions.SetFailuresPreprocessor(new WarningSwallower());
                     trans.SetFailureHandlingOptions(failureOptions);
 
-                    ProcessSvgElements(doc, view, root, ns, toRevit, 0, 0,
+                    ProcessSvgElements(doc, view, root, ns, toRevit, new double[] { 1, 0, 0, 1, 0, 0 },
                         lineStyleCache, filledRegionTypeCache, strokeWidthMap, defaultFillType,
                         defaultTextTypeId, scaleFactor, flipY, results, ref successCount, ref errorCount);
 
@@ -7560,9 +7560,52 @@ namespace RevitMCPBridge2026
         /// <summary>
         /// Recursively processes SVG elements, handling groups and transforms
         /// </summary>
+        // Parse an SVG transform attribute (matrix/translate/scale, applied in
+        // written order) and compose it onto a parent 2x3 affine {a,b,c,d,e,f}.
+        // mupdf/CAD exports put a matrix(...) on EVERY path (pt<->px conversion);
+        // ignoring it displaced imported geometry by 1.333x vs the text layer.
+        private static double[] ComposeSvgTransform(double[] m, string transform)
+        {
+            if (string.IsNullOrEmpty(transform)) return m;
+            var result = (double[])m.Clone();
+            foreach (SysRegex.Match op in SysRegex.Regex.Matches(transform, @"(matrix|translate|scale)\(([^)]*)\)"))
+            {
+                var nums = op.Groups[2].Value
+                    .Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(t => double.TryParse(t, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) ? d : 0)
+                    .ToArray();
+                double a = 1, b = 0, c = 0, d2 = 1, e = 0, f = 0;
+                switch (op.Groups[1].Value)
+                {
+                    case "matrix":
+                        if (nums.Length < 6) continue;
+                        a = nums[0]; b = nums[1]; c = nums[2]; d2 = nums[3]; e = nums[4]; f = nums[5];
+                        break;
+                    case "translate":
+                        e = nums.Length > 0 ? nums[0] : 0;
+                        f = nums.Length > 1 ? nums[1] : 0;
+                        break;
+                    case "scale":
+                        a = nums.Length > 0 ? nums[0] : 1;
+                        d2 = nums.Length > 1 ? nums[1] : a;
+                        break;
+                }
+                // result = result * child  (child applied first to coordinates)
+                var r = new double[6];
+                r[0] = result[0] * a + result[2] * b;
+                r[1] = result[1] * a + result[3] * b;
+                r[2] = result[0] * c + result[2] * d2;
+                r[3] = result[1] * c + result[3] * d2;
+                r[4] = result[0] * e + result[2] * f + result[4];
+                r[5] = result[1] * e + result[3] * f + result[5];
+                result = r;
+            }
+            return result;
+        }
+
         private static void ProcessSvgElements(
             Document doc, View view, XElement parent, XNamespace ns,
-            Func<double, double, XYZ> toRevit, double txOffset, double tyOffset,
+            Func<double, double, XYZ> toRevit, double[] parentAffine,
             Dictionary<string, GraphicsStyle> lineStyleCache,
             Dictionary<string, FilledRegionType> filledRegionTypeCache,
             Dictionary<string, string> strokeWidthMap,
@@ -7574,23 +7617,13 @@ namespace RevitMCPBridge2026
             {
                 string localName = elem.Name.LocalName.ToLower();
 
-                // Handle group transforms
-                double gx = txOffset, gy = tyOffset;
-                string transform = elem.Attribute("transform")?.Value;
-                if (!string.IsNullOrEmpty(transform))
-                {
-                    var m = SysRegex.Regex.Match(transform, @"translate\(\s*([\d.\-e]+)[\s,]+([\d.\-e]+)\s*\)");
-                    if (m.Success)
-                    {
-                        double.TryParse(m.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double tdx);
-                        double.TryParse(m.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double tdy);
-                        gx += tdx;
-                        gy += tdy;
-                    }
-                }
+                // Compose this element's transform (groups AND leaf elements —
+                // mupdf puts a matrix on every path) onto the inherited affine.
+                var m = ComposeSvgTransform(parentAffine, elem.Attribute("transform")?.Value);
 
-                // Adjusted transform that includes group offsets
-                Func<double, double, XYZ> adjToRevit = (sx, sy) => toRevit(sx + gx, sy + gy);
+                // Adjusted mapping: affine in SVG space, then the page->Revit map
+                Func<double, double, XYZ> adjToRevit = (sx, sy) =>
+                    toRevit(m[0] * sx + m[2] * sy + m[4], m[1] * sx + m[3] * sy + m[5]);
 
                 try
                 {
@@ -7598,7 +7631,7 @@ namespace RevitMCPBridge2026
                     {
                         case "g":
                         case "svg":
-                            ProcessSvgElements(doc, view, elem, ns, toRevit, gx, gy,
+                            ProcessSvgElements(doc, view, elem, ns, toRevit, m,
                                 lineStyleCache, filledRegionTypeCache, strokeWidthMap, defaultFillType,
                                 defaultTextTypeId, scaleFactor, flipY, results, ref successCount, ref errorCount);
                             break;
