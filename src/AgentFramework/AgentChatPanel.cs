@@ -2807,6 +2807,96 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { /* keep cached value */ }
         }
 
+        private async Task<string> HandleListDetailVectorsAsync(JObject parameters)
+        {
+            var project = parameters?["project"]?.ToString()?.Trim();
+            if (string.IsNullOrEmpty(project))
+                return JsonConvert.SerializeObject(new { success = false, error = "project (the uploaded project name) is required" });
+            try
+            {
+                using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+                client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                var resp = await client.GetAsync($"https://bimmonkey-production.up.railway.app/api/training/vectors?project={Uri.EscapeDataString(project)}");
+                var body = await resp.Content.ReadAsStringAsync();
+                if (!resp.IsSuccessStatusCode)
+                    return JsonConvert.SerializeObject(new { success = false, error = $"Vector index lookup failed: {body}" });
+                return JsonConvert.SerializeObject(new { success = true, result = JObject.Parse(body) });
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { success = false, error = ex.Message });
+            }
+        }
+
+        private async Task<string> HandleImportDetailVectorAsync(JObject parameters)
+        {
+            var project = parameters?["project"]?.ToString()?.Trim();
+            var page = parameters?["page"]?.ToObject<int?>();
+            var viewId = parameters?["viewId"]?.ToObject<int?>();
+            if (string.IsNullOrEmpty(project) || page == null || viewId == null)
+                return JsonConvert.SerializeObject(new { success = false, error = "project, page, and viewId (a drafting view) are all required" });
+            try
+            {
+                JObject vec;
+                using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(60) })
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    var resp = await client.GetAsync($"https://bimmonkey-production.up.railway.app/api/training/vector?project={Uri.EscapeDataString(project)}&page={page}");
+                    var body = await resp.Content.ReadAsStringAsync();
+                    if (!resp.IsSuccessStatusCode)
+                        return JsonConvert.SerializeObject(new { success = false, error = $"Vector fetch failed: {body}" });
+                    vec = JObject.Parse(body);
+                }
+                var svg = vec["svg"]?.ToString();
+                if (string.IsNullOrEmpty(svg))
+                    return JsonConvert.SerializeObject(new { success = false, error = "No SVG returned for that page" });
+
+                // SVG units are PDF points (72/inch). scaleFactor converts points
+                // to feet: paper size = 1/864; true model size = detailScale/864
+                // (e.g. a detail drawn at 1-1/2\" = 1'-0\" has detailScale 8).
+                double detailScale = parameters?["detailScale"]?.ToObject<double>() ?? 1.0;
+                double scaleFactor = parameters?["scaleFactor"]?.ToObject<double>() ?? (detailScale / 864.0);
+
+                var importParams = new JObject
+                {
+                    ["viewId"] = viewId,
+                    ["svg"] = svg,
+                    ["scaleFactor"] = scaleFactor,
+                    ["flipY"] = true,
+                };
+                var importResult = await ExecuteMCPWithRetryAsync("importSvgToDetail", importParams);
+                JObject importObj;
+                try { importObj = JObject.Parse(importResult); } catch { importObj = new JObject { ["raw"] = importResult }; }
+
+                // Texts stay out of the SVG (stripped server-side) — hand them to
+                // the agent as data so annotations become native Revit elements.
+                var texts = vec["texts"] as JArray ?? new JArray();
+                if (texts.Count > 300) texts = new JArray(texts.Take(300));
+
+                TelemetryService.Track(_bimMonkeyApiKey, "tool_call", toolName: "importDetailVector",
+                    success: importObj["success"]?.ToObject<bool>() ?? false,
+                    metadata: new { project, page, pathCount = vec["pathCount"]?.ToObject<int>() ?? 0 });
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    result = new
+                    {
+                        import_result = importObj,
+                        pathCount = vec["pathCount"],
+                        pageSizePt = new { width = vec["widthPt"], height = vec["heightPt"] },
+                        scaleFactorUsed = scaleFactor,
+                        texts,
+                        note = "Linework imported. Place the annotation texts as native Revit text notes/dimensions at their coordinates (PDF points, y-down — multiply by the same scaleFactor and flip Y to match the imported geometry).",
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { success = false, error = ex.Message });
+            }
+        }
+
         private async Task<string> HandleAnalyzeImageAsync(JObject parameters)
         {
             var question = parameters?["question"]?.ToString();
@@ -3623,6 +3713,15 @@ namespace RevitMCPBridge2026.AgentFramework
             // PostAnthropicMessageAsync (honors Private AI proxy routing).
             if (methodName == "analyzeImage")
                 return await HandleAnalyzeImageAsync(parameters);
+
+            // Vector detail replication: exact linework from CAD-exported PDFs
+            // in the training library — imports geometry directly, never through
+            // the model (the SVG would blow the tool-result budget and isn't
+            // something the model needs to read).
+            if (methodName == "listDetailVectors")
+                return await HandleListDetailVectorsAsync(parameters);
+            if (methodName == "importDetailVector")
+                return await HandleImportDetailVectorAsync(parameters);
 
             // Handle vision analysis — inject whichever key is available
             if (methodName == "analyzeView")

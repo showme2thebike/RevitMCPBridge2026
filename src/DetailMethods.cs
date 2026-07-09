@@ -7894,11 +7894,37 @@ namespace RevitMCPBridge2026
                         isClosed = true;
                         cx = mx; cy = my;
                         break;
-                    case 'C': // Cubic bezier - approximate with endpoint (skip control points)
-                        for (int i = 0; i + 5 < nums.Count; i += 6) { cx = nums[i + 4]; cy = nums[i + 5]; points.Add(toRevit(cx, cy)); }
+                    case 'C': // Cubic bezier — sample intermediate points so arcs
+                              // (CAD/mupdf exports emit them as béziers) keep their
+                              // curvature instead of flattening to chords
+                        for (int i = 0; i + 5 < nums.Count; i += 6)
+                        {
+                            double x0 = cx, y0 = cy;
+                            double x1 = nums[i], y1 = nums[i + 1], x2 = nums[i + 2], y2 = nums[i + 3], x3 = nums[i + 4], y3 = nums[i + 5];
+                            for (int k = 1; k <= 4; k++)
+                            {
+                                double tt = k / 4.0, u = 1 - tt;
+                                points.Add(toRevit(
+                                    u * u * u * x0 + 3 * u * u * tt * x1 + 3 * u * tt * tt * x2 + tt * tt * tt * x3,
+                                    u * u * u * y0 + 3 * u * u * tt * y1 + 3 * u * tt * tt * y2 + tt * tt * tt * y3));
+                            }
+                            cx = x3; cy = y3;
+                        }
                         break;
                     case 'c':
-                        for (int i = 0; i + 5 < nums.Count; i += 6) { cx += nums[i + 4]; cy += nums[i + 5]; points.Add(toRevit(cx, cy)); }
+                        for (int i = 0; i + 5 < nums.Count; i += 6)
+                        {
+                            double x0 = cx, y0 = cy;
+                            double x1 = cx + nums[i], y1 = cy + nums[i + 1], x2 = cx + nums[i + 2], y2 = cy + nums[i + 3], x3 = cx + nums[i + 4], y3 = cy + nums[i + 5];
+                            for (int k = 1; k <= 4; k++)
+                            {
+                                double tt = k / 4.0, u = 1 - tt;
+                                points.Add(toRevit(
+                                    u * u * u * x0 + 3 * u * u * tt * x1 + 3 * u * tt * tt * x2 + tt * tt * tt * x3,
+                                    u * u * u * y0 + 3 * u * u * tt * y1 + 3 * u * tt * tt * y2 + tt * tt * tt * y3));
+                            }
+                            cx = x3; cy = y3;
+                        }
                         break;
                     case 'Q': // Quadratic bezier - approximate with endpoint
                         for (int i = 0; i + 3 < nums.Count; i += 4) { cx = nums[i + 2]; cy = nums[i + 3]; points.Add(toRevit(cx, cy)); }

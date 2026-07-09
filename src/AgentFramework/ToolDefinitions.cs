@@ -150,6 +150,41 @@ You can pass 'address' for geocoding, or pass 'lat'+'lng' directly (from a prior
                 },
                 new ToolDefinition
                 {
+                    Name = "listDetailVectors",
+                    Description = @"List which pages of an uploaded project have EXACT vector geometry available (CAD-exported PDFs uploaded through Banana Chat). Use before importDetailVector to find the right page. Pages marked is_vector=false are scanned/raster — use vision on those instead.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            project = new { type = "string", description = "The uploaded project name (as it appears in the training library)" }
+                        },
+                        required = new[] { "project" }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "importDetailVector",
+                    Description = @"REPLICATE a master detail exactly: fetches the exact vector linework of an uploaded PDF page and imports it into a drafting view via importSvgToDetail — no visual estimation, the geometry is the source file's own paths. Returns the import result plus the page's annotation TEXTS with coordinates; place those as NATIVE Revit text notes and dimensions (never import text as linework).
+
+Workflow: createDraftingView first → importDetailVector(project, page, viewId, detailScale) → add native annotations from the returned texts.
+
+detailScale converts paper geometry to true model size: detailScale = 12 / (paper inches per foot). Examples: 1""=1'-0"" → 12; 1-1/2""=1'-0"" → 8; 3""=1'-0"" → 4; 1/2""=1'-0"" → 24. Default 1 imports at paper size.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            project     = new { type = "string", description = "Uploaded project name" },
+                            page        = new { type = "integer", description = "Page number (from listDetailVectors)" },
+                            viewId      = new { type = "integer", description = "Target drafting view element ID" },
+                            detailScale = new { type = "number", description = "Drawn scale factor (e.g. 8 for 1-1/2\"=1'-0\") — converts paper geometry to true model size" }
+                        },
+                        required = new[] { "project", "page", "viewId" }
+                    }
+                },
+                new ToolDefinition
+                {
                     Name = "analyzeImage",
                     Description = @"SEE any image on the web: downloads image URL(s) and analyzes them with Claude vision. Use this for Zillow listing photos, Street View thumbnails, or any http(s) JPEG/PNG/WebP — this is the ONLY tool that can look at images from URLs (analyzeView sees only the Revit viewport; browser screenshots are not visible to you).
 
