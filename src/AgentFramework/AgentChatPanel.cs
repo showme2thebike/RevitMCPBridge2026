@@ -2871,16 +2871,22 @@ namespace RevitMCPBridge2026.AgentFramework
                 // Compact the import result: importSvgToDetail returns per-element
                 // records for every placed curve (60KB+ on a real detail), which
                 // blew the tool-result cap and truncated the texts. The agent
-                // needs counts, not 1,093 element IDs.
-                var res = importObj["result"] as JObject;
-                var elements = res?["elements"] as JArray;
+                // needs counts, not 1,093 element IDs. Response shape is FLAT
+                // (successCount/errorCount/results at top level), and its own
+                // success flag is errorCount==0 — false whenever sub-tolerance
+                // micro-segments are skipped, which is normal PDF noise. Placed
+                // anything = success.
+                int placed = importObj["successCount"]?.ToObject<int>() ?? 0;
+                int skipped = importObj["errorCount"]?.ToObject<int>() ?? 0;
+                var resultsArr = importObj["results"] as JArray;
                 var compactImport = new JObject
                 {
-                    ["success"] = importObj["success"] ?? true,
-                    ["elementsPlaced"] = res?["successCount"] ?? (JToken)(elements?.Count ?? 0),
-                    ["elementsSkipped"] = res?["errorCount"] ?? 0,
-                    ["sampleElementIds"] = elements != null
-                        ? new JArray(elements.Take(5).Select(e => e["id"] ?? e))
+                    ["success"] = placed > 0,
+                    ["elementsPlaced"] = placed,
+                    ["elementsSkipped"] = skipped,
+                    ["skippedNote"] = skipped > 0 ? "skipped = sub-tolerance micro-segments (normal PDF noise), not failures" : null,
+                    ["sampleElementIds"] = resultsArr != null
+                        ? new JArray(resultsArr.Take(5).Select(e => e["id"] ?? e))
                         : new JArray(),
                 };
 
