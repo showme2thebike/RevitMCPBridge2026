@@ -53,6 +53,15 @@ namespace RevitMCPBridge2026.AgentFramework
         // Private AI (Enterprise): inference routes through the backend to the
         // firm's own AWS Bedrock; no Anthropic key needed on this machine.
         private bool _useInferenceProxy = false;
+        // First-party model names the firm's Private AI cloud can serve
+        // (normalized, from inference-config). null = direct Anthropic — all
+        // picker models available. Used to badge unavailable models honestly.
+        private HashSet<string> _entitledModels = null;
+
+        // "claude-haiku-4-5-20251001" -> "claude-haiku-4-5" (matches the
+        // backend model_map keys, which use undated first-party names)
+        private static string NormalizeModelId(string id) =>
+            System.Text.RegularExpressions.Regex.Replace(id ?? "", @"-\d{8}$", "");
         private string _userFirstName;         // contact_name from /api/auth/verify
         private StartupSummary _startupSummary; // cached at first SendMessage, injected into system prompt
         private string _selectedModel;
@@ -1769,15 +1778,20 @@ namespace RevitMCPBridge2026.AgentFramework
                 FontSize = 14
             };
 
-            // Populate with fallback immediately so the combo is never empty
+            // Populate with fallback immediately so the combo is never empty.
+            // Under Private AI, models the firm's cloud can't serve get an
+            // honest badge — they stay selectable (the proxy falls back to the
+            // best entitled model), but the user is no longer misled.
             void PopulateModels(Dictionary<string, string> models)
             {
                 modelCombo.Items.Clear();
                 foreach (var model in models)
                 {
+                    var unavailable = _useInferenceProxy && _entitledModels != null &&
+                                      !_entitledModels.Contains(NormalizeModelId(model.Key));
                     modelCombo.Items.Add(new System.Windows.Controls.ComboBoxItem
                     {
-                        Content = model.Value,
+                        Content = unavailable ? model.Value + "  — not in your cloud (runs as best available)" : model.Value,
                         Tag = model.Key,
                         IsSelected = model.Key == _selectedModel
                     });
@@ -2805,6 +2819,12 @@ namespace RevitMCPBridge2026.AgentFramework
                         if (_agent != null) _agent.UseInferenceProxy = proxy;
                         SaveConfig(); // persist for keyless startup next session
                     }
+                    // Entitled model list (Private AI only) — used by the model
+                    // picker to badge models the firm's cloud can't serve.
+                    var modelsArr = data["models"] as Newtonsoft.Json.Linq.JArray;
+                    _entitledModels = (proxy && modelsArr != null && modelsArr.Count > 0)
+                        ? new HashSet<string>(modelsArr.Select(m => NormalizeModelId(m.ToString())))
+                        : null;
                 }
             }
             catch { /* keep cached value */ }
