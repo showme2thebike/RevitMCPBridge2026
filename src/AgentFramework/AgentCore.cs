@@ -1111,11 +1111,13 @@ namespace RevitMCPBridge2026.AgentFramework
                         new { type = "text", text = systemPrompt ?? GetDefaultSystemPrompt(), cache_control = new { type = "ephemeral", ttl = "1h" } }
                     };
 
+                    // NOTE: cache_control is a BLOCK-level field (system blocks, last
+                    // tool) — never top-level. Anthropic ignores unknown top-level
+                    // fields but Bedrock's validator 400s the whole request.
                     var requestBody = new
                     {
                         model = _model,
                         max_tokens = 8192,
-                        cache_control = new { type = "ephemeral", ttl = "1h" },
                         system = systemBlock,
                         messages = FormatMessagesForAPI(),
                         tools = FormatToolsForAPI(),
