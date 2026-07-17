@@ -2056,6 +2056,9 @@ namespace RevitMCPBridge2026.AgentFramework
             if (priorHistory != null && priorHistory.Count > 0)
                 _agent.ImportConversationHistory(priorHistory);
             _agent.UseInferenceProxy = _useInferenceProxy;
+            // Re-check Private AI routing at the start of every session — the
+            // fetch updates this agent's UseInferenceProxy before its first call.
+            _agent.OnSessionStart = FetchInferenceConfigAsync;
             _agent.VisualVerifyEnabled = _visualVerifyEnabled;
             var allTools = new System.Collections.Generic.List<ToolDefinition>(ToolDefinitions.GetAllTools());
             _agent.RegisterTools(allTools);

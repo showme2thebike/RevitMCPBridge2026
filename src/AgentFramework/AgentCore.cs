@@ -38,6 +38,13 @@ namespace RevitMCPBridge2026.AgentFramework
         public bool UseInferenceProxy { get; set; } = false;
         public const string InferenceProxyUrl = "https://bimmonkey-production.up.railway.app/api/plugin/claude/messages";
 
+        // Awaited before the first message of each session (panel wires this to
+        // its inference-config fetch). A panel opened before the firm activated
+        // Private AI holds a stale proxy=false and would keep sending content to
+        // api.anthropic.com until Revit restarts — this bounds that window to
+        // one session. Failures are swallowed: the cached flag remains in effect.
+        public Func<Task> OnSessionStart { get; set; }
+
         // ── Session performance guards ────────────────────────────────────────
         // Long sessions were accumulating multi-million-token histories; after
         // any pause past the prompt-cache TTL the full prompt re-writes before
@@ -586,6 +593,10 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 _sessionStartSent = true;
                 _sessionStartTime = DateTime.UtcNow;
+                if (OnSessionStart != null)
+                {
+                    try { await OnSessionStart(); } catch { /* keep cached routing */ }
+                }
                 TelemetryService.Track(_bimMonkeyApiKey, "session_start",
                     revitVersion: _revitVersion, pluginVersion: _pluginVersion);
             }
