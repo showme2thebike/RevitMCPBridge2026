@@ -96,8 +96,78 @@ namespace RevitMCPBridge2026
             bool ok;
             try { ok = JObject.Parse(result)?["success"]?.Value<bool>() == true; }
             catch { ok = false; }
-            TrackScriptExecution(source, scriptName, hash, success: ok, denied: false, durationMs: sw.ElapsedMilliseconds, usedAssemblies: usedAssemblies);
+            TrackScriptExecution(source, scriptName, hash, success: ok, denied: false, durationMs: sw.ElapsedMilliseconds, usedAssemblies: null);
+            // Phase 3 corpus soak (§5.1/§11 test 3.3): shadow-compile against the
+            // strict allowlist off-thread and report whether this script would
+            // survive the strict profile. Fire-and-forget — zero latency impact.
+            if (ok) System.Threading.Tasks.Task.Run(() => StrictProbe(code, usingsArr, hash, source));
             return result;
+        }
+
+        /// <summary>
+        /// Compiles (never runs) the script against the §5.1 strict reference
+        /// allowlist and reports strict_ok + missing-symbol diagnostics. This is
+        /// the direct answer to "would strict mode break this script" — usage
+        /// inference via GetUsedAssemblyReferences over-reports in the Revit
+        /// process (returns ~200 assemblies for a one-liner), so we test instead.
+        /// </summary>
+        private static void StrictProbe(string code, JArray usingsArr, string hash, string source)
+        {
+            try
+            {
+                bool Allowed(string name)
+                {
+                    if (name.StartsWith("Revit", StringComparison.OrdinalIgnoreCase)) return true;
+                    if (name.Equals("mscorlib", StringComparison.OrdinalIgnoreCase) ||
+                        name.Equals("netstandard", StringComparison.OrdinalIgnoreCase) ||
+                        name.Equals("System.Private.CoreLib", StringComparison.OrdinalIgnoreCase)) return true;
+                    if (name.Equals("Newtonsoft.Json", StringComparison.OrdinalIgnoreCase)) return true;
+                    if (!name.StartsWith("System", StringComparison.OrdinalIgnoreCase)) return false;
+                    // §5.2 exclusions stay out even inside System.*
+                    if (name.StartsWith("System.Net", StringComparison.OrdinalIgnoreCase)) return false;
+                    if (name.Equals("System.Diagnostics.Process", StringComparison.OrdinalIgnoreCase)) return false;
+                    if (name.StartsWith("System.Reflection.Emit", StringComparison.OrdinalIgnoreCase)) return false;
+                    return true;
+                }
+
+                var refs = AppDomain.CurrentDomain.GetAssemblies()
+                    .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
+                    .GroupBy(a => a.GetName().Name)
+                    .Select(g => g.First())
+                    .Where(a => Allowed(a.GetName().Name))
+                    .Select(a => { try { return MetadataReference.CreateFromFile(a.Location) as MetadataReference; } catch { return null; } })
+                    .Where(r => r != null)
+                    .ToList();
+
+                var extraUsings = usingsArr != null
+                    ? usingsArr.Values<string>().Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => $"using {s.Trim().TrimEnd(';')};")
+                    : Enumerable.Empty<string>();
+                var defaultUsings = new[]
+                {
+                    "using System;", "using System.Collections.Generic;", "using System.Linq;",
+                    "using Autodesk.Revit.DB;", "using Autodesk.Revit.UI;",
+                    "using Newtonsoft.Json;", "using Newtonsoft.Json.Linq;",
+                };
+                var src = $@"{string.Join("\n", defaultUsings.Concat(extraUsings).Distinct())}
+namespace __StrictProbe__ {{ public static class __S__ {{ public static object Execute(Autodesk.Revit.UI.UIApplication uiApp, Autodesk.Revit.DB.Document doc) {{ {code} }} }} }}";
+                var comp = CSharpCompilation.Create("__strict_probe", new[] { CSharpSyntaxTree.ParseText(src) }, refs,
+                    new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+                var diags = comp.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).Take(3)
+                    .Select(d => d.Id + ": " + d.GetMessage()).ToList();
+
+                RevitMCPBridge2026.AgentFramework.TelemetryService.Track(
+                    RevitMCPBridge.AgentFramework.SessionTokenManager.ApiKey,
+                    "script_strict_probe",
+                    metadata: new
+                    {
+                        script_hash = hash?.Substring(0, Math.Min(16, hash.Length)),
+                        source,
+                        strict_ok = diags.Count == 0,
+                        diagnostics = diags.Count > 0 ? diags : null,
+                    },
+                    toolName: "executeRevitScript");
+            }
+            catch { /* soak telemetry only — never affects anything */ }
         }
 
         /// <summary>Full sha256 hex — matches the server's content_hash convention.</summary>
@@ -194,20 +264,9 @@ namespace __RevitScriptHost__
                 using var ms = new MemoryStream();
                 var emit = compilation.Emit(ms);
 
-                // Phase 3 corpus soak: record which assemblies this script's
-                // compilation ACTUALLY bound — the data that proves the strict
-                // reference allowlist won't break existing scripts (§5.1).
-                try
-                {
-                    usedAssemblies = compilation.GetUsedAssemblyReferences()
-                        .Select(r => (r as PortableExecutableReference)?.FilePath ?? r.Display)
-                        .Where(p => !string.IsNullOrEmpty(p))
-                        .Select(p => Path.GetFileNameWithoutExtension(p))
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-                        .ToList();
-                }
-                catch { /* telemetry only — never affects execution */ }
+                // NOTE: GetUsedAssemblyReferences over-reports in the Revit
+                // process (~200 assemblies for a one-liner) — corpus data comes
+                // from StrictProbe shadow compilation instead (§5.1).
 
                 if (!emit.Success)
                 {
