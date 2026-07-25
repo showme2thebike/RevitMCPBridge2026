@@ -76,7 +76,7 @@ namespace RevitMCPBridge.Commands
             var resultJson = RevitMCPBridge2026.ScriptMethods.ExecuteScriptCore(uiApp,
                 script["code"]?.ToString() ?? "",
                 script["usings"] as JArray ?? new JArray(),
-                "firm",
+                script["is_platform"]?.Value<bool>() == true ? "platform" : "firm",
                 script["name"]?.ToString());
             var result     = JObject.Parse(resultJson);
 

@@ -3861,7 +3861,7 @@ namespace RevitMCPBridge
                                 RevitMCPBridge2026.ScriptMethods.ExecuteScriptCore(uiApp,
                                     execParams["code"]?.ToString() ?? "",
                                     execParams["usings"] as Newtonsoft.Json.Linq.JArray,
-                                    "firm",
+                                    execParams["is_platform"]?.Value<bool>() == true ? "platform" : "firm",
                                     execParams["name"]?.ToString()),
                                 600_000)); // scripts can run long ops — match executeRevitScript's timeout
 

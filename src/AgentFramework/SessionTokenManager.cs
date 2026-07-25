@@ -59,6 +59,15 @@ namespace RevitMCPBridge.AgentFramework
             return p?[field]?.ToString();
         }
 
+        /// <summary>
+        /// Content hashes (full sha256 hex) of platform scripts this firm has
+        /// accepted — client-side belt-and-braces under the server's acceptance
+        /// gate. Null when the server didn't send the list (older API): callers
+        /// must SKIP the check on null rather than deny, to avoid false blocks.
+        /// </summary>
+        public static System.Collections.Generic.HashSet<string> AcceptedScriptHashes => _acceptedHashes;
+        private static System.Collections.Generic.HashSet<string> _acceptedHashes;
+
         public static void Start(string bimMonkeyApiKey)
         {
             _apiKey = bimMonkeyApiKey;
@@ -171,6 +180,16 @@ namespace RevitMCPBridge.AgentFramework
                     // for the engine-entry gate. Kept on refresh failure (last-
                     // known policy per architecture §4 offline semantics).
                     if (obj["scriptPolicy"] is JObject pol) _scriptPolicy = pol;
+                    if (obj["acceptedScripts"] is JArray acc)
+                    {
+                        var set = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var a in acc)
+                        {
+                            var h = a?["content_hash"]?.ToString();
+                            if (!string.IsNullOrEmpty(h)) set.Add(h);
+                        }
+                        _acceptedHashes = set;
+                    }
                 }
                 else
                 {

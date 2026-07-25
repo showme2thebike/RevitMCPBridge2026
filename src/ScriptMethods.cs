@@ -65,6 +65,15 @@ namespace RevitMCPBridge2026
                 // has fetched its policy; absence means we cannot verify it.
                 denial = "Script execution is blocked because your firm's AI governance policy could not be verified (no connection to BIM Monkey). This is a policy check, not a script error — restart Revit once the connection is back.";
             }
+            else if (source == "platform"
+                     && RevitMCPBridge.AgentFramework.SessionTokenManager.AcceptedScriptHashes != null
+                     && !RevitMCPBridge.AgentFramework.SessionTokenManager.AcceptedScriptHashes.Contains(hash))
+            {
+                // Belt-and-braces under the server's acceptance gate: platform
+                // content must match a hash this firm accepted. Null list (older
+                // server) skips the check — the server gate still enforces.
+                denial = "This platform script doesn't match a version your firm has accepted. Re-accept it in the Platform Library (app.bimmonkey.ai/scripts), then restart the server.";
+            }
             else if (value == "disabled")
             {
                 // Wording is deliberately policy-conditional: this is a current
@@ -77,20 +86,21 @@ namespace RevitMCPBridge2026
 
             if (denial != null)
             {
-                TrackScriptExecution(source, scriptName, hash, success: null, denied: true, durationMs: 0);
+                TrackScriptExecution(source, scriptName, hash, success: null, denied: true, durationMs: 0, usedAssemblies: null);
                 return ResponseBuilder.Error(denial, "POLICY_DENIED").Build();
             }
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var result = ExecuteOnEngine(uiApp, code, usingsArr);
+            var result = ExecuteOnEngine(uiApp, code, usingsArr, out var usedAssemblies);
             sw.Stop();
             bool ok;
             try { ok = JObject.Parse(result)?["success"]?.Value<bool>() == true; }
             catch { ok = false; }
-            TrackScriptExecution(source, scriptName, hash, success: ok, denied: false, durationMs: sw.ElapsedMilliseconds);
+            TrackScriptExecution(source, scriptName, hash, success: ok, denied: false, durationMs: sw.ElapsedMilliseconds, usedAssemblies: usedAssemblies);
             return result;
         }
 
+        /// <summary>Full sha256 hex — matches the server's content_hash convention.</summary>
         private static string ComputeScriptHash(string code)
         {
             try
@@ -98,20 +108,22 @@ namespace RevitMCPBridge2026
                 using (var sha = System.Security.Cryptography.SHA256.Create())
                 {
                     var bytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(code ?? ""));
-                    return BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant().Substring(0, 16);
+                    return BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
                 }
             }
             catch { return null; }
         }
 
-        private static void TrackScriptExecution(string source, string scriptName, string hash, bool? success, bool denied, long durationMs)
+        private static void TrackScriptExecution(string source, string scriptName, string hash, bool? success, bool denied, long durationMs, System.Collections.Generic.List<string> usedAssemblies)
         {
             try
             {
                 RevitMCPBridge2026.AgentFramework.TelemetryService.Track(
                     RevitMCPBridge.AgentFramework.SessionTokenManager.ApiKey,
                     "script_execution",
-                    metadata: new { source, script_name = scriptName, script_hash = hash, denied = denied ? (bool?)true : null },
+                    // Telemetry hash stays truncated (16) for log/CSV readability;
+                    // used_assemblies feeds the Phase 3 strict-allowlist corpus soak.
+                    metadata: new { source, script_name = scriptName, script_hash = hash?.Substring(0, Math.Min(16, hash.Length)), denied = denied ? (bool?)true : null, used_assemblies = usedAssemblies },
                     toolName: "executeRevitScript",
                     durationMs: durationMs,
                     success: success);
@@ -119,8 +131,9 @@ namespace RevitMCPBridge2026
             catch { /* telemetry must never affect execution */ }
         }
 
-        private static string ExecuteOnEngine(UIApplication uiApp, string code, JArray usingsArr)
+        private static string ExecuteOnEngine(UIApplication uiApp, string code, JArray usingsArr, out System.Collections.Generic.List<string> usedAssemblies)
         {
+            usedAssemblies = null;
             try
             {
                 var extraUsings = usingsArr != null
@@ -180,6 +193,21 @@ namespace __RevitScriptHost__
 
                 using var ms = new MemoryStream();
                 var emit = compilation.Emit(ms);
+
+                // Phase 3 corpus soak: record which assemblies this script's
+                // compilation ACTUALLY bound — the data that proves the strict
+                // reference allowlist won't break existing scripts (§5.1).
+                try
+                {
+                    usedAssemblies = compilation.GetUsedAssemblyReferences()
+                        .Select(r => (r as PortableExecutableReference)?.FilePath ?? r.Display)
+                        .Where(p => !string.IsNullOrEmpty(p))
+                        .Select(p => Path.GetFileNameWithoutExtension(p))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+                }
+                catch { /* telemetry only — never affects execution */ }
 
                 if (!emit.Success)
                 {

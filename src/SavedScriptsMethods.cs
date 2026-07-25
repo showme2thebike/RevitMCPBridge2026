@@ -56,7 +56,7 @@ namespace RevitMCPBridge2026
                     uiApp,
                     script["code"]?.ToString() ?? "",
                     script["usings"] as JArray ?? new JArray(),
-                    "firm",
+                    script["is_platform"]?.Value<bool>() == true ? "platform" : "firm",
                     script["name"]?.ToString());
 
                 LogRunIfSuccessful(apiKey, scriptId, result);
@@ -104,9 +104,10 @@ namespace RevitMCPBridge2026
 
                 var execParams = new JObject
                 {
-                    ["code"]   = script["code"]?.ToString() ?? "",
-                    ["usings"] = script["usings"] ?? new JArray(),
-                    ["name"]   = script["name"]?.ToString()
+                    ["code"]        = script["code"]?.ToString() ?? "",
+                    ["usings"]      = script["usings"] ?? new JArray(),
+                    ["name"]        = script["name"]?.ToString(),
+                    ["is_platform"] = script["is_platform"]?.Value<bool>() == true
                 };
                 var result = await executeInRevit(execParams).ConfigureAwait(false);
 
