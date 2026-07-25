@@ -3856,7 +3856,13 @@ namespace RevitMCPBridge
                     case "runSavedScript":
                         return await RevitMCPBridge2026.SavedScriptsMethods.RunSavedScriptAsync(parameters,
                             execParams => ExecuteInRevitContext(uiApp =>
-                                RevitMCPBridge2026.ScriptMethods.ExecuteRevitScript(uiApp, execParams),
+                                // Governed engine entry, source "firm" — the fetched
+                                // library script is NOT gated as adhoc (architecture §4).
+                                RevitMCPBridge2026.ScriptMethods.ExecuteScriptCore(uiApp,
+                                    execParams["code"]?.ToString() ?? "",
+                                    execParams["usings"] as Newtonsoft.Json.Linq.JArray,
+                                    "firm",
+                                    execParams["name"]?.ToString()),
                                 600_000)); // scripts can run long ops — match executeRevitScript's timeout
 
                     default:

@@ -50,13 +50,14 @@ namespace RevitMCPBridge2026
                     return ResponseBuilder.Error($"Failed to fetch script: {ex.Message}").Build();
                 }
 
-                // Execute via existing Roslyn engine
-                var execParams = new JObject
-                {
-                    ["code"]   = script["code"]?.ToString() ?? "",
-                    ["usings"] = script["usings"] ?? new JArray()
-                };
-                var result = ScriptMethods.ExecuteRevitScript(uiApp, execParams);
+                // Execute via the governed engine entry (architecture §4) —
+                // source "firm" so the firm_scripts policy applies, not adhoc.
+                var result = ScriptMethods.ExecuteScriptCore(
+                    uiApp,
+                    script["code"]?.ToString() ?? "",
+                    script["usings"] as JArray ?? new JArray(),
+                    "firm",
+                    script["name"]?.ToString());
 
                 LogRunIfSuccessful(apiKey, scriptId, result);
 
@@ -104,7 +105,8 @@ namespace RevitMCPBridge2026
                 var execParams = new JObject
                 {
                     ["code"]   = script["code"]?.ToString() ?? "",
-                    ["usings"] = script["usings"] ?? new JArray()
+                    ["usings"] = script["usings"] ?? new JArray(),
+                    ["name"]   = script["name"]?.ToString()
                 };
                 var result = await executeInRevit(execParams).ConfigureAwait(false);
 

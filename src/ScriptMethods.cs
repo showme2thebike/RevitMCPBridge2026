@@ -36,14 +36,92 @@ namespace RevitMCPBridge2026
                           "(13) No local functions inside Execute() — nested method definitions cause null-reference exceptions at runtime; use inline loops or lambdas instead.")]
         public static string ExecuteRevitScript(UIApplication uiApp, JObject parameters)
         {
+            // MCP entry point — always source "adhoc". SavedScriptsMethods calls
+            // ExecuteScriptCore directly with source "firm"; the source can NOT be
+            // influenced through MCP parameters (governance test 1.1: callMCPMethod
+            // indirection lands here and is gated identically).
+            var adhocCode = parameters?["code"]?.ToString();
+            if (string.IsNullOrWhiteSpace(adhocCode))
+                return ResponseBuilder.Error("code parameter is required").Build();
+            return ExecuteScriptCore(uiApp, adhocCode, parameters["usings"] as JArray, "adhoc", null);
+        }
+
+        /// <summary>
+        /// Engine-entry policy gate + audited execution
+        /// (docs/script-governance-architecture.md §4). EVERY path to the Roslyn
+        /// engine funnels through here — do not add another compile/execute path.
+        /// </summary>
+        internal static string ExecuteScriptCore(UIApplication uiApp, string code, JArray usingsArr, string source, string scriptName)
+        {
+            var policyField = source == "adhoc" ? "adhoc_execution" : "firm_scripts";
+            var policy = RevitMCPBridge.AgentFramework.SessionTokenManager.ScriptPolicy;
+            var value = RevitMCPBridge.AgentFramework.SessionTokenManager.ScriptPolicyValue(policyField);
+            var hash = ComputeScriptHash(code);
+
+            string denial = null;
+            if (policy == null)
+            {
+                // Fail closed (test 1.2): a session healthy enough to run scripts
+                // has fetched its policy; absence means we cannot verify it.
+                denial = "Script execution is unavailable: your firm's AI governance policy could not be verified (no connection to BIM Monkey). Check the connection, restart the server, and try again.";
+            }
+            else if (value == "disabled")
+            {
+                denial = source == "adhoc"
+                    ? "Your firm's AI governance policy has AI-written script execution disabled. A firm admin can change this at app.bimmonkey.ai/settings/ai-governance. Do not retry this call — use the fixed MCP tools instead."
+                    : "Your firm's AI governance policy has saved scripts disabled. A firm admin can change this at app.bimmonkey.ai/settings/ai-governance. Do not retry this call.";
+            }
+
+            if (denial != null)
+            {
+                TrackScriptExecution(source, scriptName, hash, success: null, denied: true, durationMs: 0);
+                return ResponseBuilder.Error(denial).Build();
+            }
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var result = ExecuteOnEngine(uiApp, code, usingsArr);
+            sw.Stop();
+            bool ok;
+            try { ok = JObject.Parse(result)?["success"]?.Value<bool>() == true; }
+            catch { ok = false; }
+            TrackScriptExecution(source, scriptName, hash, success: ok, denied: false, durationMs: sw.ElapsedMilliseconds);
+            return result;
+        }
+
+        private static string ComputeScriptHash(string code)
+        {
             try
             {
-                var code = parameters["code"]?.ToString();
-                if (string.IsNullOrWhiteSpace(code))
-                    return ResponseBuilder.Error("code parameter is required").Build();
+                using (var sha = System.Security.Cryptography.SHA256.Create())
+                {
+                    var bytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(code ?? ""));
+                    return BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant().Substring(0, 16);
+                }
+            }
+            catch { return null; }
+        }
 
-                var extraUsings = parameters["usings"] is JArray arr
-                    ? arr.Values<string>()
+        private static void TrackScriptExecution(string source, string scriptName, string hash, bool? success, bool denied, long durationMs)
+        {
+            try
+            {
+                RevitMCPBridge2026.AgentFramework.TelemetryService.Track(
+                    RevitMCPBridge.AgentFramework.SessionTokenManager.ApiKey,
+                    "script_execution",
+                    metadata: new { source, script_name = scriptName, script_hash = hash, denied = denied ? (bool?)true : null },
+                    toolName: "executeRevitScript",
+                    durationMs: durationMs,
+                    success: success);
+            }
+            catch { /* telemetry must never affect execution */ }
+        }
+
+        private static string ExecuteOnEngine(UIApplication uiApp, string code, JArray usingsArr)
+        {
+            try
+            {
+                var extraUsings = usingsArr != null
+                    ? usingsArr.Values<string>()
                          .Where(s => !string.IsNullOrWhiteSpace(s))
                          .Select(s => $"using {s.Trim().TrimEnd(';')};")
                     : Enumerable.Empty<string>();

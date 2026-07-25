@@ -71,12 +71,13 @@ namespace RevitMCPBridge.Commands
                 return Result.Failed;
             }
 
-            var execParams = new JObject
-            {
-                ["code"]   = script["code"]?.ToString() ?? "",
-                ["usings"] = script["usings"] ?? new JArray()
-            };
-            var resultJson = RevitMCPBridge2026.ScriptMethods.ExecuteRevitScript(uiApp, execParams);
+            // Governed engine entry, source "firm" — ribbon-run library scripts
+            // are firm scripts, not adhoc (architecture §4).
+            var resultJson = RevitMCPBridge2026.ScriptMethods.ExecuteScriptCore(uiApp,
+                script["code"]?.ToString() ?? "",
+                script["usings"] as JArray ?? new JArray(),
+                "firm",
+                script["name"]?.ToString());
             var result     = JObject.Parse(resultJson);
 
             var success = result["success"]?.Value<bool>() ?? false;

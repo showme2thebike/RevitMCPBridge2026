@@ -28,6 +28,7 @@ namespace RevitMCPBridge.AgentFramework
         private static bool _subscriptionExpired;
         private static string _contentKey;
         private static string _instructions;
+        private static JObject _scriptPolicy;
 
         private static readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(12) };
         private static Timer _retryTimer;
@@ -42,6 +43,21 @@ namespace RevitMCPBridge.AgentFramework
         public static string ContentKey => _contentKey;
         public static string Instructions => _instructions;
         public static string ApiKey => _apiKey;
+
+        /// <summary>
+        /// Firm script-governance policy delivered with the session
+        /// (docs/script-governance-architecture.md §4). Null until the first
+        /// successful session fetch — disabled-capable surfaces fail CLOSED on
+        /// null (test 1.2): a session valid enough to run scripts has fetched it.
+        /// </summary>
+        public static JObject ScriptPolicy => _scriptPolicy;
+
+        /// <summary>Returns a policy field value, or null when no policy has been fetched.</summary>
+        public static string ScriptPolicyValue(string field)
+        {
+            var p = _scriptPolicy;
+            return p?[field]?.ToString();
+        }
 
         public static void Start(string bimMonkeyApiKey)
         {
@@ -150,6 +166,11 @@ namespace RevitMCPBridge.AgentFramework
 
                     var newInstructions = obj["instructions"]?.ToString();
                     if (!string.IsNullOrEmpty(newInstructions)) _instructions = newInstructions;
+
+                    // Script governance policy rides the session payload; cache
+                    // for the engine-entry gate. Kept on refresh failure (last-
+                    // known policy per architecture §4 offline semantics).
+                    if (obj["scriptPolicy"] is JObject pol) _scriptPolicy = pol;
                 }
                 else
                 {
