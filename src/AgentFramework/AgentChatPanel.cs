@@ -4047,6 +4047,13 @@ namespace RevitMCPBridge2026.AgentFramework
                             {
                                 var error = parsed["error"]?.ToString() ?? "Unknown error";
 
+                                // Governance denials are policy decisions, never transient —
+                                // exactly one attempt, no retry (§11 polish item).
+                                if (parsed["errorCode"]?.ToString() == "POLICY_DENIED")
+                                {
+                                    return response;
+                                }
+
                                 // Don't retry method-level errors (they'll fail again)
                                 if (!IsRetryableError(error))
                                 {
@@ -4133,6 +4140,7 @@ namespace RevitMCPBridge2026.AgentFramework
             if (lower.Contains("required")) return false;
             if (lower.Contains("does not exist")) return false;
             if (lower.Contains("permission")) return false;
+            if (lower.Contains("governance policy")) return false; // policy denials: belt-and-braces (primary check is errorCode POLICY_DENIED)
 
             return true; // Default to retryable
         }

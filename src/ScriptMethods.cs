@@ -63,19 +63,22 @@ namespace RevitMCPBridge2026
             {
                 // Fail closed (test 1.2): a session healthy enough to run scripts
                 // has fetched its policy; absence means we cannot verify it.
-                denial = "Script execution is unavailable: your firm's AI governance policy could not be verified (no connection to BIM Monkey). Check the connection, restart the server, and try again.";
+                denial = "Script execution is blocked because your firm's AI governance policy could not be verified (no connection to BIM Monkey). This is a policy check, not a script error — restart Revit once the connection is back.";
             }
             else if (value == "disabled")
             {
+                // Wording is deliberately policy-conditional: this is a current
+                // SETTING, not a permanent fact — the agent must not learn a
+                // durable "scripts always fail here" rule from it (§11 polish).
                 denial = source == "adhoc"
-                    ? "Your firm's AI governance policy has AI-written script execution disabled. A firm admin can change this at app.bimmonkey.ai/settings/ai-governance. Do not retry this call — use the fixed MCP tools instead."
-                    : "Your firm's AI governance policy has saved scripts disabled. A firm admin can change this at app.bimmonkey.ai/settings/ai-governance. Do not retry this call.";
+                    ? "AI-written script execution is currently disabled by your firm's AI governance policy. This is a changeable setting, not an error — do not retry now and do not conclude scripts never work here. A firm admin can enable it at app.bimmonkey.ai/settings/ai-governance; after the policy changes and the session restarts, script execution works again. Use the fixed MCP tools for now."
+                    : "Saved scripts are currently disabled by your firm's AI governance policy. This is a changeable setting, not an error — do not retry now and do not conclude saved scripts never work here. A firm admin can enable them at app.bimmonkey.ai/settings/ai-governance; after the policy changes and the session restarts, saved scripts run again.";
             }
 
             if (denial != null)
             {
                 TrackScriptExecution(source, scriptName, hash, success: null, denied: true, durationMs: 0);
-                return ResponseBuilder.Error(denial).Build();
+                return ResponseBuilder.Error(denial, "POLICY_DENIED").Build();
             }
 
             var sw = System.Diagnostics.Stopwatch.StartNew();

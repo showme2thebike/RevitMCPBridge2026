@@ -30,6 +30,17 @@ namespace RevitMCPBridge.Commands
 
                 server.Start();
 
+                // Refresh the session (token + firm AI-governance policy) so a
+                // Stop/Start cycle picks up policy changes — users reasonably
+                // expect "restart the server" to apply new settings (§11 polish).
+                var bmKey = RevitMCPBridge.AgentFramework.SessionTokenManager.ApiKey
+                            ?? RevitMCPBridge.AgentFramework.SessionTokenManager.ReadBimMonkeyApiKey();
+                if (!string.IsNullOrEmpty(bmKey))
+                {
+                    RevitMCPBridge.AgentFramework.SessionTokenManager.Stop();
+                    RevitMCPBridge.AgentFramework.SessionTokenManager.Start(bmKey);
+                }
+
                 var dialog = new TaskDialog("Start Server");
                 dialog.MainContent = "BIM Monkey MCP server starting. The server restarts automatically when you open a new project.";
                 dialog.MainIcon = TaskDialogIcon.TaskDialogIconInformation;

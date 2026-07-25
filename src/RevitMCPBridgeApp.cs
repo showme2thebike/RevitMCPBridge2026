@@ -185,10 +185,14 @@ namespace RevitMCPBridge
                     };
                 };
                 
-                // Initialize logger
+                // Initialize logger — log under the assembly's own Revit-year folder
+                // (RevitMCPBridge2027.dll → Addins\2027\Logs), not a hardcoded year.
+                var revitYear = System.Text.RegularExpressions.Regex.Match(
+                    typeof(RevitMCPBridgeApp).Assembly.GetName().Name ?? "", @"\d{4}$").Value;
+                if (string.IsNullOrEmpty(revitYear)) revitYear = "2026";
                 var logPath = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "Autodesk", "Revit", "Addins", "2026", "Logs",
+                    "Autodesk", "Revit", "Addins", revitYear, "Logs",
                     $"mcp_{DateTime.Now:yyyyMMdd}.log");
                 
                 Directory.CreateDirectory(Path.GetDirectoryName(logPath));
