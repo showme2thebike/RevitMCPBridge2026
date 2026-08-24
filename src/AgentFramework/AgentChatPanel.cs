@@ -44,6 +44,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private Border _statusStrip;
         private System.Windows.Threading.DispatcherTimer _thinkingTimer;
         private DateTime _thinkingStartTime;
+        private DateTime _lastActivityTime; // last step/tool event — quiet-pause messages key off this, not session start
 
         // Agent
         private AgentCore _agent;
@@ -7342,6 +7343,9 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             _progressPanel.Visibility = Visibility.Visible;
             _progressTitle.Text = title;
             _progressDetail.Text = "";
+            // Every ShowProgress call marks a new step — the quiet-pause clock restarts here
+            // so reassurance messages reflect the current pause, not total session time.
+            _lastActivityTime = DateTime.Now;
             // Only (re)start the timer if it isn't already running — OnThinking fires on every
             // tool loop and must not reset the start time mid-session.
             bool alreadyRunning = _thinkingTimer != null && _thinkingTimer.IsEnabled;
@@ -7377,19 +7381,26 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                             _statusStrip.Background = executing
                                 ? new SolidColorBrush(Color.FromRgb(229, 57, 53))   // red — Revit API held
                                 : new SolidColorBrush(Color.FromRgb(255, 152, 0));  // amber — Claude thinking
+                        // Revit executing counts as activity — a quiet pause only starts once it ends.
+                        if (executing) _lastActivityTime = DateTime.Now;
                         // Long quiet waits are usually Claude's (invisible) thinking phase on a
                         // heavy session, not a hang — say so, or users kill healthy sessions.
+                        // Thresholds key off the CURRENT pause (_lastActivityTime), not session
+                        // start, so the message never appears right after a quick step.
                         // Only touch the detail line when it's empty or ours (tool progress owns it otherwise).
                         if (!executing && _progressDetail != null)
                         {
+                            var quiet = (int)(DateTime.Now - _lastActivityTime).TotalSeconds;
                             var d = _progressDetail.Text ?? "";
                             bool ours = d.Length == 0 || d.StartsWith("Claude is thinking") || d.StartsWith("Still going");
                             if (ours)
                             {
-                                if (elapsed >= 300)
+                                if (quiet >= 300)
                                     _progressDetail.Text = "Still going — if nothing has happened by ~8 minutes, press Stop and resend.";
-                                else if (elapsed >= 45)
+                                else if (quiet >= 45)
                                     _progressDetail.Text = "Claude is thinking through a complex step — multi-minute quiet pauses are normal on large sessions.";
+                                else if (d.Length > 0)
+                                    _progressDetail.Text = ""; // pause ended — clear a stale reassurance line
                             }
                         }
                     };
@@ -7403,6 +7414,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
         private void UpdateProgress(string detail)
         {
             _progressDetail.Text = detail;
+            _lastActivityTime = DateTime.Now; // tool progress = activity
         }
 
         private void HideProgress()
