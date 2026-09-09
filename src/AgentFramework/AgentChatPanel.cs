@@ -202,7 +202,7 @@ namespace RevitMCPBridge2026.AgentFramework
             }
 
             // Always push model snapshot on load — independent of session/greeting path
-            Loaded += (s, e) => { TryPushModelSnapshot(); TrySyncKnowledgeFiles(); };
+            Loaded += (s, e) => { TryPushModelSnapshot(); TrySyncKnowledgeFiles(); TryRestoreAgentState(); };
 
             // Diagnostic: confirm constructor ran and Loaded handler registered
             try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "snapshot_debug.txt"), $"{DateTime.Now:o} Constructor ran, Loaded handler registered\r\n"); } catch { }
@@ -2735,6 +2735,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 Directory.CreateDirectory(Path.GetDirectoryName(PreferencesPath));
                 File.WriteAllText(PreferencesPath, exportJson);
                 System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Preferences saved to {PreferencesPath}");
+                TryPushAgentState("preferences", PreferencesPath);
             }
             catch (Exception ex)
             {
@@ -5044,6 +5045,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     Directory.CreateDirectory(MemoryDir);
                 }
                 File.WriteAllText(MemoryFile, JsonConvert.SerializeObject(memories, Formatting.Indented));
+                TryPushAgentState("memories", MemoryFile);
             }
             catch { }
         }
@@ -5378,6 +5380,73 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 try { File.AppendAllText(log, $"{DateTime.Now:o} outer error: {ex.Message}\r\n"); } catch { }
             }
+        }
+
+        // ── Agent state backup (memories.json / preferences.json) ──────────────────
+        // Server copy of the per-user local state so a reinstall or a new machine
+        // restores the agent. Push: after every local save (fire-and-forget).
+        // Restore: on load, only when the local file is absent, so an existing
+        // install is never overwritten by the server copy.
+        private const string AgentStateApiBase = "https://bimmonkey-production.up.railway.app/api/firms/agent-state/";
+
+        private void TryPushAgentState(string kind, string localPath)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+            System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    if (!File.Exists(localPath)) return;
+                    var json = File.ReadAllText(localPath, System.Text.Encoding.UTF8);
+                    if (string.IsNullOrWhiteSpace(json)) return;
+                    JToken payload;
+                    try { payload = JToken.Parse(json); } catch { return; } // never push a corrupt file
+                    var body = new JObject { ["payload"] = payload }.ToString(Formatting.None);
+                    using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    var content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
+                    await client.PutAsync(AgentStateApiBase + kind, content);
+                }
+                catch { /* fire and forget */ }
+            });
+        }
+
+        private void TryRestoreAgentState()
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+            var targets = new (string kind, string path)[]
+            {
+                ("memories", MemoryFile),
+                ("preferences", PreferencesPath),
+            };
+            System.Threading.Tasks.Task.Run(async () =>
+            {
+                var restoredAny = false;
+                foreach (var (kind, path) in targets)
+                {
+                    try
+                    {
+                        if (File.Exists(path) && new FileInfo(path).Length > 2) continue; // local copy wins
+                        using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                        var resp = await client.GetAsync(AgentStateApiBase + kind);
+                        if (!resp.IsSuccessStatusCode) continue; // 404 = nothing saved yet
+                        var doc = JObject.Parse(await resp.Content.ReadAsStringAsync());
+                        var payload = doc["payload"];
+                        if (payload == null) continue;
+                        Directory.CreateDirectory(Path.GetDirectoryName(path));
+                        File.WriteAllText(path, payload.ToString(Formatting.Indented), System.Text.Encoding.UTF8);
+                        restoredAny = true;
+                        System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Agent state '{kind}' restored from server to {path}");
+                    }
+                    catch { /* fire and forget */ }
+                }
+                if (restoredAny)
+                {
+                    // Re-run the in-process load so the restored state applies this session.
+                    try { await LoadPreferencesAndCorrectionsAsync(); } catch { }
+                }
+            });
         }
 
         private void TrySyncKnowledgeFiles()
