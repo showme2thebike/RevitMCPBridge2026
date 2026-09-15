@@ -89,6 +89,24 @@ namespace RevitMCPBridge
                     Log.Warning(dpEx, "Failed to register Banana Chat dockable pane (non-fatal)");
                 }
 
+                // Follow Revit's Light/Dark UI theme in Banana Chat (Revit 2024+ API)
+                try
+                {
+                    RevitMCPBridge2026.AgentFramework.ChatTheme.SyncWithRevit();
+                    application.ThemeChanged += (sender, args) =>
+                    {
+                        // Fires for UI-theme and canvas-theme changes alike; re-reading the UI theme is cheap.
+                        try { RevitMCPBridge2026.AgentFramework.ChatTheme.SyncWithRevit(); }
+                        catch (Exception tex) { Log.Debug(tex, "ThemeChanged handler failed"); }
+                    };
+                    Log.Information("Banana Chat theme sync enabled (current: {Theme})",
+                        RevitMCPBridge2026.AgentFramework.ChatTheme.IsDark ? "Dark" : "Light");
+                }
+                catch (Exception themeEx)
+                {
+                    Log.Warning(themeEx, "Theme sync unavailable — Banana Chat stays dark (non-fatal)");
+                }
+
                 // Store UI application reference and initialize ChangeTracker
                 application.ControlledApplication.ApplicationInitialized += (sender, args) =>
                 {

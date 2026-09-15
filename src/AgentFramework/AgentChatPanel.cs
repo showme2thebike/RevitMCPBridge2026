@@ -159,7 +159,7 @@ namespace RevitMCPBridge2026.AgentFramework
             // Lock to the document that was active when the panel opened
             _lockedDocTitle = uiApp?.ActiveUIDocument?.Document?.Title;
 
-            Background = new SolidColorBrush(Color.FromRgb(30, 30, 30));
+            Background = ChatTheme.Bg;
 
             // Build UI
             BuildUI();
@@ -361,8 +361,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 if (_pipePauseButton != null)
                 {
                     _pipePauseButton.Content = "⏸";
-                    _pipePauseButton.Background = new System.Windows.Media.SolidColorBrush(
-                        System.Windows.Media.Color.FromRgb(85, 85, 85));
+                    _pipePauseButton.Background = ChatTheme.Neutral;
                 }
                 if (_statusText != null) _statusText.Text = "Ready";
                 if (_statusStrip != null) _statusStrip.Background = Brushes.Transparent;
@@ -381,7 +380,7 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             var border = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
+                Background = ChatTheme.Surface,
                 Padding = new Thickness(14, 10, 14, 10)
             };
 
@@ -396,7 +395,7 @@ namespace RevitMCPBridge2026.AgentFramework
             var title = new TextBlock
             {
                 Text = "Banana Chat",
-                Foreground = Brushes.White,
+                Foreground = ChatTheme.TextPrimary,
                 FontSize = 15,
                 FontWeight = FontWeights.SemiBold,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -415,7 +414,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     Padding = new Thickness(7, 3, 7, 3),
                     Margin = new Thickness(4, 0, 0, 0),
                     FontSize = 13,
-                    Background = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
+                    Background = ChatTheme.Neutral,
                     Foreground = Brushes.White,
                     BorderThickness = new Thickness(0),
                     Cursor = System.Windows.Input.Cursors.Hand,
@@ -441,15 +440,15 @@ namespace RevitMCPBridge2026.AgentFramework
             _statusText = new TextBlock
             {
                 Text = "Ready",
-                Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160)),
+                Foreground = ChatTheme.TextSecondary,
                 FontSize = 12,
                 Margin = new Thickness(0, 4, 0, 0)
             };
             outer.Children.Add(_statusText);
 
-            _elapsedText = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)), FontSize = 11 };
-            _tokenText   = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)), FontSize = 11, Margin = new Thickness(10, 0, 0, 0) };
-            _costText    = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)), FontSize = 11, Margin = new Thickness(10, 0, 0, 0) };
+            _elapsedText = new TextBlock { Foreground = ChatTheme.TextMuted, FontSize = 11 };
+            _tokenText   = new TextBlock { Foreground = ChatTheme.TextMuted, FontSize = 11, Margin = new Thickness(10, 0, 0, 0) };
+            _costText    = new TextBlock { Foreground = ChatTheme.TextMuted, FontSize = 11, Margin = new Thickness(10, 0, 0, 0) };
             var statsRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 0) };
             statsRow.Children.Add(_elapsedText);
             statsRow.Children.Add(_tokenText);
@@ -459,7 +458,7 @@ namespace RevitMCPBridge2026.AgentFramework
             _lockedDocLabel = new TextBlock
             {
                 Text = string.IsNullOrEmpty(_lockedDocTitle) ? "Model: none" : $"Model: {_lockedDocTitle}",
-                Foreground = new SolidColorBrush(Color.FromRgb(100, 180, 100)),
+                Foreground = ChatTheme.Green,
                 FontSize = 11,
                 Margin = new Thickness(0, 2, 0, 0),
                 TextTrimming = TextTrimming.CharacterEllipsis,
@@ -475,7 +474,7 @@ namespace RevitMCPBridge2026.AgentFramework
             var border = new Border
             {
                 Margin = new Thickness(8),
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
+                Background = ChatTheme.Surface,
                 CornerRadius = new CornerRadius(8)
             };
 
@@ -498,7 +497,7 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 Margin = new Thickness(8, 0, 8, 8),
                 Padding = new Thickness(12),
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
+                Background = ChatTheme.Surface,
                 CornerRadius = new CornerRadius(8),
                 Visibility = Visibility.Collapsed
             };
@@ -594,7 +593,7 @@ namespace RevitMCPBridge2026.AgentFramework
             _progressTitle = new TextBlock
             {
                 Text = "Working...",
-                Foreground = Brushes.White,
+                Foreground = ChatTheme.TextPrimary,
                 FontWeight = FontWeights.SemiBold,
             };
             titleRow.Children.Add(_progressTitle);
@@ -613,7 +612,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
             _progressDetail = new TextBlock
             {
-                Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160)),
+                Foreground = ChatTheme.TextSecondary,
                 FontSize = 12,
                 TextWrapping = TextWrapping.Wrap
             };
@@ -622,7 +621,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
             _timerText = new TextBlock
             {
-                Foreground = new SolidColorBrush(Color.FromRgb(110, 110, 110)),
+                Foreground = ChatTheme.TextMuted,
                 FontSize = 12,
                 VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(8, 0, 0, 0)
@@ -642,7 +641,7 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             var border = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
+                Background = ChatTheme.Surface,
                 Padding = new Thickness(12)
             };
 
@@ -660,8 +659,8 @@ namespace RevitMCPBridge2026.AgentFramework
             // Paste-save banner — collapses until a large text paste is detected
             _pasteBanner = new Border
             {
-                Background  = new SolidColorBrush(Color.FromRgb(30, 55, 30)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(60, 110, 60)),
+                Background  = ChatTheme.SuccessBg,
+                BorderBrush = ChatTheme.SuccessBorder,
                 BorderThickness = new Thickness(0, 1, 0, 1),
                 Padding    = new Thickness(10, 7, 10, 7),
                 Margin     = new Thickness(0, 0, 0, 6),
@@ -671,7 +670,7 @@ namespace RevitMCPBridge2026.AgentFramework
             var bannerLabel = new TextBlock
             {
                 Text = "Large paste detected — save to project memory?",
-                Foreground = new SolidColorBrush(Color.FromRgb(160, 220, 160)),
+                Foreground = ChatTheme.SuccessText,
                 FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 12, 0)
             };
@@ -705,7 +704,7 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 Content = "Dismiss",
                 Background  = Brushes.Transparent,
-                Foreground  = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
+                Foreground  = ChatTheme.TextMuted,
                 BorderThickness = new Thickness(0),
                 Padding = new Thickness(6, 3, 6, 3),
                 FontSize = 11,
@@ -725,10 +724,10 @@ namespace RevitMCPBridge2026.AgentFramework
             // Row 1: full-width text box
             _inputTextBox = new System.Windows.Controls.TextBox
             {
-                Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
-                Foreground = Brushes.White,
+                Background = ChatTheme.Input,
+                Foreground = ChatTheme.TextPrimary,
                 BorderThickness = new Thickness(1),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(85, 85, 85)),
+                BorderBrush = ChatTheme.Border,
                 Padding = new Thickness(12, 10, 12, 10),
                 FontSize = 14,
                 TextWrapping = TextWrapping.Wrap,
@@ -736,7 +735,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 MaxHeight = 400,
                 MinHeight = 40,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                CaretBrush = Brushes.White,
+                CaretBrush = ChatTheme.TextPrimary,
                 MaxLength = 0
             };
             _inputTextBox.PreviewKeyDown += InputTextBox_KeyDown;
@@ -1186,7 +1185,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 Padding = new Thickness(16, 8, 16, 8),
                 Background = isPrimary
                     ? new SolidColorBrush(Color.FromRgb(0, 120, 212))
-                    : new SolidColorBrush(Color.FromRgb(85, 85, 85)),
+                    : ChatTheme.Neutral,
                 Foreground = Brushes.White,
                 BorderThickness = new Thickness(0),
                 Cursor = System.Windows.Input.Cursors.Hand
@@ -1200,7 +1199,7 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 Content = "Verify",
                 Padding = new Thickness(16, 8, 16, 8),
-                Background = new SolidColorBrush(Color.FromRgb(85, 85, 85)),
+                Background = ChatTheme.Neutral,
                 Foreground = Brushes.White,
                 BorderThickness = new Thickness(0),
                 Cursor = System.Windows.Input.Cursors.Hand,
@@ -1224,8 +1223,8 @@ namespace RevitMCPBridge2026.AgentFramework
             else
             {
                 _verifyButton.Background = new SolidColorBrush(hover
-                    ? Color.FromRgb(105, 105, 105)   // lighter gray on hover
-                    : Color.FromRgb(85, 85, 85));    // standard gray when inactive
+                    ? ChatTheme.HoverColor   // lighter gray on hover
+                    : ChatTheme.NeutralColor);    // standard gray when inactive
                 _verifyButton.ToolTip = "Visual verify OFF — enable to auto-capture the view after each placement for AI review";
             }
         }
@@ -1644,13 +1643,13 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             var border = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
+                Background = ChatTheme.Surface,
                 CornerRadius = new CornerRadius(12, 12, 12, 0),
                 Padding = new Thickness(12),
                 Margin = new Thickness(8, 8, 50, 8),
                 Opacity = 0.7
             };
-            border.Child = new TextBlock { Text = text, Foreground = Brushes.White, TextWrapping = TextWrapping.Wrap, FontSize = 14 };
+            border.Child = new TextBlock { Text = text, Foreground = ChatTheme.TextPrimary, TextWrapping = TextWrapping.Wrap, FontSize = 14 };
             _chatHistory.Children.Add(border);
         }
 
@@ -1658,8 +1657,8 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             var border = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(35, 35, 35)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(100, 100, 100)),
+                Background = ChatTheme.SurfaceAlt,
+                BorderBrush = ChatTheme.Border,
                 BorderThickness = new Thickness(0, 0, 0, 2),
                 Padding = new Thickness(10),
                 Margin = new Thickness(20, 4, 20, 4),
@@ -1668,7 +1667,7 @@ namespace RevitMCPBridge2026.AgentFramework
             border.Child = new TextBlock
             {
                 Text = text,
-                Foreground = new SolidColorBrush(Color.FromRgb(160, 160, 160)),
+                Foreground = ChatTheme.TextSecondary,
                 TextWrapping = TextWrapping.Wrap,
                 FontSize = 12,
                 FontFamily = new FontFamily("Consolas")
@@ -1713,7 +1712,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 Height = 430,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Owner = System.Windows.Window.GetWindow(this),
-                Background = new SolidColorBrush(Color.FromRgb(30, 30, 30))
+                Background = ChatTheme.Bg
             };
 
             var stack = new StackPanel { Margin = new Thickness(20) };
@@ -1722,14 +1721,14 @@ namespace RevitMCPBridge2026.AgentFramework
             stack.Children.Add(new TextBlock
             {
                 Text = "Anthropic API Key (claude.ai account):",
-                Foreground = Brushes.White,
+                Foreground = ChatTheme.TextPrimary,
                 Margin = new Thickness(0, 0, 0, 5)
             });
 
             var apiKeyBox = new System.Windows.Controls.TextBox
             {
-                Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
-                Foreground = Brushes.White,
+                Background = ChatTheme.Input,
+                Foreground = ChatTheme.TextPrimary,
                 Padding = new Thickness(10),
                 FontSize = 14,
                 Text = _apiKey ?? ""
@@ -1740,14 +1739,14 @@ namespace RevitMCPBridge2026.AgentFramework
             stack.Children.Add(new TextBlock
             {
                 Text = "BIM Monkey API Key (from your installer):",
-                Foreground = Brushes.White,
+                Foreground = ChatTheme.TextPrimary,
                 Margin = new Thickness(0, 15, 0, 5)
             });
 
             var bmKeyBox = new System.Windows.Controls.TextBox
             {
-                Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
-                Foreground = Brushes.White,
+                Background = ChatTheme.Input,
+                Foreground = ChatTheme.TextPrimary,
                 Padding = new Thickness(10),
                 FontSize = 14,
                 Text = _bimMonkeyApiKey ?? ""
@@ -1757,7 +1756,7 @@ namespace RevitMCPBridge2026.AgentFramework
             stack.Children.Add(new TextBlock
             {
                 Text = "BIM Monkey key is pre-filled from your installer. Only change if re-subscribing.",
-                Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
+                Foreground = ChatTheme.TextSecondary,
                 FontSize = 11,
                 Margin = new Thickness(0, 4, 0, 0),
                 TextWrapping = TextWrapping.Wrap
@@ -1767,13 +1766,13 @@ namespace RevitMCPBridge2026.AgentFramework
             stack.Children.Add(new TextBlock
             {
                 Text = "AI Model:",
-                Foreground = Brushes.White,
+                Foreground = ChatTheme.TextPrimary,
                 Margin = new Thickness(0, 15, 0, 5)
             });
 
             var modelCombo = new System.Windows.Controls.ComboBox
             {
-                Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
+                Background = ChatTheme.Input,
                 Foreground = Brushes.Black,
                 Padding = new Thickness(10),
                 FontSize = 14
@@ -1811,7 +1810,7 @@ namespace RevitMCPBridge2026.AgentFramework
             stack.Children.Add(new TextBlock
             {
                 Text = "Sonnet = Recommended. Haiku = Fastest for testing.",
-                Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
+                Foreground = ChatTheme.TextSecondary,
                 FontSize = 11,
                 Margin = new Thickness(0, 5, 0, 0),
                 TextWrapping = TextWrapping.Wrap
@@ -2134,14 +2133,14 @@ namespace RevitMCPBridge2026.AgentFramework
                     _streamingContainer = new StackPanel { Margin = new Thickness(8, 8, 50, 8), HorizontalAlignment = HorizontalAlignment.Left };
                     var border = new Border
                     {
-                        Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
+                        Background = ChatTheme.Surface,
                         CornerRadius = new CornerRadius(12, 12, 12, 0),
                         Padding = new Thickness(12),
                     };
                     _streamingTextBox = new System.Windows.Controls.TextBox
                     {
                         Text = "",
-                        Foreground = Brushes.White,
+                        Foreground = ChatTheme.TextPrimary,
                         FontSize = 14,
                         FontFamily = new FontFamily("Segoe UI"),
                         Background = Brushes.Transparent,
@@ -2326,7 +2325,7 @@ namespace RevitMCPBridge2026.AgentFramework
                             _subscriptionBlocked = true;
                             _sendButton.IsEnabled = false;
                             _statusText.Text = "Subscription expired";
-                            _statusText.Foreground = new SolidColorBrush(Color.FromRgb(220, 80, 80));
+                            _statusText.Foreground = ChatTheme.ErrorText;
                             ShowSubscriptionBanner();
                         });
                     }
@@ -2370,7 +2369,7 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 Margin = new Thickness(8, 8, 8, 4),
                 Padding = new Thickness(14, 12, 14, 12),
-                Background = new SolidColorBrush(Color.FromRgb(60, 30, 30)),
+                Background = ChatTheme.ErrorBg,
                 BorderBrush = new SolidColorBrush(Color.FromRgb(180, 60, 60)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(6),
@@ -2381,7 +2380,7 @@ namespace RevitMCPBridge2026.AgentFramework
             var msg = new TextBlock
             {
                 Text = "Your subscription has expired. ",
-                Foreground = new SolidColorBrush(Color.FromRgb(220, 160, 160)),
+                Foreground = ChatTheme.ErrorText,
                 FontSize = 13,
                 VerticalAlignment = VerticalAlignment.Center,
             };
@@ -2444,15 +2443,15 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     Margin = new Thickness(8, 8, 8, 4),
                     Padding = new Thickness(14, 12, 14, 12),
-                    Background = new SolidColorBrush(Color.FromRgb(40, 32, 10)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(160, 120, 30)),
+                    Background = ChatTheme.WarnBg,
+                    BorderBrush = ChatTheme.WarnBorder,
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(6),
                 };
                 var msg = new TextBlock
                 {
                     Text = "No internet connection — Banana Chat requires a connection to work. Revit tools still work normally.",
-                    Foreground = new SolidColorBrush(Color.FromRgb(210, 180, 100)),
+                    Foreground = ChatTheme.WarnText,
                     FontSize = 12,
                     TextWrapping = TextWrapping.Wrap,
                 };
@@ -5738,7 +5737,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 server.Start();
                 _pipePaused = false;
                 _pipePauseButton.Content = "⏸";
-                _pipePauseButton.Background = new SolidColorBrush(Color.FromRgb(85, 85, 85));
+                _pipePauseButton.Background = ChatTheme.Neutral;
                 _statusText.Text = "Ready";
                 AddAssistantMessage("Pipe resumed. Ready for generation.");
             }
@@ -6189,10 +6188,10 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 _slashPaletteList = new ListBox
                 {
-                    Background  = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
-                    Foreground  = Brushes.White,
+                    Background  = ChatTheme.SurfaceAlt,
+                    Foreground  = ChatTheme.TextPrimary,
                     BorderThickness = new Thickness(1),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+                    BorderBrush = ChatTheme.Border,
                     MaxHeight   = 220,
                     FontSize    = 13,
                     SelectionMode = SelectionMode.Single,
@@ -6210,10 +6209,10 @@ namespace RevitMCPBridge2026.AgentFramework
                 var style = new Style(typeof(ListBoxItem));
                 style.Setters.Add(new Setter(ListBoxItem.PaddingProperty, new Thickness(10, 6, 10, 6)));
                 style.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, Brushes.Transparent));
-                style.Setters.Add(new Setter(ListBoxItem.ForegroundProperty, Brushes.White));
+                style.Setters.Add(new Setter(ListBoxItem.ForegroundProperty, ChatTheme.TextPrimary));
                 var selectedTrigger = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
                 selectedTrigger.Setters.Add(new Setter(ListBoxItem.BackgroundProperty,
-                    new SolidColorBrush(Color.FromRgb(60, 100, 160))));
+                    ChatTheme.Selection));
                 style.Triggers.Add(selectedTrigger);
                 _slashPaletteList.ItemContainerStyle = style;
 
@@ -6225,8 +6224,8 @@ namespace RevitMCPBridge2026.AgentFramework
                     AllowsTransparency = true,
                     Child           = new Border
                     {
-                        Background   = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
-                        BorderBrush  = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+                        Background   = ChatTheme.SurfaceAlt,
+                        BorderBrush  = ChatTheme.Border,
                         BorderThickness = new Thickness(1),
                         Child        = _slashPaletteList,
                         Effect       = new System.Windows.Media.Effects.DropShadowEffect
@@ -6301,14 +6300,14 @@ namespace RevitMCPBridge2026.AgentFramework
                 Text       = command,
                 FontWeight = FontWeights.SemiBold,
                 Foreground = isBuiltin
-                    ? new SolidColorBrush(Color.FromRgb(130, 180, 255))
-                    : new SolidColorBrush(Color.FromRgb(180, 230, 130)),
+                    ? ChatTheme.CmdBuiltin
+                    : ChatTheme.CmdCustom,
                 FontSize   = 13
             };
             var descLabel = new TextBlock
             {
                 Text       = description,
-                Foreground = new SolidColorBrush(Color.FromRgb(170, 170, 170)),
+                Foreground = ChatTheme.TextSecondary,
                 FontSize   = 11,
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
@@ -6898,11 +6897,11 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             // Message bubble
             var border = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 45)),
+                Background = ChatTheme.Surface,
                 CornerRadius = new CornerRadius(12, 12, 12, 0),
                 Padding = new Thickness(12),
             };
-            border.Child = SelectableText(text, Brushes.White);
+            border.Child = SelectableText(text, ChatTheme.TextPrimary);
             container.Children.Add(border);
 
             AddFeedbackButtons(container, text, messageIndex);
@@ -6919,20 +6918,20 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 Padding = new Thickness(6, 2, 6, 2),
                 Margin = new Thickness(leftMargin, 0, 0, 0),
                 Background = Brushes.Transparent,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
-                Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)),
+                BorderBrush = ChatTheme.Border,
+                Foreground = ChatTheme.TextMuted,
                 Cursor = System.Windows.Input.Cursors.Hand,
                 ToolTip = tooltip
             };
             btn.MouseEnter += (s, e) =>
             {
-                btn.Foreground = new SolidColorBrush(Color.FromRgb(220, 220, 220));
-                btn.BorderBrush = new SolidColorBrush(Color.FromRgb(150, 150, 150));
+                btn.Foreground = ChatTheme.TextPrimary;
+                btn.BorderBrush = ChatTheme.TextSecondary;
             };
             btn.MouseLeave += (s, e) =>
             {
-                btn.Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120));
-                btn.BorderBrush = new SolidColorBrush(Color.FromRgb(70, 70, 70));
+                btn.Foreground = ChatTheme.TextMuted;
+                btn.BorderBrush = ChatTheme.Border;
             };
             return btn;
         }
@@ -7005,7 +7004,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
         {
             // Change button to indicate it was clicked
             button.Content = "\u2705"; // Checkmark
-            button.Foreground = new SolidColorBrush(Color.FromRgb(80, 200, 80));
+            button.Foreground = ChatTheme.Green;
             button.IsEnabled = false;
 
             // Disable the other button
@@ -7014,7 +7013,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 if (child is Button btn && btn != button)
                 {
                     btn.IsEnabled = false;
-                    btn.Foreground = new SolidColorBrush(Color.FromRgb(60, 60, 60));
+                    btn.Foreground = ChatTheme.Disabled;
                 }
             }
 
@@ -7028,7 +7027,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
         {
             // Change button to indicate it was clicked
             button.Content = "\u274C"; // X mark
-            button.Foreground = new SolidColorBrush(Color.FromRgb(200, 80, 80));
+            button.Foreground = ChatTheme.ErrorText;
             button.IsEnabled = false;
 
             // Disable the other button
@@ -7037,7 +7036,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 if (child is Button btn && btn != button)
                 {
                     btn.IsEnabled = false;
-                    btn.Foreground = new SolidColorBrush(Color.FromRgb(60, 60, 60));
+                    btn.Foreground = ChatTheme.Disabled;
                 }
             }
 
@@ -7055,7 +7054,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 Height = 300,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Owner = System.Windows.Window.GetWindow(this),
-                Background = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
+                Background = ChatTheme.SurfaceAlt,
                 ResizeMode = ResizeMode.NoResize
             };
 
@@ -7064,7 +7063,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             stack.Children.Add(new TextBlock
             {
                 Text = "Help me learn from this mistake:",
-                Foreground = Brushes.White,
+                Foreground = ChatTheme.TextPrimary,
                 FontSize = 14,
                 Margin = new Thickness(0, 0, 0, 10)
             });
@@ -7074,9 +7073,9 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 Height = 100,
                 AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap,
-                Background = new SolidColorBrush(Color.FromRgb(55, 55, 55)),
-                Foreground = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 80, 80)),
+                Background = ChatTheme.Input,
+                Foreground = ChatTheme.TextPrimary,
+                BorderBrush = ChatTheme.Border,
                 Padding = new Thickness(8)
             };
             issueBox.Text = ""; // Placeholder
@@ -7094,9 +7093,9 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 Content = "Cancel",
                 Padding = new Thickness(20, 8, 20, 8),
                 Margin = new Thickness(0, 0, 10, 0),
-                Background = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
-                Foreground = Brushes.White,
-                BorderBrush = Brushes.Gray
+                Background = ChatTheme.Input,
+                Foreground = ChatTheme.TextPrimary,
+                BorderBrush = ChatTheme.Border
             };
             cancelBtn.Click += (s, e) => dialog.Close();
             buttonPanel.Children.Add(cancelBtn);
@@ -7147,14 +7146,14 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
 
             var border = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(35, 35, 35)),
-                BorderBrush = isResult ? new SolidColorBrush(Color.FromRgb(16, 124, 16)) : new SolidColorBrush(Color.FromRgb(100, 100, 100)),
+                Background = ChatTheme.SurfaceAlt,
+                BorderBrush = isResult ? new SolidColorBrush(Color.FromRgb(16, 124, 16)) : ChatTheme.Border,
                 BorderThickness = new Thickness(0, 0, 0, 2),
                 Padding = new Thickness(10),
                 Margin = new Thickness(20, 4, 20, 4)
             };
             border.Child = SelectableText(text,
-                new SolidColorBrush(Color.FromRgb(160, 160, 160)),
+                ChatTheme.TextSecondary,
                 fontSize: 12,
                 fontFamily: new FontFamily("Consolas"));
             _chatHistory.Children.Add(border);
@@ -7165,13 +7164,13 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
         {
             var border = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(60, 30, 30)),
+                Background = ChatTheme.ErrorBg,
                 CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(12),
                 Margin = new Thickness(8)
             };
             border.Child = SelectableText("Error: " + text,
-                new SolidColorBrush(Color.FromRgb(255, 100, 100)));
+                ChatTheme.ErrorText);
             _chatHistory.Children.Add(border);
             ScrollToBottom();
         }
@@ -7181,7 +7180,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             _chatHistory.Children.Add(new TextBlock
             {
                 Text = text,
-                Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 150)),
+                Foreground = ChatTheme.TextSecondary,
                 TextWrapping = TextWrapping.Wrap,
                 FontSize = 12,
                 FontStyle = FontStyles.Italic,
@@ -7198,8 +7197,8 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
         {
             var outer = new Border
             {
-                Background      = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
-                BorderBrush     = new SolidColorBrush(Color.FromRgb(75, 75, 75)),
+                Background      = ChatTheme.SurfaceAlt,
+                BorderBrush     = ChatTheme.Border,
                 BorderThickness = new Thickness(1),
                 CornerRadius    = new CornerRadius(8),
                 Padding         = new Thickness(14, 10, 14, 10),
@@ -7210,7 +7209,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             stack.Children.Add(new TextBlock
             {
                 Text                = prompt,
-                Foreground          = new SolidColorBrush(Color.FromRgb(210, 210, 210)),
+                Foreground          = ChatTheme.TextPrimary,
                 TextWrapping        = TextWrapping.Wrap,
                 FontSize            = 13,
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -7231,7 +7230,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                     Padding         = new Thickness(16, 7, 16, 7),
                     FontSize        = 12,
                     Background      = isCancel
-                        ? new SolidColorBrush(Color.FromRgb(55, 55, 55))
+                        ? ChatTheme.Neutral
                         : new SolidColorBrush(Color.FromRgb(0, 100, 175)),
                     Foreground      = Brushes.White,
                     BorderThickness = new Thickness(0),
@@ -7306,7 +7305,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                     container.Children.Add(new TextBlock
                     {
                         Text = caption,
-                        Foreground = new SolidColorBrush(Color.FromRgb(180, 180, 180)),
+                        Foreground = ChatTheme.TextSecondary,
                         FontSize = 12,
                         Margin = new Thickness(0, 0, 0, 4)
                     });
@@ -7344,8 +7343,8 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
 
                 var imageBorder = new Border
                 {
-                    Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
+                    Background = ChatTheme.Bg,
+                    BorderBrush = ChatTheme.Border,
                     BorderThickness = new Thickness(1),
                     CornerRadius = new CornerRadius(8),
                     Padding = new Thickness(4),
@@ -7358,7 +7357,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 container.Children.Add(new TextBlock
                 {
                     Text = $"📷 {Path.GetFileName(imagePath)} (click to open)",
-                    Foreground = new SolidColorBrush(Color.FromRgb(100, 100, 100)),
+                    Foreground = ChatTheme.TextMuted,
                     FontSize = 10,
                     Margin = new Thickness(0, 4, 0, 0)
                 });
