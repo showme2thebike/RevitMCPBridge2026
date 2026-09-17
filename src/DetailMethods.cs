@@ -23,28 +23,50 @@ namespace RevitMCPBridge2026
     {
 
         /// <summary>
-        /// Resolve a filled region type by name with a prefix-tolerant fallback.
-        /// Firms can rename their types from "CDC - Gypsum" to e.g. "WS - Gypsum"
-        /// (Settings → Company → Type name prefix). If the exact name is missing,
-        /// match on the part after the prefix so a plan written with either
-        /// prefix still lands on the right hatch instead of the first type found.
+        /// Resolve a filled region type by name, falling back to material keywords.
+        /// Plans name hatches with the platform's canonical types ("CDC - Gypsum").
+        /// Customer templates name theirs however they like ("WS - Gypsum",
+        /// "GWB Hatch", "Gypsum Board"). Exact name first; otherwise classify the
+        /// requested name by material keywords and pick a project type of the same
+        /// class. Null when nothing matches (caller falls back and reports the miss).
         /// </summary>
+        private static readonly string[][] RegionKeywordClasses = new[]
+        {
+            // order matters: more specific classes first (rigid insulation before generic insulation)
+            new[] { "rigid", "xps", "eps", "polyiso", "foam board", "foamboard" },
+            new[] { "batt", "blown", "loose-fill", "loose fill", "dots", "insul" },
+            new[] { "concrete", "conc", "cmu", "masonry", "grout" },
+            new[] { "earth", "soil", "compacted", "gravel", "drain rock" },
+            new[] { "gypsum", "gyp", "gwb", "drywall", "wallboard" },
+            new[] { "plywood", "sheathing", "osb", "ply" },
+            new[] { "steel", "metal", "stl" },
+            new[] { "wood", "lumber", "framing", "stud", "blocking", "wd" },
+            new[] { "membrane", "wrb", "wrap", "waterproof", "crosshatch", "diagonal" },
+        };
+        private static int RegionClassOf(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return -1;
+            string n = " " + name.ToLowerInvariant() + " ";
+            for (int c = 0; c < RegionKeywordClasses.Length; c++)
+                foreach (var kw in RegionKeywordClasses[c])
+                    if (n.Contains(kw)) return c;
+            return -1;
+        }
         private static FilledRegionType ResolveRegionType(Dictionary<string, FilledRegionType> cache, string name)
         {
             if (cache == null || string.IsNullOrWhiteSpace(name)) return null;
             FilledRegionType frt;
             if (cache.TryGetValue(name, out frt)) return frt;
-            int dash = name.IndexOf(" - ", StringComparison.Ordinal);
-            string suffix = dash >= 0 ? name.Substring(dash + 3).Trim() : name.Trim();
-            if (suffix.Length == 0) return null;
+            int cls = RegionClassOf(name);
+            if (cls < 0) return null;
+            FilledRegionType best = null; int bestLen = int.MaxValue;
             foreach (var kv in cache)
             {
-                string n = kv.Key;
-                int d = n.IndexOf(" - ", StringComparison.Ordinal);
-                string ns = d >= 0 ? n.Substring(d + 3).Trim() : n.Trim();
-                if (string.Equals(ns, suffix, StringComparison.OrdinalIgnoreCase)) return kv.Value;
+                if (RegionClassOf(kv.Key) != cls) continue;
+                // prefer the shortest matching name — usually the plain type rather than a variant
+                if (kv.Key.Length < bestLen) { best = kv.Value; bestLen = kv.Key.Length; }
             }
-            return null;
+            return best;
         }
         #region Detail Lines
 
