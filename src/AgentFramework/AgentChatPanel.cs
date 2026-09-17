@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -2102,7 +2102,10 @@ namespace RevitMCPBridge2026.AgentFramework
             _agent.OnThinking += (msg) => Dispatcher.Invoke(() => ShowProgress(msg));
             _agent.OnToolCall += (msg) => Dispatcher.Invoke(() =>
             {
-                var toolName = msg.Replace("Calling: ", "");    // canonical name — always drive state from this
+                var rawName = msg.Replace("Calling: ", "");
+                var sepIdx = rawName.IndexOf('\u001f');
+                var toolName = sepIdx >= 0 ? rawName.Substring(0, sepIdx) : rawName;   // canonical name — always drive state from this
+                var toolDetail = sepIdx >= 0 ? rawName.Substring(sepIdx + 1) : null;
                 _lastToolCall = toolName;
                 if (IsWriteOperation(toolName))
                 {
@@ -2110,17 +2113,20 @@ namespace RevitMCPBridge2026.AgentFramework
                     _correctionWatchStart = DateTime.Now;
                     _correctionWatchActive = false;
                 }
-                var displayLabel = GetProgressLabel(toolName);
+                var displayLabel = GetProgressLabel(toolName, toolDetail);
                 UpdateProgress(displayLabel);
                 AddToolMessage(displayLabel, false);
             });
             _agent.OnToolResult += (msg) => Dispatcher.Invoke(() => {
                 const string rPrefix = "✓ ";
                 const string rSuffix = " completed";
-                var toolName = (msg.StartsWith(rPrefix) && msg.EndsWith(rSuffix))
+                var rawResult = (msg.StartsWith(rPrefix) && msg.EndsWith(rSuffix))
                     ? msg.Substring(rPrefix.Length, msg.Length - rPrefix.Length - rSuffix.Length)
                     : msg;
-                var displayResult = $"✓ {GetProgressLabel(toolName).TrimEnd('.')}";
+                var rSep = rawResult.IndexOf('\u001f');
+                var toolName = rSep >= 0 ? rawResult.Substring(0, rSep) : rawResult;
+                var toolDetail = rSep >= 0 ? rawResult.Substring(rSep + 1) : null;
+                var displayResult = $"✓ {GetProgressLabel(toolName, toolDetail).TrimEnd('.')}";
                 UpdateProgress(displayResult);
                 AddToolMessage(displayResult, true);
                 TryDisplayImageFromResult(msg);
@@ -5298,17 +5304,52 @@ namespace RevitMCPBridge2026.AgentFramework
             ["viewCapture"]                   = "Capturing view...",
         };
 
-        private static string GetProgressLabel(string toolName)
+        private static string GetProgressLabel(string toolName, string detail = null)
         {
-            if (_progressLabels.TryGetValue(toolName, out var label)) return label;
-            // Fallback: camelCase → "Create sheet..." style
-            var sb = new System.Text.StringBuilder();
-            foreach (char c in toolName)
+            string label;
+            if (!_progressLabels.TryGetValue(toolName, out label))
             {
-                if (sb.Length > 0 && char.IsUpper(c)) sb.Append(' ');
-                sb.Append(sb.Length == 0 ? char.ToUpper(c) : char.ToLower(c));
+                // Fallback: camelCase → verb phrase. "getLevels" → "Reading levels...",
+                // "createWall" → "Creating wall...", "setParameter" → "Updating parameter..."
+                var words = new System.Collections.Generic.List<string>();
+                var cur = new System.Text.StringBuilder();
+                foreach (char c in toolName)
+                {
+                    if (cur.Length > 0 && char.IsUpper(c)) { words.Add(cur.ToString()); cur.Clear(); }
+                    cur.Append(char.ToLower(c));
+                }
+                if (cur.Length > 0) words.Add(cur.ToString());
+                string verb = words.Count > 0 ? words[0] : toolName;
+                string rest = string.Join(" ", words.Skip(1));
+                string ing;
+                switch (verb)
+                {
+                    case "get": case "list": case "find": case "query": case "read": case "count": ing = "Reading"; break;
+                    case "create": case "add": case "new": ing = "Creating"; break;
+                    case "place": case "put": ing = "Placing"; break;
+                    case "set": case "update": case "modify": case "rename": case "change": case "apply": ing = "Updating"; break;
+                    case "delete": case "remove": case "clear": ing = "Removing"; break;
+                    case "move": case "align": case "rotate": case "offset": ing = "Adjusting"; break;
+                    case "export": case "print": case "save": ing = "Exporting"; break;
+                    case "check": case "audit": case "validate": case "verify": case "analyze": case "analyse": ing = "Checking"; break;
+                    case "run": case "execute": ing = "Running"; break;
+                    case "batch": ing = "Batch updating"; break;
+                    case "import": case "load": ing = "Importing"; break;
+                    case "tag": ing = "Tagging"; break;
+                    case "duplicate": case "copy": ing = "Copying"; break;
+                    default:
+                        ing = verb.Length > 0 ? char.ToUpper(verb[0]) + verb.Substring(1) : verb;
+                        if (ing.EndsWith("e")) ing = ing.Substring(0, ing.Length - 1) + "ing"; else ing += "ing";
+                        break;
+                }
+                label = (rest.Length > 0 ? $"{ing} {rest}" : ing) + "...";
             }
-            return sb + "...";
+            if (!string.IsNullOrWhiteSpace(detail))
+            {
+                // "Placing view on sheet..." + "A2.1" → "Placing view on sheet — A2.1..."
+                label = label.TrimEnd('.') + " — " + detail + "...";
+            }
+            return label;
         }
 
         // Sprint 8/9 — session startup intelligence

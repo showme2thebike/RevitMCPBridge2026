@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -242,6 +242,50 @@ namespace RevitMCPBridge2026.AgentFramework
         // Telemetry guards — session_start and session_outcome fire ONCE per AgentCore lifetime
         private bool _sessionStartSent = false;
         private bool _sessionOutcomeSent = false;
+
+        // Which argument best describes a call in one short phrase. Order matters:
+        // sheet/view identity first, then names, then free text.
+        private static readonly string[] StatusDetailKeys = {
+            "sheetNumber", "sheetName", "viewName", "targetViewName", "familyName", "typeName", "levelName",
+            "roomName", "name", "title", "scheduleName", "text", "filePath", "fileName", "elementId", "method",
+        };
+        /// <summary>
+        /// Resolve the display name and a detail for a tool call. callMCPMethod is a
+        /// generic wrapper around 700+ Revit methods, so unwrap it to the inner method
+        /// and read the detail from its parameters.
+        /// </summary>
+        private static (string name, string detail) DescribeToolCall(string toolName, JObject input)
+        {
+            string name = toolName;
+            JObject args = input;
+            try
+            {
+                if (string.Equals(toolName, "callMCPMethod", StringComparison.OrdinalIgnoreCase) && input != null)
+                {
+                    var inner = input["method"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(inner)) name = inner;
+                    args = input["parameters"] as JObject ?? new JObject();
+                }
+                if (args == null) return (name, null);
+                foreach (var key in StatusDetailKeys)
+                {
+                    if (key == "method") continue;
+                    var tok = args[key];
+                    if (tok == null || tok.Type == JTokenType.Null || tok.Type == JTokenType.Object || tok.Type == JTokenType.Array) continue;
+                    var v = tok.ToString().Trim();
+                    if (v.Length == 0) continue;
+                    if (v.Length > 48) v = v.Substring(0, 45) + "…";
+                    return (name, v);
+                }
+                // Batch calls: say how many
+                foreach (var prop in args.Properties())
+                {
+                    if (prop.Value is JArray arr && arr.Count > 1) return (name, $"{arr.Count} items");
+                }
+            }
+            catch { /* status only — never let a label break a tool call */ }
+            return (name, null);
+        }
 
         public AgentCore(string apiKey, string model = "claude-sonnet-4-6", string bimMonkeyApiKey = null)
         {
@@ -690,7 +734,10 @@ namespace RevitMCPBridge2026.AgentFramework
                             _lastToolName = block.Name;
                             if (_verifyAfterTools.Contains(block.Name)) anyPlacementTool = true;
 
-                            OnToolCall?.Invoke($"Calling: {block.Name}");
+                            // Status line: the real Revit method (not the generic callMCPMethod wrapper)
+                            // plus the most useful argument, e.g. "placeViewOnSheet\u001fA2.1".
+                            var (statusName, statusDetail) = DescribeToolCall(block.Name, block.Input);
+                            OnToolCall?.Invoke(statusDetail != null ? $"Calling: {statusName}\u001f{statusDetail}" : $"Calling: {statusName}");
 
                             // Fires BEFORE execution so a hung tool is visible in
                             // telemetry as a start with no matching tool_call.
@@ -702,7 +749,7 @@ namespace RevitMCPBridge2026.AgentFramework
                             try
                             {
                                 var result = await _executeToolAsync(block.Name, block.Input);
-                                OnToolResult?.Invoke($"✓ {block.Name} completed");
+                                OnToolResult?.Invoke(statusDetail != null ? $"✓ {statusName}\u001f{statusDetail} completed" : $"✓ {statusName} completed");
 
                                 // ============================================================
                                 // RESULT VERIFICATION - Confirm it actually worked
