@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -21,6 +21,31 @@ namespace RevitMCPBridge2026
     /// </summary>
     public static class DetailMethods
     {
+
+        /// <summary>
+        /// Resolve a filled region type by name with a prefix-tolerant fallback.
+        /// Firms can rename their types from "CDC - Gypsum" to e.g. "WS - Gypsum"
+        /// (Settings → Company → Type name prefix). If the exact name is missing,
+        /// match on the part after the prefix so a plan written with either
+        /// prefix still lands on the right hatch instead of the first type found.
+        /// </summary>
+        private static FilledRegionType ResolveRegionType(Dictionary<string, FilledRegionType> cache, string name)
+        {
+            if (cache == null || string.IsNullOrWhiteSpace(name)) return null;
+            FilledRegionType frt;
+            if (cache.TryGetValue(name, out frt)) return frt;
+            int dash = name.IndexOf(" - ", StringComparison.Ordinal);
+            string suffix = dash >= 0 ? name.Substring(dash + 3).Trim() : name.Trim();
+            if (suffix.Length == 0) return null;
+            foreach (var kv in cache)
+            {
+                string n = kv.Key;
+                int d = n.IndexOf(" - ", StringComparison.Ordinal);
+                string ns = d >= 0 ? n.Substring(d + 3).Trim() : n.Trim();
+                if (string.Equals(ns, suffix, StringComparison.OrdinalIgnoreCase)) return kv.Value;
+            }
+            return null;
+        }
         #region Detail Lines
 
         /// <summary>
@@ -7072,7 +7097,7 @@ namespace RevitMCPBridge2026
                             else
                             {
                                 FilledRegionType frt = null;
-                                filledRegionTypeCache.TryGetValue(hatch, out frt);
+                                frt = ResolveRegionType(filledRegionTypeCache, hatch);
                                 if (frt == null)
                                 {
                                     missingRegionTypes.Add(hatch);
@@ -7161,7 +7186,7 @@ namespace RevitMCPBridge2026
                             else
                             {
                                 FilledRegionType frt = null;
-                                filledRegionTypeCache.TryGetValue(hatch, out frt);
+                                frt = ResolveRegionType(filledRegionTypeCache, hatch);
                                 if (frt == null)
                                 {
                                     missingRegionTypes.Add(hatch);
@@ -7671,7 +7696,7 @@ namespace RevitMCPBridge2026
                                     // Create filled region
                                     string fillTypeName = elem.Attribute("data-revit-fill")?.Value ?? defaultFillType;
                                     FilledRegionType frt;
-                                    if (filledRegionTypeCache.TryGetValue(fillTypeName, out frt))
+                                    if ((frt = ResolveRegionType(filledRegionTypeCache, fillTypeName)) != null)
                                     {
                                         var loop = new CurveLoop();
                                         loop.Append(Line.CreateBound(bl, br));
@@ -7745,7 +7770,7 @@ namespace RevitMCPBridge2026
                                     {
                                         string fillTypeName = elem.Attribute("data-revit-fill")?.Value ?? defaultFillType;
                                         FilledRegionType frt;
-                                        if (filledRegionTypeCache.TryGetValue(fillTypeName, out frt))
+                                        if ((frt = ResolveRegionType(filledRegionTypeCache, fillTypeName)) != null)
                                         {
                                             var loop = new CurveLoop();
                                             for (int i = 0; i < pts.Count; i++)
@@ -7789,7 +7814,7 @@ namespace RevitMCPBridge2026
                                 {
                                     string fillTypeName = elem.Attribute("data-revit-fill")?.Value ?? defaultFillType;
                                     FilledRegionType frt;
-                                    if (filledRegionTypeCache.TryGetValue(fillTypeName, out frt))
+                                    if ((frt = ResolveRegionType(filledRegionTypeCache, fillTypeName)) != null)
                                     {
                                         try
                                         {
