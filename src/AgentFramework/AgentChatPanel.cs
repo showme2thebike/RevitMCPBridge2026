@@ -5394,25 +5394,58 @@ namespace RevitMCPBridge2026.AgentFramework
             try
             {
                 var key = _bimMonkeyApiKey;
-                var uiAppSnap = _uiApp;
-                System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+
+                // The model must be read on Revit's thread, inside a valid API context.
+                // Reading it from a thread-pool thread (as this did before) crashed Revit
+                // when the pane loaded while a document was still opening. Queue the read
+                // through the bridge's external event (runs when Revit is idle), then do
+                // the HTTP work off-thread with the resulting JSON only.
+                var handler = RevitMCPBridge.RevitMCPBridgeApp.GetRequestHandler();
+                var externalEvent = RevitMCPBridge.RevitMCPBridgeApp.GetExternalEvent();
+                if (handler == null || externalEvent == null)
+                {
+                    try { File.AppendAllText(log, $"{DateTime.Now:o} snapshot skipped: bridge not initialised\r\n"); } catch { }
+                    return;
+                }
+
+                var snapshotTask = handler.QueueRequest(uiApp =>
                 {
                     try
                     {
-                        var summary = IssuanceDateMethods.GetStartupSummary(uiAppSnap);
-                        var snapshotJson = BuildSnapshotPayload(summary).ToString(Newtonsoft.Json.Formatting.None);
+                        var summary = IssuanceDateMethods.GetStartupSummary(uiApp);
+                        return BuildSnapshotPayload(summary).ToString(Newtonsoft.Json.Formatting.None);
+                    }
+                    catch (Exception ex)
+                    {
+                        try { File.AppendAllText(log, $"{DateTime.Now:o} snapshot read error: {ex.Message}\r\n"); } catch { }
+                        return null;
+                    }
+                });
+                var raised = externalEvent.Raise();
+                if (raised != Autodesk.Revit.UI.ExternalEventRequest.Accepted)
+                {
+                    try { File.AppendAllText(log, $"{DateTime.Now:o} snapshot skipped: external event {raised}\r\n"); } catch { }
+                    return;
+                }
+
+                System.Threading.Tasks.Task.Run(async () =>
+                {
+                    try
+                    {
+                        var snapshotJson = await snapshotTask;
+                        if (string.IsNullOrEmpty(snapshotJson)) return;
                         File.AppendAllText(log, $"{DateTime.Now:o} ThreadPool starting HTTP POST\r\n");
                         using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(20) };
                         client.DefaultRequestHeaders.Add("Authorization", $"Bearer {key}");
                         var content = new System.Net.Http.StringContent(snapshotJson, System.Text.Encoding.UTF8, "application/json");
                         var request = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post,
                             "https://bimmonkey-production.up.railway.app/api/plugin/model-snapshot") { Content = content };
-                        var resp = client.Send(request);
+                        var resp = await client.SendAsync(request);
                         File.AppendAllText(log, $"{DateTime.Now:o} HTTP response: {(int)resp.StatusCode}\r\n");
                     }
                     catch (Exception ex)
                     {
-                        try { File.AppendAllText(log, $"{DateTime.Now:o} ThreadPool error: {ex.Message}\r\n"); } catch { }
+                        try { File.AppendAllText(log, $"{DateTime.Now:o} snapshot post error: {ex.Message}\r\n"); } catch { }
                     }
                 });
             }
