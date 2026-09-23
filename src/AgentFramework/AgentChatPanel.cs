@@ -5381,6 +5381,41 @@ namespace RevitMCPBridge2026.AgentFramework
             });
         }
 
+        // Size of the cached prefix (system prompt + tool definitions) and what makes it up.
+        // Sent once per pane and again only if the prompt changes by more than ~2K chars,
+        // so the admin Plugin tab can show where a firm's per-call cost comes from.
+        private int _lastProfiledPromptChars = -1;
+        private void TrackPromptProfile(string systemPrompt, string startup, string firm, string corrections, string cad, string library, string memory, string notes, string intel)
+        {
+            try
+            {
+                var total = systemPrompt?.Length ?? 0;
+                if (_lastProfiledPromptChars >= 0 && Math.Abs(total - _lastProfiledPromptChars) < 2000) return;
+                _lastProfiledPromptChars = total;
+                var toolsChars = _agent?.EstimateToolsJsonChars() ?? 0;
+                TelemetryService.Track(_bimMonkeyApiKey, "prompt_profile", metadata: new
+                {
+                    system_chars = total,
+                    tools_chars = toolsChars,
+                    tool_count = _agent?.ToolCount ?? 0,
+                    est_prefix_tokens = (total + toolsChars) / 4,
+                    blocks = new
+                    {
+                        startup = startup?.Length ?? 0,
+                        firm_standards = _firmStandardsDoc?.Length ?? 0,
+                        firm_memory = _firmMemory?.Length ?? 0,
+                        corrections = corrections?.Length ?? 0,
+                        cad_rules = cad?.Length ?? 0,
+                        library = library?.Length ?? 0,
+                        local_memory = memory?.Length ?? 0,
+                        project_notes = notes?.Length ?? 0,
+                        persistent_intel = intel?.Length ?? 0,
+                    }
+                });
+            }
+            catch { }
+        }
+
         private void TryPushModelSnapshot()
         {
             var log = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "snapshot_debug.txt");
@@ -6879,6 +6914,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                     RefreshAttachmentPreview();
                 }
 
+                TrackPromptProfile(systemPrompt, startupBlock, firmBlock, correctionsBlock, cadVisualBlock, libraryBlock, memoryBlock, projectNotesBlock, persistentIntelBlock);
                 await _agent.RunAsync(message, systemPrompt);
             }
             catch (Exception ex)

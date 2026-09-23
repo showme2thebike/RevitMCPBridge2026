@@ -54,8 +54,12 @@ namespace RevitMCPBridge2026.AgentFramework
         // tool_result pairing and user-first ordering (the API rejects both
         // violations).
         private const int MaxToolResultChars = 24000;   // ~6K tokens per tool result
-        private const int HistoryCharBudget  = 400000;  // ~110K tokens — trim above this
-        private const int HistoryCharTrimTo  = 280000;  // target after trimming
+        // Trimming rewrites the cached conversation prefix, so it must be RARE: trim between
+        // runs once the soft budget is passed, cut deep (to HistoryCharTrimTo) so the next trim
+        // is far away, and only trim mid-run as an emergency at the hard ceiling.
+        private const int HistoryCharBudget  = 400000;  // ~110K tokens — hard ceiling, mid-run emergency trim
+        private const int HistorySoftBudget  = 300000;  // ~80K tokens — between-run trim threshold
+        private const int HistoryCharTrimTo  = 120000;  // ~33K tokens — target after trimming
 
         private static string CapToolResult(string result)
         {
@@ -71,6 +75,52 @@ namespace RevitMCPBridge2026.AgentFramework
             catch { return 0; }
         }
 
+        // What a trimmed message contributed, for the digest that replaces it: the user's
+        // question (first 160 chars) or the tools the assistant called.
+        private static void CollectDigest(Message m, List<string> asks, List<string> tools)
+        {
+            try
+            {
+                if (IsUserAuthoredMessage(m))
+                {
+                    string text = null;
+                    if (m.Content is string str) text = str;
+                    else if (m.Content is List<object> lo)
+                        foreach (var item in lo)
+                        {
+                            var t = JObject.FromObject(item)["text"]?.ToString();
+                            if (!string.IsNullOrWhiteSpace(t)) { text = t; break; }
+                        }
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        text = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+                        if (text.StartsWith("[Note:")) return; // a previous digest — don't nest
+                        if (text.Length > 160) text = text.Substring(0, 157) + "...";
+                        if (asks.Count < 12) asks.Add(text);
+                    }
+                }
+                else if (m.Role == "assistant" && m.Content is List<ContentBlock> blocks)
+                {
+                    foreach (var b in blocks)
+                        if (b.Type == "tool_use" && !string.IsNullOrEmpty(b.Name))
+                        {
+                            var name = b.Name;
+                            if (name == "callMCPMethod") { var method = b.Input?["method"]?.ToString(); if (!string.IsNullOrEmpty(method)) name = method; }
+                            if (!tools.Contains(name) && tools.Count < 25) tools.Add(name);
+                        }
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>Serialized size of the tool definitions sent on every call (cached prefix).</summary>
+        public int EstimateToolsJsonChars()
+        {
+            try { return JsonConvert.SerializeObject(FormatToolsForAPI()).Length; } catch { return 0; }
+        }
+        public int ToolCount => _tools.Count;
+        public int HistoryChars { get { int n = 0; foreach (var m in _conversationHistory) n += EstimateMessageChars(m); return n; } }
+
         // A message the USER authored (typed text, or typed text + attached
         // images) — as opposed to tool_result turns the agent loop generates.
         private static bool IsUserAuthoredMessage(Message m)
@@ -82,13 +132,16 @@ namespace RevitMCPBridge2026.AgentFramework
             return false;
         }
 
-        private void TrimConversationHistory()
+        private void TrimConversationHistory(bool betweenRuns = false)
         {
             try
             {
                 int total = 0;
                 foreach (var m in _conversationHistory) total += EstimateMessageChars(m);
-                if (total <= HistoryCharBudget) return;
+                int threshold = betweenRuns ? HistorySoftBudget : HistoryCharBudget;
+                if (total <= threshold) return;
+                var digestAsks = new List<string>();
+                var digestTools = new List<string>();
                 int charsBefore = total;
 
                 // Never trim the current exchange: everything from the LAST
@@ -128,6 +181,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         if (ser.Contains("\"type\":\"image\"")) removedImages = true;
                     }
                     total -= EstimateMessageChars(victim);
+                    CollectDigest(victim, digestAsks, digestTools);
                     _conversationHistory.RemoveAt(0);
                     removed++;
                     protectedFrom--;
@@ -148,7 +202,18 @@ namespace RevitMCPBridge2026.AgentFramework
                 }
                 if (removed > 0 && _conversationHistory.Count > 0)
                 {
-                    var marker = $"[Note: {removed} older message(s) from this session were trimmed to keep responses fast. Work from those messages is already applied in the Revit model — do not redo it.{(removedImages ? " Some earlier attached images were removed with them — if you need one, ask the user to re-paste it rather than saying you cannot see images." : "")}]";
+                    _runTrimmed = true;
+                    var digest = new StringBuilder();
+                    digest.Append($"[Note: {removed} older message(s) from this session were trimmed to keep responses fast. Work from those messages is already applied in the Revit model — do not redo it.");
+                    if (digestAsks.Count > 0)
+                    {
+                        digest.Append(" Earlier in this session the user asked: ");
+                        for (int i = 0; i < digestAsks.Count; i++) digest.Append($"({i + 1}) {digestAsks[i]} ");
+                    }
+                    if (digestTools.Count > 0) digest.Append("Tools used in that work: " + string.Join(", ", digestTools) + ".");
+                    if (removedImages) digest.Append(" Some earlier attached images were removed with them — if you need one, ask the user to re-paste it rather than saying you cannot see images.");
+                    digest.Append("]");
+                    var marker = digest.ToString();
                     var first = _conversationHistory[0];
                     if (first.Content is string s)
                         first.Content = marker + "\n\n" + s;
@@ -159,6 +224,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
                     TelemetryService.Track(_bimMonkeyApiKey, "compaction", metadata: new
                     {
+                        between_runs = betweenRuns,
                         messages_trimmed = removed,
                         images_trimmed = removedImages,
                         chars_before = charsBefore,
@@ -238,6 +304,15 @@ namespace RevitMCPBridge2026.AgentFramework
         private DateTime _sessionStartTime;
         private string _currentStage = "thinking";
         private string _lastToolName = null;
+
+        // Per-run usage (one user message → N API calls). Reset at the start of RunAsync and
+        // reported as a run_outcome event, so a day-long pane shows every run, not just the first.
+        private int _runInputTokens, _runOutputTokens, _runCacheReadTokens, _runCacheCreationTokens;
+        private int _runApiCalls, _runToolCalls;
+        private bool _runTrimmed;
+        private DateTime _runStartTime;
+        private static readonly JsonSerializer NullDroppingSerializer =
+            JsonSerializer.Create(new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
 
         // Telemetry guards — session_start and session_outcome fire ONCE per AgentCore lifetime
         private bool _sessionStartSent = false;
@@ -329,6 +404,34 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 _localProcessor.InjectKnowledge(projectContext);
             }
+        }
+
+        // One row per user message: this run's own token deltas and cache split. The
+        // admin Plugin tab sums these per firm per day; the once-per-pane session_outcome
+        // only ever described the first run.
+        private void TrackRunOutcome(string outcome)
+        {
+            try
+            {
+                if (_runApiCalls == 0) return;
+                TelemetryService.Track(_bimMonkeyApiKey, "run_outcome", metadata: new
+                {
+                    outcome,
+                    stage = _currentStage,
+                    last_tool = _lastToolName,
+                    model = _model,
+                    api_calls = _runApiCalls,
+                    tool_calls = _runToolCalls,
+                    input_tokens = _runInputTokens,
+                    cache_read_tokens = _runCacheReadTokens,
+                    cache_creation_tokens = _runCacheCreationTokens,
+                    output_tokens = _runOutputTokens,
+                    trimmed = _runTrimmed,
+                    history_chars = HistoryChars,
+                    durationMs = (long)(DateTime.UtcNow - _runStartTime).TotalMilliseconds
+                }, revitVersion: _revitVersion, pluginVersion: _pluginVersion);
+            }
+            catch { }
         }
 
         /// <summary>
@@ -631,6 +734,10 @@ namespace RevitMCPBridge2026.AgentFramework
 
             _currentStage = "thinking";
             _lastToolName = null;
+            _runInputTokens = _runOutputTokens = _runCacheReadTokens = _runCacheCreationTokens = 0;
+            _runApiCalls = _runToolCalls = 0;
+            _runTrimmed = false;
+            _runStartTime = DateTime.UtcNow;
 
             // Fire session_start once per AgentCore lifetime (first message sent)
             if (!_sessionStartSent)
@@ -678,6 +785,11 @@ namespace RevitMCPBridge2026.AgentFramework
                     _model = allowedModel;
                 }
 
+                // Trim BETWEEN runs (never mid-loop unless the hard ceiling is hit): a trim
+                // changes the cached prefix, so doing it here, rarely and deeply, keeps the
+                // per-call cache reads intact through a whole tool-heavy run.
+                TrimConversationHistory(betweenRuns: true);
+
                 // Use pre-built content blocks (e.g. text + images) if set, otherwise plain string
                 if (_pendingContentOverride != null)
                 {
@@ -702,8 +814,13 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (response == null) break;
 
                     // Accumulate token usage and notify UI
+                    _runApiCalls++;
                     if (response.Usage != null)
                     {
+                        _runInputTokens         += response.Usage.InputTokens;
+                        _runOutputTokens        += response.Usage.OutputTokens;
+                        _runCacheReadTokens     += response.Usage.CacheReadInputTokens;
+                        _runCacheCreationTokens += response.Usage.CacheCreationInputTokens;
                         _sessionInputTokens        += response.Usage.InputTokens;
                         _sessionOutputTokens       += response.Usage.OutputTokens;
                         _sessionCacheReadTokens    += response.Usage.CacheReadInputTokens;
@@ -729,6 +846,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         else if (block.Type == "tool_use")
                         {
                             hasToolUse = true;
+                            _runToolCalls++;
                             assistantContent.Add(block);
                             _currentStage = "executing";
                             _lastToolName = block.Name;
@@ -860,6 +978,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (response.StopReason == "end_turn") break;
                 }
 
+                TrackRunOutcome("completed");
                 // session_outcome fires ONCE per AgentCore lifetime (guards prevent double-fire)
                 if (!_sessionOutcomeSent)
                 {
@@ -888,6 +1007,7 @@ namespace RevitMCPBridge2026.AgentFramework
             }
             catch (OperationCanceledException)
             {
+                TrackRunOutcome("interrupted");
                 if (!_sessionOutcomeSent)
                 {
                     _sessionOutcomeSent = true;
@@ -909,6 +1029,7 @@ namespace RevitMCPBridge2026.AgentFramework
             }
             catch (Exception ex)
             {
+                TrackRunOutcome("error");
                 if (!_sessionOutcomeSent)
                 {
                     _sessionOutcomeSent = true;
@@ -1387,6 +1508,37 @@ namespace RevitMCPBridge2026.AgentFramework
                         formatted.Add(new { role = msg.Role, content = rawList });
                     }
                 }
+            }
+
+            // Moving cache breakpoint: mark the last content block of the last message so
+            // everything up to here (tools → system → the whole conversation) is read from
+            // cache on the next call and only the new turn is written. Block-level, so it is
+            // valid on Anthropic and on Bedrock/Vertex through the inference proxy (the
+            // top-level form that did this before July 2026 was rejected by Bedrock). With
+            // the system + last-tool breakpoints this uses 3 of the 4 allowed.
+            if (formatted.Count > 0)
+            {
+                try
+                {
+                    var idx = formatted.Count - 1;
+                    var last = JObject.FromObject(formatted[idx], NullDroppingSerializer);
+                    var cc = JObject.FromObject(new { type = "ephemeral", ttl = "1h" });
+                    var content = last["content"];
+                    if (content is JValue jv && jv.Type == JTokenType.String)
+                    {
+                        var text = jv.ToString();
+                        if (text.Length > 0)
+                            last["content"] = new JArray(new JObject { ["type"] = "text", ["text"] = text, ["cache_control"] = cc });
+                    }
+                    else if (content is JArray arr && arr.Count > 0 && arr[arr.Count - 1] is JObject lastBlock)
+                    {
+                        var type = lastBlock["type"]?.ToString();
+                        bool emptyText = type == "text" && string.IsNullOrEmpty(lastBlock["text"]?.ToString());
+                        if (!emptyText) lastBlock["cache_control"] = cc;
+                    }
+                    formatted[idx] = last;
+                }
+                catch { /* caching must never break a request */ }
             }
 
             return formatted;
