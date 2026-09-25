@@ -25,7 +25,16 @@ namespace RevitMCPBridge2026.AgentFramework
             Assembly.GetExecutingAssembly()
                     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
                     ?.InformationalVersion ?? "unknown";
-        private const string _revitVersion = "2026";
+        // Real Revit version ("2027", "2025.4"), set by AgentChatPanel from the
+        // UIApplication. Was a hardcoded "2026" until v0.4.20260925 — telemetry
+        // rows before that say nothing about which Revit a firm actually runs.
+        private static string _revitVersion = "unknown";
+        public static void SetRevitVersion(string version)
+        {
+            if (string.IsNullOrWhiteSpace(version)) return;
+            _revitVersion = version.Trim();
+            TelemetryService.DefaultRevitVersion = _revitVersion;
+        }
 
         private readonly string _apiKey;
         private string _model; // Not readonly - can be changed by budget mode
@@ -371,7 +380,7 @@ namespace RevitMCPBridge2026.AgentFramework
             // Telemetry session context: one GUID per AgentCore lifetime, stamped
             // on every event (incl. panel-side ones) via TelemetryService.
             TelemetryService.CurrentSessionId = Guid.NewGuid().ToString("N");
-            TelemetryService.DefaultRevitVersion = _revitVersion;
+            if (_revitVersion != "unknown") TelemetryService.DefaultRevitVersion = _revitVersion;
             _tools = new List<ToolDefinition>();
             _conversationHistory = new List<Message>();
 

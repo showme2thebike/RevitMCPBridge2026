@@ -152,6 +152,7 @@ namespace RevitMCPBridge2026.AgentFramework
         public AgentChatPanel(UIApplication uiApp = null)
         {
             _uiApp = uiApp;
+            ApplyRevitVersion(uiApp);
 
             // Initialize project name for session tracking
             _sessionProjectName = uiApp?.ActiveUIDocument?.Document?.Title ?? "Unknown";
@@ -368,10 +369,26 @@ namespace RevitMCPBridge2026.AgentFramework
             });
         }
 
+        // Telemetry carried a hardcoded Revit "2026" until 9/25/2026; report the real one.
+        private static void ApplyRevitVersion(UIApplication uiApp)
+        {
+            try
+            {
+                var app = uiApp?.Application;
+                if (app == null) return;
+                string v = null;
+                try { v = app.SubVersionNumber; } catch { }
+                if (string.IsNullOrWhiteSpace(v)) v = app.VersionNumber;
+                AgentCore.SetRevitVersion(v);
+            }
+            catch { }
+        }
+
         public void SetUiApp(UIApplication uiApp)
         {
             if (_uiApp != null) return;
             _uiApp = uiApp;
+            ApplyRevitVersion(uiApp);
             _sessionProjectName = uiApp?.ActiveUIDocument?.Document?.Title ?? _sessionProjectName;
             _lockedDocTitle = _lockedDocTitle ?? uiApp?.ActiveUIDocument?.Document?.Title;
         }

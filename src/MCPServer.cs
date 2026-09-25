@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -3108,9 +3108,14 @@ namespace RevitMCPBridge
                         return await ExecuteInRevitContext(uiApp => ViewportCaptureMethods.CaptureViewportToBase64(uiApp, parameters));
 
                     case "analyzeView":
+                    {
                         var apiKey = parameters?["apiKey"]?.ToString();
                         var bimMonkeyApiKey = parameters?["bimMonkeyApiKey"]?.ToString();
-                        return await ExecuteInRevitContext(uiApp => ViewportCaptureMethods.AnalyzeView(uiApp, parameters, apiKey, bimMonkeyApiKey));
+                        // Only the view export needs Revit. The vision upload (up to 60 s)
+                        // runs on a worker thread so it can never hold Revit's UI thread.
+                        var captured = await ExecuteInRevitContext(uiApp => ViewportCaptureMethods.CaptureForAnalysis(uiApp, parameters));
+                        return await Task.Run(() => ViewportCaptureMethods.AnalyzeCapturedView(captured, parameters, apiKey, bimMonkeyApiKey));
+                    }
 
                     case "setCamera":
                         return await ExecuteInRevitContext(uiApp => ViewportCaptureMethods.SetCamera(uiApp, parameters));

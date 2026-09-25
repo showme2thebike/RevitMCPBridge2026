@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -779,16 +779,41 @@ namespace RevitMCPBridge
         #region AI Vision Analysis
 
         /// <summary>
-        /// Capture current view and analyze it with Claude's vision capability.
-        /// This gives the AI "eyes" to see what it's doing and verify results.
+        /// Vision analysis of a Revit view. Convenience wrapper for callers that are
+        /// already on Revit's thread; MCPServer calls the two steps separately so the
+        /// upload never runs inside the external event.
         /// </summary>
-        /// <param name="uiApp">Revit UIApplication</param>
-        /// <param name="parameters">
-        /// - viewId (optional): View to analyze. Uses active view if not specified.
-        /// - question: What to look for or analyze in the view.
-        /// </param>
-        /// <param name="apiKey">Anthropic API key for Claude</param>
         public static string AnalyzeView(UIApplication uiApp, JObject parameters, string apiKey, string bimMonkeyApiKey = null)
+        {
+            var captured = CaptureForAnalysis(uiApp, parameters);
+            return AnalyzeCapturedView(captured, parameters, apiKey, bimMonkeyApiKey);
+        }
+
+        /// <summary>Step 1 (Revit thread): export the view to a base64 PNG. Never throws.</summary>
+        public static string CaptureForAnalysis(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var captureParams = new JObject();
+                if (parameters?["viewId"] != null) captureParams["viewId"] = parameters["viewId"];
+                captureParams["width"] = 1200;
+                captureParams["height"] = 800;
+                return CaptureViewportToBase64(uiApp, captureParams);
+            }
+            catch (Exception ex)
+            {
+                return ResponseBuilder.FromException(ex).Build();
+            }
+        }
+
+        /// <summary>
+        /// Step 2 (any thread): send the captured image to Claude and wrap the answer.
+        /// MCPServer runs this OFF Revit's thread. Until 9/25/2026 the whole thing —
+        /// export, resize and a blocking HTTP call of up to 60 s — ran inside the
+        /// external event, freezing Revit's UI for its full duration; on a customer's
+        /// Revit 2027.3 that ended in Revit's "unrecoverable error" dialog.
+        /// </summary>
+        public static string AnalyzeCapturedView(string captureResult, JObject parameters, string apiKey, string bimMonkeyApiKey = null)
         {
             try
             {
@@ -805,25 +830,21 @@ namespace RevitMCPBridge
                     });
                 }
 
-                var question = parameters["question"]?.ToString() ?? "Describe what you see in this Revit view.";
-                var model = parameters["model"]?.ToString() ?? "claude-sonnet-4-6";
+                var question = parameters?["question"]?.ToString() ?? "Describe what you see in this Revit view.";
+                var model = parameters?["model"]?.ToString() ?? "claude-sonnet-4-6";
 
-                // Capture view to base64
-                var captureParams = new JObject();
-                if (parameters["viewId"] != null)
-                    captureParams["viewId"] = parameters["viewId"];
-                captureParams["width"] = 1200;
-                captureParams["height"] = 800;
-
-                var captureResult = CaptureViewportToBase64(uiApp, captureParams);
-                var capture = JObject.Parse(captureResult);
+                JObject capture;
+                try { capture = JObject.Parse(captureResult ?? ""); }
+                catch { return JsonConvert.SerializeObject(new { success = false, error = "View capture returned no usable result." }); }
 
                 if (capture["success"]?.ToObject<bool>() != true)
                     return captureResult;
 
-                var base64Image = capture["result"]["base64"].ToString();
-                var viewName = capture["result"]["viewName"]?.ToString() ?? "Unknown View";
-                var viewId = capture["result"]["viewId"]?.ToObject<int>() ?? 0;
+                var base64Image = capture["result"]?["base64"]?.ToString();
+                if (string.IsNullOrEmpty(base64Image))
+                    return JsonConvert.SerializeObject(new { success = false, error = "View capture produced an empty image." });
+                var viewName = capture["result"]?["viewName"]?.ToString() ?? "Unknown View";
+                var viewId = capture["result"]?["viewId"]?.ToObject<int>() ?? 0;
 
                 string analysisResult;
                 if (!string.IsNullOrEmpty(apiKey))
