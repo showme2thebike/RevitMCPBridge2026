@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -1356,7 +1356,7 @@ namespace RevitMCPBridge
                 new MethodDefinition("getWallTypes", 1, "wall", "Gets all wall types", "WallMethods.cs"),
 
                 // Room Methods (Tier 1)
-                new MethodDefinition("createRoom", 1, "room", "Creates a room at a point", "RoomMethods.cs"),
+                new MethodDefinition("createRoom", 1, "room", "Creates a room at a point. Params: levelId (int), location as a plain array [x, y] in feet, not an object", "RoomMethods.cs"),
                 new MethodDefinition("getRooms", 1, "room", "Gets all rooms", "RoomMethods.cs"),
                 new MethodDefinition("getRoomById", 1, "room", "Gets a room by ID", "RoomMethods.cs"),
                 new MethodDefinition("tagRoom", 1, "room", "Tags a room", "RoomMethods.cs"),

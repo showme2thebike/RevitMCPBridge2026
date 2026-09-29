@@ -319,6 +319,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private int _runInputTokens, _runOutputTokens, _runCacheReadTokens, _runCacheCreationTokens;
         private int _runApiCalls, _runToolCalls;
         private bool _runTrimmed;
+        private bool _runApiFailed;
         private DateTime _runStartTime;
         private static readonly JsonSerializer NullDroppingSerializer =
             JsonSerializer.Create(new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore });
@@ -746,6 +747,7 @@ namespace RevitMCPBridge2026.AgentFramework
             _runInputTokens = _runOutputTokens = _runCacheReadTokens = _runCacheCreationTokens = 0;
             _runApiCalls = _runToolCalls = 0;
             _runTrimmed = false;
+            _runApiFailed = false;
             _runStartTime = DateTime.UtcNow;
 
             // Fire session_start once per AgentCore lifetime (first message sent)
@@ -820,7 +822,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     OnThinking?.Invoke($"Thinking... (step {iteration})");
 
                     var response = await CallClaudeAsync(systemPrompt, token);
-                    if (response == null) break;
+                    if (response == null) { _runApiFailed = true; break; }
 
                     // Accumulate token usage and notify UI
                     _runApiCalls++;
@@ -987,7 +989,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (response.StopReason == "end_turn") break;
                 }
 
-                TrackRunOutcome("completed");
+                TrackRunOutcome(_runApiFailed ? "error" : "completed");
                 // session_outcome fires ONCE per AgentCore lifetime (guards prevent double-fire)
                 if (!_sessionOutcomeSent)
                 {
@@ -1269,10 +1271,90 @@ namespace RevitMCPBridge2026.AgentFramework
             }
         }
 
+        // Fired when a streamed reply is abandoned before it finished (connection
+        // reset mid-stream) and the attempt is about to be retried: the panel drops
+        // any partial text it already rendered so the retry doesn't duplicate it.
+        public event Action OnStreamReset;
+
+        // An attempt failed for a reason worth retrying: the connection was reset or
+        // timed out, or the API answered 5xx / 529 (overloaded) / 429. Field data:
+        // 'Unable to read data from the transport connection: An existing connection
+        // was forcibly closed by the remote host' four times on one firm in 30 days,
+        // each one ending the run with the Revit work already done and only Claude's
+        // closing reply lost. Retrying is cheap since the prompt is read from cache.
+        private sealed class TransientApiException : Exception
+        {
+            public bool PartialOutput { get; }
+            public TransientApiException(string message, bool partialOutput, Exception inner) : base(message, inner) { PartialOutput = partialOutput; }
+        }
+
+        private const int ApiMaxAttempts = 3;
+        private static readonly int[] ApiRetryDelaysMs = { 2000, 5000 };
+
+        private static bool IsTransientStatus(HttpStatusCode code)
+        {
+            var n = (int)code;
+            return n == 429 || n == 500 || n == 502 || n == 503 || n == 504 || n == 529;
+        }
+
+        private static bool IsTransientException(Exception ex)
+        {
+            for (var e = ex; e != null; e = e.InnerException)
+            {
+                if (e is System.Net.Sockets.SocketException) return true;
+                if (e is IOException) return true;
+                if (e is WebException we)
+                {
+                    switch (we.Status)
+                    {
+                        case WebExceptionStatus.ConnectionClosed:
+                        case WebExceptionStatus.ReceiveFailure:
+                        case WebExceptionStatus.SendFailure:
+                        case WebExceptionStatus.KeepAliveFailure:
+                        case WebExceptionStatus.Timeout:
+                        case WebExceptionStatus.ConnectFailure:
+                        case WebExceptionStatus.PipelineFailure:
+                        case WebExceptionStatus.SecureChannelFailure:
+                            return true;
+                    }
+                }
+                var m = e.Message ?? "";
+                if (m.IndexOf("forcibly closed", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (m.IndexOf("transport connection", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            }
+            return false;
+        }
+
         private async Task<ClaudeResponse> CallClaudeAsync(string systemPrompt, CancellationToken token)
+        {
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    return await CallClaudeOnceAsync(systemPrompt, token, attempt);
+                }
+                catch (TransientApiException tex)
+                {
+                    if (attempt >= ApiMaxAttempts || token.IsCancellationRequested)
+                    {
+                        TelemetryService.Track(_bimMonkeyApiKey, "api_error", metadata: new { error = tex.Message, attempts = attempt, gave_up = true });
+                        OnError?.Invoke($"Connection to Claude failed {attempt} times: {tex.Message} — your Revit changes so far are saved; send the message again to continue.");
+                        return null;
+                    }
+                    if (tex.PartialOutput) OnStreamReset?.Invoke();
+                    var delay = ApiRetryDelaysMs[Math.Min(attempt - 1, ApiRetryDelaysMs.Length - 1)];
+                    TelemetryService.Track(_bimMonkeyApiKey, "api_retry", metadata: new { error = tex.Message, attempt, delay_ms = delay });
+                    OnThinking?.Invoke($"Connection dropped — retrying ({attempt + 1} of {ApiMaxAttempts})...");
+                    try { await Task.Delay(delay, token); } catch (OperationCanceledException) { return null; }
+                }
+            }
+        }
+
+        private async Task<ClaudeResponse> CallClaudeOnceAsync(string systemPrompt, CancellationToken token, int attempt)
         {
             return await Task.Run(() =>
             {
+                bool receivedAny = false;
                 try
                 {
                     // Keep the history under budget before every request — see
@@ -1358,6 +1440,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
                             JObject evt;
                             try { evt = JObject.Parse(payload); } catch { continue; }
+                            receivedAny = true;
 
                             switch (evt["type"]?.ToString())
                             {
@@ -1445,22 +1528,29 @@ namespace RevitMCPBridge2026.AgentFramework
                         Usage = new UsageInfo { InputTokens = inputTokens, OutputTokens = outputTokens, CacheReadInputTokens = cacheReadTokens, CacheCreationInputTokens = cacheCreationTokens }
                     };
                 }
+                catch (OperationCanceledException) { throw; }
                 catch (WebException ex)
                 {
                     string errorBody = "";
+                    HttpStatusCode? status = (ex.Response as HttpWebResponse)?.StatusCode;
                     if (ex.Response != null)
                     {
-                        using (var reader = new StreamReader(ex.Response.GetResponseStream()))
-                            errorBody = reader.ReadToEnd();
+                        try { using (var reader = new StreamReader(ex.Response.GetResponseStream())) errorBody = reader.ReadToEnd(); } catch { }
                     }
+                    bool transient = (status.HasValue && IsTransientStatus(status.Value)) || (!status.HasValue && IsTransientException(ex));
+                    if (transient)
+                        throw new TransientApiException(status.HasValue ? $"HTTP {(int)status.Value}" : ex.Message, receivedAny, ex);
                     TelemetryService.Track(_bimMonkeyApiKey, "api_error",
-                        metadata: new { error = ex.Message, body = errorBody?.Length > 200 ? errorBody.Substring(0, 200) : errorBody });
+                        metadata: new { error = ex.Message, body = errorBody?.Length > 200 ? errorBody.Substring(0, 200) : errorBody, attempt });
                     OnError?.Invoke($"API Error: {ex.Message} - {errorBody}");
                     return null;
                 }
+                catch (TransientApiException) { throw; }
                 catch (Exception ex)
                 {
-                    TelemetryService.Track(_bimMonkeyApiKey, "api_error", metadata: new { error = ex.Message });
+                    if (IsTransientException(ex))
+                        throw new TransientApiException(ex.Message, receivedAny, ex);
+                    TelemetryService.Track(_bimMonkeyApiKey, "api_error", metadata: new { error = ex.Message, attempt });
                     OnError?.Invoke($"HTTP Error: {ex.Message}");
                     return null;
                 }

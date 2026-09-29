@@ -2148,6 +2148,18 @@ namespace RevitMCPBridge2026.AgentFramework
                 AddToolMessage(displayResult, true);
                 TryDisplayImageFromResult(msg);
             });
+            _agent.OnStreamReset += () => Dispatcher.Invoke(() =>
+            {
+                // A reply was cut off mid-stream and is being retried: remove the
+                // partial bubble so the retried reply doesn't appear twice.
+                try
+                {
+                    if (_streamingContainer != null && _streamingContainer.Parent is Panel parent) parent.Children.Remove(_streamingContainer);
+                }
+                catch { }
+                _streamingContainer = null;
+                _streamingTextBox = null;
+            });
             _agent.OnChunk += (chunk) => Dispatcher.Invoke(() =>
             {
                 if (_streamingTextBox == null)
