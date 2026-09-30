@@ -2245,7 +2245,8 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     if (result.Verified)
                     {
-                        AddToolMessage($"✅ Verified: {result.Message}", true);
+                        if (!string.IsNullOrEmpty(result.Message))
+                            AddToolMessage($"✅ Verified: {result.Message}", true);
                     }
                     else
                     {

@@ -814,6 +814,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
                 int maxIterations = 50;
                 int iteration = 0;
+                _runContinuations = 0;
 
                 while (iteration < maxIterations && !token.IsCancellationRequested)
                 {
@@ -955,7 +956,40 @@ namespace RevitMCPBridge2026.AgentFramework
                         }
                     }
 
-                    _conversationHistory.Add(new Message { Role = "assistant", Content = assistantContent });
+                    // The API rejects an assistant turn with no content, which is what a
+                    // reply cut off inside its first tool call leaves behind.
+                    if (assistantContent.Count > 0)
+                        _conversationHistory.Add(new Message { Role = "assistant", Content = assistantContent });
+
+                    if (response.Truncated && !token.IsCancellationRequested)
+                    {
+                        _runContinuations++;
+                        TelemetryService.Track(_bimMonkeyApiKey, "reply_truncated",
+                            metadata: new { continuation = _runContinuations, output_tokens = response.Usage?.OutputTokens ?? 0, had_tool_results = toolResults.Count > 0 },
+                            revitVersion: _revitVersion, pluginVersion: _pluginVersion);
+
+                        if (_runContinuations > MaxContinuationsPerRun)
+                        {
+                            OnResponse?.Invoke("⚠️ The reply was cut off at the output limit " + MaxContinuationsPerRun + " times in a row. Try a smaller request, for example one room or one group of elements at a time.");
+                            break;
+                        }
+
+                        OnThinking?.Invoke("Reply hit the length limit — continuing…");
+                        var resume = "[The previous reply was cut off at the output length limit before it finished. " +
+                                     (toolResults.Count > 0 ? "Any tool calls that completed are answered above; the cut-off one was discarded. " : "The unfinished tool call was discarded. ") +
+                                     "Continue from where you left off and re-issue the cut-off tool call in full. Keep each script compact: handle one room or one group of elements per call rather than everything at once.]";
+                        if (hasToolUse && toolResults.Count > 0)
+                        {
+                            var cont = toolResults.Cast<object>().ToList();
+                            cont.Add(new { type = "text", text = resume });
+                            _conversationHistory.Add(new Message { Role = "user", Content = cont });
+                        }
+                        else
+                        {
+                            _conversationHistory.Add(new Message { Role = "user", Content = resume });
+                        }
+                        continue;
+                    }
 
                     if (hasToolUse && toolResults.Count > 0)
                     {
@@ -1291,6 +1325,16 @@ namespace RevitMCPBridge2026.AgentFramework
         private const int ApiMaxAttempts = 3;
         private static readonly int[] ApiRetryDelaysMs = { 2000, 5000 };
 
+        // Output cap per reply. Sonnet 5 / Haiku 4.5 allow 64K; 32K bounds the
+        // cost of a runaway reply while leaving room for a long placement script.
+        // 9/30/2026: at 8192 a "place outlets in these rooms" run was cut off
+        // mid-script five times in a row and the plugin ended each run silently.
+        public const int MaxOutputTokens = 32000;
+        // How many times one run may be auto-continued after a cut-off reply
+        // before we stop and tell the user to narrow the request.
+        private const int MaxContinuationsPerRun = 3;
+        private int _runContinuations = 0;
+
         private static bool IsTransientStatus(HttpStatusCode code)
         {
             var n = (int)code;
@@ -1376,7 +1420,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     var requestBody = new
                     {
                         model = _model,
-                        max_tokens = 8192,
+                        max_tokens = MaxOutputTokens,
                         system = systemBlock,
                         messages = FormatMessagesForAPI(),
                         tools = FormatToolsForAPI(),
@@ -1514,16 +1558,27 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (fullText.Length > 0)
                         content.Add(new ContentBlock { Type = "text", Text = fullText });
 
+                    bool truncated = stopReason == "max_tokens";
                     foreach (var kv in toolBlocks)
                     {
                         JObject inputObj;
-                        try { inputObj = JObject.Parse(kv.Value.Input.ToString()); } catch { inputObj = new JObject(); }
+                        try { inputObj = JObject.Parse(kv.Value.Input.ToString()); }
+                        catch
+                        {
+                            // The stream ended inside this tool call's JSON (output cap
+                            // or dropped connection). Dispatching it with empty input
+                            // runs nothing and confuses the model; drop it and let the
+                            // continuation logic ask for it again in full.
+                            truncated = true;
+                            continue;
+                        }
                         content.Add(new ContentBlock { Type = "tool_use", Id = kv.Value.Id, Name = kv.Value.Name, Input = inputObj });
                     }
 
                     return new ClaudeResponse
                     {
                         Content = content,
+                        Truncated = truncated,
                         StopReason = stopReason ?? "end_turn",
                         Usage = new UsageInfo { InputTokens = inputTokens, OutputTokens = outputTokens, CacheReadInputTokens = cacheReadTokens, CacheCreationInputTokens = cacheCreationTokens }
                     };
@@ -1776,6 +1831,9 @@ Rules:
 
         [JsonProperty("stop_reason")]
         public string StopReason { get; set; }
+        // True when the reply hit max_tokens or a tool call's JSON arrived incomplete.
+        [JsonIgnore]
+        public bool Truncated { get; set; }
 
         [JsonProperty("usage")]
         public UsageInfo Usage { get; set; }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -93,12 +93,15 @@ namespace RevitMCPBridge
                 }
             }
 
-            // No specific verifier - assume success if command succeeded
+            // No specific verifier - assume success if command succeeded.
+            // Message stays null so the chat panel shows nothing: the old
+            // "Command completed (no specific verification available)" line
+            // printed after every script call and read like a warning.
             return new VerificationResult
             {
                 Verified = true,
                 Method = method,
-                Message = "Command completed (no specific verification available)",
+                Message = null,
                 CommandSucceeded = true
             };
         }
