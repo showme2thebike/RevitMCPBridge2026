@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -18,14 +18,14 @@ namespace RevitMCPBridge
     /// Code compliance validation methods for MCP Bridge
     /// Supports: Florida Building Code, Miami-Dade, ADA, Florida Residential Code
     /// </summary>
-    public static class ComplianceMethods
+    public static partial class ComplianceMethods
     {
         #region Main Validation Methods
 
         /// <summary>
         /// Run all compliance checks on the current model
         /// </summary>
-        [MCPMethod("runComplianceCheck", Category = "Compliance", Description = "Run all compliance checks on the current model")]
+        [MCPMethod("runComplianceCheck", Category = "Compliance", Description = "Run all compliance checks on the current model. checkTypes: all | egress | accessibility | rooms | doors | electrical (NEC 210.52 receptacle spacing + 210.8 GFCI)")]
         public static string RunComplianceCheck(UIApplication uiApp, JObject parameters)
         {
             try
@@ -83,6 +83,19 @@ namespace RevitMCPBridge
                 {
                     var doorResults = CheckDoorRequirements(doc, levelId);
                     foreach (var r in doorResults)
+                    {
+                        results.Add(r);
+                        if (r.Status == "PASS") passed++;
+                        else if (r.Status == "WARNING") warnings++;
+                        else failures++;
+                    }
+                }
+
+                // 9/30/2026: NEC 210.52 receptacle spacing + 210.8 GFCI (dwelling units).
+                if (checkTypes.Contains("all") || checkTypes.Contains("electrical"))
+                {
+                    var elecResults = CheckElectricalRequirements(uiApp, levelId);
+                    foreach (var r in elecResults)
                     {
                         results.Add(r);
                         if (r.Status == "PASS") passed++;
