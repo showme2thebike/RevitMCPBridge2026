@@ -70,6 +70,7 @@ namespace RevitMCPBridge
                 if (checkTypes.Contains("all") || checkTypes.Contains("rooms"))
                 {
                     var roomResults = CheckRoomRequirements(doc, levelId);
+                    roomResults.AddRange(CheckRoomIntegrity(doc, levelId));
                     foreach (var r in roomResults)
                     {
                         results.Add(r);

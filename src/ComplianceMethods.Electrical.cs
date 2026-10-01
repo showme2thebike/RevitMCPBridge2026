@@ -30,7 +30,7 @@ namespace RevitMCPBridge
         private static readonly string[] SpacingRoomKeys =
         {
             "kitchen", "family", "living", "parlor", "parlour", "library", "den", "sunroom", "sun room",
-            "bedroom", "bed ", "bdrm", "master", "guest", "recreation", "rec room", "rec.", "dining",
+            "bedroom", "bed ", "bdrm", "master", "primary", "owner", "suite", "guest", "recreation", "rec room", "rec.", "dining",
             "great room", "office", "study", "nook", "breakfast", "loft", "bonus", "media", "playroom",
             "sitting", "flex", "game"
         };
@@ -42,9 +42,11 @@ namespace RevitMCPBridge
         private static readonly string[] LaundryKeys  = { "laundry", "utility", "mud" };
         private static readonly string[] BasementKeys = { "basement", "cellar" };
         private static readonly string[] CrawlKeys    = { "crawl" };
+        private static readonly string[] ClosetKeys   = { "closet", "wardrobe", "pantry", "storage", "mech", "utility" };
+        private static readonly string[] SinkKeys     = { "sink", "lav", "basin", "vanity" };
         private static readonly string[] AfciRoomKeys =
         {
-            "kitchen", "family", "living", "parlor", "library", "den", "bedroom", "bed ", "bdrm", "master", "guest",
+            "kitchen", "family", "living", "parlor", "library", "den", "bedroom", "bed ", "bdrm", "master", "primary", "owner", "suite", "guest",
             "sunroom", "recreation", "rec room", "closet", "hall", "corridor", "laundry", "dining", "great room",
             "office", "study", "nook", "loft", "bonus", "media", "playroom", "sitting"
         };
@@ -168,30 +170,71 @@ namespace RevitMCPBridge
                 foreach (var room in rooms)
                 {
                     var name = room.Name ?? "";
-                    bool isSpacingRoom = NameHas(name, SpacingRoomKeys) && !NameHas(name, BathKeys) && !NameHas(name, GarageKeys);
-                    bool isHall = NameHas(name, HallKeys);
+                    bool isBath = NameHas(name, BathKeys);
+                    bool isCloset = NameHas(name, ClosetKeys);
+                    bool isGarage = NameHas(name, GarageKeys);
+                    bool isLaundry = NameHas(name, LaundryKeys) && !isCloset;
+                    bool isSpacingRoom = NameHas(name, SpacingRoomKeys) && !isBath && !isGarage && !isCloset && !isLaundry;
+                    bool isHall = NameHas(name, HallKeys) && !isCloset;
                     bool isFoyer = NameHas(name, FoyerKeys);
                     bool isKitchen = NameHas(name, KitchenKeys);
                     var lvl = doc.GetElement(room.LevelId) as Level;
                     double z = lvl?.Elevation ?? 0;
 
-                    if (!isSpacingRoom && !isHall && !isFoyer)
-                    {
-                        na++;
-                        results.Add(new { roomId = (int)room.Id.Value, roomName = name, roomNumber = room.Number, level = lvl?.Name, status = "N/A",
-                            rule = "210.52(A)", message = "Not a room type covered by the wall-space rule (bathrooms, closets, garages, utility, storage are excluded)." });
-                        continue;
-                    }
-
                     var loops = room.GetBoundarySegments(new SpatialElementBoundaryOptions { SpatialElementBoundaryLocation = SpatialElementBoundaryLocation.Finish });
                     if (loops == null || loops.Count == 0)
                     {
                         verify++;
-                        results.Add(new { roomId = (int)room.Id.Value, roomName = name, roomNumber = room.Number, level = lvl?.Name, status = "VERIFY", rule = "210.52(A)", message = "Room has no boundary segments (unbounded or not enclosed); cannot measure wall spaces." });
+                        results.Add(new { roomId = (int)room.Id.Value, roomName = name, roomNumber = room.Number, level = lvl?.Name, status = "VERIFY", rule = "210.52", message = "Room has no boundary segments (unbounded or not enclosed); cannot measure." });
+                        continue;
+                    }
+                    var recs = ReceptaclesNearLevel(doc, room).Where(fi => ReceptacleInRoom(fi, room, 1.5, loops, z)).ToList();
+
+                    // 210.52(D): bathroom receptacle within 3 ft of the outside edge of each basin.
+                    if (isBath)
+                    {
+                        var sinks = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_PlumbingFixtures).WhereElementIsNotElementType().OfType<FamilyInstance>()
+                            .Where(f => NameHas((f.Symbol?.FamilyName ?? "") + " " + (f.Symbol?.Name ?? ""), SinkKeys))
+                            .Where(f => ReceptacleInRoom(f, room, 0.5, loops, z))
+                            .Select(f => (f.Location as LocationPoint)?.Point).Where(pt => pt != null).ToList();
+                        string bs; string bmsg; double worstSink = 0;
+                        if (sinks.Count == 0) { bs = "VERIFY"; bmsg = $"No sink/lavatory family found in this bathroom; {recs.Count} receptacle(s) present. 210.52(D) needs one within 3 ft of each basin."; }
+                        else if (recs.Count == 0) { bs = "FAIL"; bmsg = $"{sinks.Count} basin(s), no receptacle. 210.52(D) requires one within 3 ft of each basin."; }
+                        else
+                        {
+                            foreach (var sk in sinks)
+                            {
+                                double d = recs.Min(fi => { var q = (fi.Location as LocationPoint).Point; return Math.Sqrt(Math.Pow(q.X - sk.X, 2) + Math.Pow(q.Y - sk.Y, 2)); });
+                                worstSink = Math.Max(worstSink, d);
+                            }
+                            // basin edge is roughly 1 ft from the fixture insertion point
+                            bs = worstSink <= 4.0 ? "PASS" : "FAIL";
+                            bmsg = bs == "PASS" ? $"Every basin has a receptacle within 3 ft (farthest centre-to-centre {worstSink:F1} ft)." : $"A basin is {worstSink:F1} ft (centre-to-centre) from the nearest receptacle; 210.52(D) allows 3 ft from the basin edge.";
+                        }
+                        if (bs == "PASS") pass++; else if (bs == "FAIL") fail++; else verify++;
+                        results.Add(new { roomId = (int)room.Id.Value, roomName = name, roomNumber = room.Number, level = lvl?.Name, status = bs, rule = "210.52(D)", basins = sinks.Count, receptacleCount = recs.Count, message = bmsg, notes = new[] { "All bathroom receptacles also need GFCI (210.8(A)(1)); see checkGfciRequirements." } });
                         continue;
                     }
 
-                    var recs = ReceptaclesNearLevel(doc, room).Where(fi => ReceptacleInRoom(fi, room, 1.5, loops, z)).ToList();
+                    // 210.52(F) laundry, 210.52(G) garage: at least one receptacle.
+                    if (isLaundry || isGarage)
+                    {
+                        string rule = isLaundry ? "210.52(F)" : "210.52(G)";
+                        string ls = recs.Count >= 1 ? "PASS" : "FAIL";
+                        if (ls == "PASS") pass++; else fail++;
+                        results.Add(new { roomId = (int)room.Id.Value, roomName = name, roomNumber = room.Number, level = lvl?.Name, status = ls, rule, receptacleCount = recs.Count,
+                            message = ls == "PASS" ? $"{recs.Count} receptacle(s) present." : (isLaundry ? "Laundry area has no receptacle; 210.52(F) requires at least one for the laundry equipment." : "Garage has no receptacle; 210.52(G)(1) requires at least one per vehicle bay."),
+                            notes = isLaundry ? new[] { "Dedicated 20 A laundry circuit (210.11(C)(2)) and GFCI (210.8(A)(10)) are note items; a 240 V dryer receptacle in the laundry area also needs GFCI under 2023 NEC." } : new[] { "One per vehicle bay; bay count not read from the model." } });
+                        continue;
+                    }
+
+                    if (!isSpacingRoom && !isHall && !isFoyer)
+                    {
+                        na++;
+                        results.Add(new { roomId = (int)room.Id.Value, roomName = name, roomNumber = room.Number, level = lvl?.Name, status = "N/A",
+                            rule = "210.52(A)", receptacleCount = recs.Count, message = "No receptacle count rule keyed to this room name (closets, storage, mechanical, unlabeled)." });
+                        continue;
+                    }
 
                     // Hallway rule: 210.52(H) — hallways 10 ft or more need at least one receptacle.
                     if (isHall && !isSpacingRoom)
@@ -487,6 +530,48 @@ namespace RevitMCPBridge
             {
                 return ResponseBuilder.FromException(ex).Build();
             }
+        }
+
+        // ── Room integrity: duplicates, unplaced, not enclosed ──────────────────
+        [MCPMethod("checkRoomIntegrity", Category = "Compliance",
+            Description = "Model hygiene for rooms before any room-based check: duplicate rooms (same number on a level, or same name+number), unplaced rooms (in the schedule but not in the model), and rooms that are not enclosed or are redundant (placed but zero area). Optional levelId. Code checks silently skip bad rooms, so run this when a room you expect is missing from a report.")]
+        public static string CheckRoomIntegrity(UIApplication uiApp, JObject parameters)
+        {
+            try
+            {
+                var doc = uiApp.ActiveUIDocument.Document;
+                ElementId levelId = parameters["levelId"] != null ? new ElementId(long.Parse(parameters["levelId"].ToString())) : null;
+                var list = CheckRoomIntegrity(doc, levelId);
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true, checkType = "room_integrity",
+                    summary = new { issues = list.Count, duplicates = list.Count(r => r.RuleId == "ROOM-DUP"), unplaced = list.Count(r => r.RuleId == "ROOM-UNPLACED"), notEnclosed = list.Count(r => r.RuleId == "ROOM-OPEN") },
+                    results = list.Select(r => new { ruleId = r.RuleId, ruleName = r.RuleName, elementId = r.ElementId, room = r.ElementName, status = r.Status, message = r.Message })
+                });
+            }
+            catch (Exception ex) { return ResponseBuilder.FromException(ex).Build(); }
+        }
+
+        private static List<ComplianceResult> CheckRoomIntegrity(Document doc, ElementId levelId)
+        {
+            var list = new List<ComplianceResult>();
+            var rooms = new FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Rooms).WhereElementIsNotElementType().Cast<Room>().ToList();
+            if (levelId != null) rooms = rooms.Where(r => r.LevelId == levelId).ToList();
+            foreach (var r in rooms)
+            {
+                string label = $"{r.Name} {r.Number}".Trim();
+                if (r.Location == null)
+                    list.Add(new ComplianceResult { RuleId = "ROOM-UNPLACED", RuleName = "Room not placed", ElementId = (int)r.Id.Value, ElementName = label, Status = "WARNING", Message = $"'{label}' exists in the room schedule but is not placed in the model." });
+                else if (r.Area <= 0)
+                    list.Add(new ComplianceResult { RuleId = "ROOM-OPEN", RuleName = "Room not enclosed", ElementId = (int)r.Id.Value, ElementName = label, Status = "WARNING", Message = $"'{label}' is placed but has no area (not enclosed, or redundant with another room). Code checks skip it." });
+            }
+            foreach (var g in rooms.Where(r => r.Location != null).GroupBy(r => (r.LevelId.Value, (r.Number ?? "").Trim())).Where(g => g.Key.Item2 != "" && g.Count() > 1))
+            {
+                var ids = string.Join(", ", g.Select(r => r.Id.Value));
+                var first = g.First();
+                list.Add(new ComplianceResult { RuleId = "ROOM-DUP", RuleName = "Duplicate room", ElementId = (int)first.Id.Value, ElementName = $"{first.Name} {first.Number}".Trim(), Status = "WARNING", Message = $"Room number '{g.Key.Item2}' appears {g.Count()} times on the same level (ids {ids}). Delete the extras or renumber." });
+            }
+            return list;
         }
 
         // ── runComplianceCheck integration ("electrical") ───────────────────────

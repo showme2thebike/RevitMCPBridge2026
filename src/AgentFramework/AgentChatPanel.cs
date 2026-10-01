@@ -4010,6 +4010,25 @@ namespace RevitMCPBridge2026.AgentFramework
         private const int MaxRetryAttempts = 3;
         private const int InitialRetryDelayMs = 500;
         private const int MCPTimeoutMs = 30000;
+        // Scripts, plans and batch/import operations can legitimately run for minutes
+        // while Revit regenerates; 30 s made them "time out" with the change already
+        // applied, and the retry re-sent the write (9/30/2026, Barrett).
+        private const int MCPLongTimeoutMs = 120000;
+        private static readonly string[] LongRunningMethods =
+        {
+            "executeRevitScript", "runSavedScript", "executePlan", "executeBatch", "verifyBatch",
+            "importSvgToDetail", "loadFamily", "loadAutodeskFamily", "generateVicinityMap",
+            "analyzeRedlines", "createSheet", "placeViewOnSheet", "synthesize", "getLevels"
+        };
+        private static readonly string[] ReadOnlyPrefixes =
+        {
+            "get", "list", "check", "verify", "ping", "find", "search", "calculate", "analyze",
+            "export", "capture", "read", "query", "describe", "count", "is", "has", "recall", "memory"
+        };
+        private static int MCPTimeoutFor(string methodName)
+            => LongRunningMethods.Contains(methodName) ? MCPLongTimeoutMs : MCPTimeoutMs;
+        private static bool IsWriteMethod(string methodName)
+            => !ReadOnlyPrefixes.Any(p => methodName.StartsWith(p, StringComparison.OrdinalIgnoreCase));
 
         /// <summary>
         /// Execute MCP method with automatic retry and enhanced error handling
@@ -4053,12 +4072,13 @@ namespace RevitMCPBridge2026.AgentFramework
                     // On timeout, ForceClosePipe() disposes the stream causing ReadLine()
                     // to throw IOException so the orphaned task completes (exception ignored).
                     var readTask    = Task.Run(() => readerCapture?.ReadLine());
-                    var timeoutTask = Task.Delay(MCPTimeoutMs);
+                    var timeoutMs   = MCPTimeoutFor(methodName);
+                    var timeoutTask = Task.Delay(timeoutMs);
                     var winner      = await Task.WhenAny(readTask, timeoutTask);
                     if (winner == timeoutTask)
                     {
                         ForceClosePipe();
-                        throw new MCPTimeoutException($"Method '{methodName}' timed out after {MCPTimeoutMs}ms");
+                        throw new MCPTimeoutException($"Method '{methodName}' timed out after {timeoutMs}ms");
                     }
                     var response = await readTask;
 
@@ -4125,8 +4145,20 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     lastError = timeoutEx.Message;
                     TelemetryService.Track(_bimMonkeyApiKey, "pipe_reconnect",
-                        toolName: methodName, metadata: new { reason = "read_timeout", attempt });
-                    // Timeouts often indicate Revit is busy - give it time
+                        toolName: methodName, metadata: new { reason = "read_timeout", attempt, write = IsWriteMethod(methodName) });
+                    // A write that timed out is still queued in Revit and usually
+                    // completes. Re-sending it would run it twice (duplicate outlets,
+                    // sheets, views). Hand the model the facts instead of retrying.
+                    if (IsWriteMethod(methodName))
+                    {
+                        return JsonConvert.SerializeObject(new
+                        {
+                            success = false,
+                            timedOut = true,
+                            error = $"'{methodName}' did not answer within {MCPTimeoutFor(methodName) / 1000} s. Revit may still be running it and the change may already be applied. Do NOT send the same call again; first read the model (for example query the elements or sheets you expected) and only re-run if the change is genuinely missing."
+                        });
+                    }
+                    // Reads are safe to retry; Revit was probably busy.
                     if (attempt < MaxRetryAttempts)
                     {
                         await Task.Delay(InitialRetryDelayMs * attempt * 2);
@@ -4526,8 +4558,10 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private string HandleCopyFile(JObject parameters)
         {
-            var sourcePath = parameters?["source"]?.ToString();
-            var destPath = parameters?["destination"]?.ToString();
+            // The tool schema names these sourcePath/destinationPath; older callers
+            // used source/destination. Accept both (9/30/2026: every call failed).
+            var sourcePath = parameters?["sourcePath"]?.ToString() ?? parameters?["source"]?.ToString();
+            var destPath = parameters?["destinationPath"]?.ToString() ?? parameters?["destination"]?.ToString();
             var overwrite = parameters?["overwrite"]?.ToObject<bool>() ?? false;
 
             if (string.IsNullOrEmpty(sourcePath))
