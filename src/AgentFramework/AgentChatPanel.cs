@@ -2339,7 +2339,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
                     client.Timeout = TimeSpan.FromSeconds(10);
-                    var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/auth/verify");
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, "https://bimmonkey-production.up.railway.app/api/auth/verify");
                     if (!resp.IsSuccessStatusCode) return; // fail open
 
                     var body = await resp.Content.ReadAsStringAsync();
@@ -2444,7 +2444,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         var payload = new System.Net.Http.StringContent(
                             "{\"plan\":\"beta_monthly\"}",
                             System.Text.Encoding.UTF8, "application/json");
-                        var resp = await client.PostAsync(
+                        var resp = await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client,
                             "https://bimmonkey-production.up.railway.app/api/stripe/checkout", payload);
                         var body = await resp.Content.ReadAsStringAsync();
                         var url = JObject.Parse(body)["url"]?.ToString();
@@ -2541,7 +2541,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     client.Timeout = TimeSpan.FromSeconds(10);
 
                     // 1. Synthesized standards doc (learning from all past sessions)
-                    var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/firms/standards");
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, "https://bimmonkey-production.up.railway.app/api/firms/standards");
                     if (resp.IsSuccessStatusCode)
                     {
                         var body = await resp.Content.ReadAsStringAsync();
@@ -2555,7 +2555,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     }
 
                     // 2. Raw corrections from platform reviews (denied + edited decisions)
-                    var corrResp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/corrections/knowledge");
+                    var corrResp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, "https://bimmonkey-production.up.railway.app/api/corrections/knowledge");
                     if (corrResp.IsSuccessStatusCode)
                     {
                         var corrBody = await corrResp.Content.ReadAsStringAsync();
@@ -2571,7 +2571,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     }
 
                     // 3. Approved examples library summary (compact — what kinds of details this firm approves)
-                    var libResp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/library/summary");
+                    var libResp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, "https://bimmonkey-production.up.railway.app/api/library/summary");
                     if (libResp.IsSuccessStatusCode)
                     {
                         var libBody = await libResp.Content.ReadAsStringAsync();
@@ -2585,7 +2585,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     }
 
                     // 4. Firm memory — persistent facts and preferences stored across sessions
-                    var memResp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/firms/memory");
+                    var memResp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, "https://bimmonkey-production.up.railway.app/api/firms/memory");
                     if (memResp.IsSuccessStatusCode)
                     {
                         var memBody = await memResp.Content.ReadAsStringAsync();
@@ -2600,7 +2600,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
                     // 5. Project notes — scoped to the current Revit file name
                     var projectName = _sessionProjectName ?? "Unknown";
-                    var notesResp = await client.GetAsync(
+                    var notesResp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client,
                         $"https://bimmonkey-production.up.railway.app/api/firms/project-notes?project={Uri.EscapeDataString(projectName)}");
                     if (notesResp.IsSuccessStatusCode)
                     {
@@ -2802,7 +2802,7 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) })
                 {
-                    var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/config/models");
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, "https://bimmonkey-production.up.railway.app/api/config/models");
                     if (!resp.IsSuccessStatusCode) return;
                     var json = await resp.Content.ReadAsStringAsync();
                     var data = Newtonsoft.Json.Linq.JObject.Parse(json);
@@ -2846,7 +2846,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) })
                 {
                     client.DefaultRequestHeaders.Add("Authorization", "Bearer " + _bimMonkeyApiKey);
-                    var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/plugin/inference-config");
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, "https://bimmonkey-production.up.railway.app/api/plugin/inference-config");
                     if (!resp.IsSuccessStatusCode) return;
                     var data = Newtonsoft.Json.Linq.JObject.Parse(await resp.Content.ReadAsStringAsync());
                     var proxy = data["proxy"]?.ToObject<bool>() ?? false;
@@ -2876,7 +2876,7 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) };
                 client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
-                var resp = await client.GetAsync($"https://bimmonkey-production.up.railway.app/api/training/vectors?project={Uri.EscapeDataString(project)}");
+                var resp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, $"https://bimmonkey-production.up.railway.app/api/training/vectors?project={Uri.EscapeDataString(project)}");
                 var body = await resp.Content.ReadAsStringAsync();
                 if (!resp.IsSuccessStatusCode)
                     return JsonConvert.SerializeObject(new { success = false, error = $"Vector index lookup failed: {body}" });
@@ -2901,7 +2901,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(60) })
                 {
                     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
-                    var resp = await client.GetAsync($"https://bimmonkey-production.up.railway.app/api/training/vector?project={Uri.EscapeDataString(project)}&page={page}");
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, $"https://bimmonkey-production.up.railway.app/api/training/vector?project={Uri.EscapeDataString(project)}&page={page}");
                     var body = await resp.Content.ReadAsStringAsync();
                     if (!resp.IsSuccessStatusCode)
                         return JsonConvert.SerializeObject(new { success = false, error = $"Vector fetch failed: {body}" });
@@ -3267,7 +3267,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         return JsonConvert.SerializeObject(new { success = false, error = "Library example missing ID." });
 
                     // 3. Fetch full-resolution image directly from the library API
-                    var imgResp = await http.GetAsync($"https://bimmonkey-production.up.railway.app/api/library/{exampleId}/image");
+                    var imgResp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(http, $"https://bimmonkey-production.up.railway.app/api/library/{exampleId}/image");
                     if (!imgResp.IsSuccessStatusCode)
                         return JsonConvert.SerializeObject(new { success = false, error = $"Could not fetch library image (example {exampleId}): {(int)imgResp.StatusCode}" });
 
@@ -3358,7 +3358,7 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
                 client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
-                var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/redlines");
+                var resp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, "https://bimmonkey-production.up.railway.app/api/redlines");
                 var body = await resp.Content.ReadAsStringAsync();
                 if (!resp.IsSuccessStatusCode)
                     return JsonConvert.SerializeObject(new { success = false, error = $"Redlines API returned {(int)resp.StatusCode}: {body}" });
@@ -3378,7 +3378,7 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
                 client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
-                var resp = await client.GetAsync($"https://bimmonkey-production.up.railway.app/api/redlines/{sessionId}");
+                var resp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, $"https://bimmonkey-production.up.railway.app/api/redlines/{sessionId}");
                 var body = await resp.Content.ReadAsStringAsync();
                 if (!resp.IsSuccessStatusCode)
                     return JsonConvert.SerializeObject(new { success = false, error = $"Redlines API returned {(int)resp.StatusCode}: {body}" });
@@ -3406,7 +3406,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 // Fallback: return stored analysis text from the DB
                 using var sessionClient = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
                 sessionClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
-                var sResp = await sessionClient.GetAsync($"https://bimmonkey-production.up.railway.app/api/redlines/{sessionId}");
+                var sResp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(sessionClient, $"https://bimmonkey-production.up.railway.app/api/redlines/{sessionId}");
                 if (sResp.IsSuccessStatusCode)
                 {
                     var sBody   = await sResp.Content.ReadAsStringAsync();
@@ -3478,7 +3478,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     : $"address={Uri.EscapeDataString(address)}";
                 using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) };
                 client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
-                var resp = await client.GetAsync($"https://bimmonkey-production.up.railway.app/api/zillow/analyze?{query}");
+                var resp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, $"https://bimmonkey-production.up.railway.app/api/zillow/analyze?{query}");
                 var body = await resp.Content.ReadAsStringAsync();
                 if (!resp.IsSuccessStatusCode)
                     return JsonConvert.SerializeObject(new { success = false, error = $"Photo lookup failed: {body}" });
@@ -3527,9 +3527,9 @@ namespace RevitMCPBridge2026.AgentFramework
                         new JObject { ["address"] = address }.ToString(Newtonsoft.Json.Formatting.None),
                         System.Text.Encoding.UTF8, "application/json");
 
-                    var parcelTask = client.PostAsync(
+                    var parcelTask = RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client,
                         "https://bimmonkey-production.up.railway.app/api/parcel/lookup", body);
-                    var zoningTask = client.PostAsync(
+                    var zoningTask = RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client,
                         "https://bimmonkey-production.up.railway.app/api/zoning/lookup", bodyZoning);
 
                     await System.Threading.Tasks.Task.WhenAll(parcelTask, zoningTask);
@@ -3567,7 +3567,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
                     var body = new JObject { ["address"] = address }.ToString(Newtonsoft.Json.Formatting.None);
-                    var resp = await client.PostAsync(
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client,
                         "https://bimmonkey-production.up.railway.app/api/climate/lookup",
                         new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json"));
                     var raw = await resp.Content.ReadAsStringAsync();
@@ -3924,7 +3924,7 @@ namespace RevitMCPBridge2026.AgentFramework
                             JsonConvert.SerializeObject(new { name, description, code, usings }),
                             System.Text.Encoding.UTF8,
                             "application/json");
-                        var resp = await client.PostAsync(
+                        var resp = await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client,
                             "https://bimmonkey-production.up.railway.app/api/scripts", payload);
                         var respText = await resp.Content.ReadAsStringAsync();
                         if (!resp.IsSuccessStatusCode)
@@ -3964,7 +3964,7 @@ namespace RevitMCPBridge2026.AgentFramework
                             JsonConvert.SerializeObject(new { slug, name, description, content, scope = "revit" }),
                             System.Text.Encoding.UTF8,
                             "application/json");
-                        var resp = await client.PostAsync(
+                        var resp = await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client,
                             "https://bimmonkey-production.up.railway.app/api/skills", payload);
                         var respText = await resp.Content.ReadAsStringAsync();
                         if (!resp.IsSuccessStatusCode)
@@ -4725,7 +4725,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
                     var body = JsonConvert.SerializeObject(new { project_name = project, note });
                     var content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
-                    var resp = await client.PostAsync(
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client,
                         "https://bimmonkey-production.up.railway.app/api/firms/project-notes", content);
 
                     if (resp.IsSuccessStatusCode)
@@ -4761,7 +4761,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     client.Timeout = TimeSpan.FromSeconds(10);
                     var body = JsonConvert.SerializeObject(new { note });
                     var content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
-                    var resp = await client.PostAsync(
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client,
                         "https://bimmonkey-production.up.railway.app/api/firms/memory", content);
                     if (resp.IsSuccessStatusCode)
                     {
@@ -4819,7 +4819,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/pdf") }
                     }, "file", Path.GetFileName(filePath));
 
-                    var resp = await client.PostAsync(
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client,
                         "https://bimmonkey-production.up.railway.app/api/pdf/render", form);
 
                     var body = await resp.Content.ReadAsStringAsync();
@@ -4878,7 +4878,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         var payload = new System.Net.Http.StringContent(
                             Newtonsoft.Json.JsonConvert.SerializeObject(new { names = new[] { projectName } }),
                             System.Text.Encoding.UTF8, "application/json");
-                        var r = await c.PostAsync(
+                        var r = await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(c,
                             "https://bimmonkey-production.up.railway.app/api/training/check-duplicates", payload);
                         if (r.IsSuccessStatusCode)
                         {
@@ -4953,7 +4953,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     form.Add(new System.Net.Http.StringContent(projectName),    "projectName");
                     form.Add(new System.Net.Http.StringContent("residential"),  "buildingType");
 
-                    var resp = await client.PostAsync(
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client,
                         "https://bimmonkey-production.up.railway.app/api/training/upload-pdf-raw", form);
 
                     var body = await resp.Content.ReadAsStringAsync();
@@ -5003,7 +5003,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     client.Timeout = TimeSpan.FromSeconds(10);
                     var body = JsonConvert.SerializeObject(new { note = content });
                     var httpContent = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
-                    await client.PostAsync(
+                    await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client,
                         "https://bimmonkey-production.up.railway.app/api/firms/memory", httpContent);
                 }
             }
@@ -5032,7 +5032,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         confirmed             = true
                     });
                     var httpContent = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
-                    await client.PostAsync(
+                    await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client,
                         "https://bimmonkey-production.up.railway.app/api/corrections", httpContent);
                 }
             }
@@ -5630,7 +5630,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
                     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
-                    var manifestJson = await client.GetStringAsync("https://bimmonkey-production.up.railway.app/api/plugin/knowledge/manifest");
+                    var manifestJson = await RevitMCPBridge.AgentFramework.ApiRetry.GetStringAsync(client, "https://bimmonkey-production.up.railway.app/api/plugin/knowledge/manifest");
                     var manifest = JObject.Parse(manifestJson);
                     var files = manifest["files"] as JObject;
                     if (files == null) return;
@@ -5822,7 +5822,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     System.Text.Encoding.UTF8, "application/json");
                 using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(20) };
                 client.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
-                await client.PostAsync("https://bimmonkey-production.up.railway.app/api/plugin/model-snapshot", body);
+                await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client, "https://bimmonkey-production.up.railway.app/api/plugin/model-snapshot", body);
             }
             catch { }
         }
@@ -6324,7 +6324,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(8) })
                 {
                     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
-                    var resp = await client.GetAsync("https://bimmonkey-production.up.railway.app/api/skills");
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, "https://bimmonkey-production.up.railway.app/api/skills");
                     if (!resp.IsSuccessStatusCode) return;
                     var json  = await resp.Content.ReadAsStringAsync();
                     var data  = JObject.Parse(json);

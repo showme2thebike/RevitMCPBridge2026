@@ -885,7 +885,7 @@ namespace RevitMCPBridge
                     ["model"]    = model
                 };
                 var content = new System.Net.Http.StringContent(payload.ToString(Newtonsoft.Json.Formatting.None), System.Text.Encoding.UTF8, "application/json");
-                var response = client.PostAsync("https://bimmonkey-production.up.railway.app/api/plugin/analyze-view", content).Result;
+                var response = RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client, "https://bimmonkey-production.up.railway.app/api/plugin/analyze-view", content).Result;
                 var body = response.Content.ReadAsStringAsync().Result;
                 if (!response.IsSuccessStatusCode)
                     throw new Exception($"Railway proxy error {(int)response.StatusCode}: {body}");
