@@ -2436,7 +2436,7 @@ namespace RevitMCPBridge2026
         /// <summary>
         /// Places a legend component
         /// </summary>
-        [MCPMethod("placeLegendComponent", Category = "Annotation", Description = "Places a legend component in a legend view")]
+        [MCPMethod("placeLegendComponent", Category = "Annotation", Description = "Places a legend component in a legend view. For wall-hosted families (doors, windows) the API may report a 'drafted' fallback (drawn as detail lines); when it does, tell the user — they can place the real component manually via Insert > Legend Component in a Legend view, which works for hosted families. Prefer real dimension strings over text notes for legend dimensions.")]
         public static string PlaceLegendComponent(UIApplication uiApp, JObject parameters)
         {
             try

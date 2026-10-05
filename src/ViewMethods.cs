@@ -288,7 +288,7 @@ namespace RevitMCPBridge
         /// <summary>
         /// Create an elevation view
         /// </summary>
-        [MCPMethod("createElevation", Category = "View", Description = "Create an elevation view. direction:[dx,dy,0] controls which way the camera faces (e.g. [0,1,0]=North, [1,0,0]=East). markerIndex: which of the 4 marker arrows to activate (default 0). scale: marker scale in document units (default 48 = 1/4\"=1'-0\").")]
+        [MCPMethod("createElevation", Category = "View", Description = "Create an elevation view. Needs a floor-plan view as context. For walls that are not orthogonal, the direction vector does NOT rotate the marker and neither does rotateElements or setParameter: place the marker at the right position, then tell the user to Rotate-Copy a correctly oriented marker and delete this one. direction:[dx,dy,0] controls which way the camera faces (e.g. [0,1,0]=North, [1,0,0]=East). markerIndex: which of the 4 marker arrows to activate (default 0). scale: marker scale in document units (default 48 = 1/4\"=1'-0\").")]
         public static string CreateElevation(UIApplication uiApp, JObject parameters)
         {
             try

@@ -693,7 +693,7 @@ namespace RevitMCPBridge
             }
         }
 
-        [MCPMethod("batchTagWindows", Category = "Tagging", Description = "Tag all windows in a view. Mirrors batchTagDoors signature exactly. skipAlreadyTagged (default true) prevents duplicates. tagPosition: 'center' (default).")]
+        [MCPMethod("batchTagWindows", Category = "Tagging", Description = "Tag all windows in a view. offsetFt (default 0): push each tag that far perpendicular to the host wall, outward, so it does not sit on the window symbol; 1.5 is a good plan-view value. Mirrors batchTagDoors signature exactly. skipAlreadyTagged (default true) prevents duplicates. tagPosition: 'center' (default).")]
         public static string BatchTagWindows(UIApplication uiApp, JObject parameters)
         {
             try
@@ -702,6 +702,9 @@ namespace RevitMCPBridge
                 var viewId = new ElementId(int.Parse(parameters["viewId"].ToString()));
                 bool addLeader = parameters["addLeader"]?.ToObject<bool>() ?? false;
                 bool skipAlreadyTagged = parameters["skipAlreadyTagged"]?.ToObject<bool>() ?? true;
+                // offsetFt: push each tag this far perpendicular to its host wall, outward
+                // (wall.Orientation side), so it clears the window symbol. 0 = on the window.
+                double offsetFt = parameters["offsetFt"]?.ToObject<double>() ?? 0.0;
                 var tagPosition = parameters["tagPosition"]?.ToString()
                                ?? parameters["tagLocation"]?.ToString()
                                ?? "center";
@@ -753,6 +756,11 @@ namespace RevitMCPBridge
                         try
                         {
                             var location = (window.Location as LocationPoint).Point;
+                            if (offsetFt != 0 && window.Host is Wall hostWall)
+                            {
+                                var n = hostWall.Orientation;
+                                location = location + new XYZ(n.X, n.Y, 0).Normalize() * offsetFt;
+                            }
                             var tag = IndependentTag.Create(doc, view.Id, new Reference(window),
                                 addLeader, TagMode.TM_ADDBY_CATEGORY, TagOrientation.Horizontal, location);
                             taggedIds.Add(tag.Id.Value);

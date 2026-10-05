@@ -4382,7 +4382,7 @@ namespace RevitMCPBridge
         /// <summary>
         /// Set the text content of a text note
         /// </summary>
-        [MCPMethod("setTextNoteText", Category = "Sheet", Description = "Set the text content of a text note element")]
+        [MCPMethod("setTextNoteText", Category = "Sheet", Description = "Set the text content of a text note element. Preserves numbered/bulleted list formatting. Tab-delimited tables: use exactly one tab per column boundary.")]
         public static string SetTextNoteText(UIApplication uiApp, JObject parameters)
         {
             try
@@ -4415,11 +4415,32 @@ namespace RevitMCPBridge
 
                 var oldText = textNote.Text;
 
+                // Setting .Text drops list formatting (numbered/bulleted). Read the list type
+                // first and re-apply it after the write. TextRange end is Length-1; Length
+                // throws "end of text range is not within range". (field lesson, 9/2026)
+                ListType priorList = ListType.None;
+                try
+                {
+                    if (oldText.Length > 1)
+                        priorList = textNote.GetFormattedText().GetListType(new TextRange(0, oldText.Length - 1));
+                }
+                catch { priorList = ListType.None; }
+
                 TransactionStatus status;
                 using (var trans = new Transaction(doc, "Update TextNote Text"))
                 {
                     trans.Start();
                     textNote.Text = newText;
+                    if (priorList != ListType.None && priorList != ListType.Mixed && newText.Length > 1)
+                    {
+                        try
+                        {
+                            var ft = textNote.GetFormattedText();
+                            ft.SetListType(new TextRange(0, newText.Length - 1), priorList);
+                            textNote.SetFormattedText(ft);
+                        }
+                        catch (Exception lex) { System.Diagnostics.Debug.WriteLine($"setTextNoteText: list formatting not re-applied: {lex.Message}"); }
+                    }
                     status = trans.Commit();
                 }
 
