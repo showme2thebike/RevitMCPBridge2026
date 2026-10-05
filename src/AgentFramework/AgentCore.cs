@@ -970,6 +970,11 @@ namespace RevitMCPBridge2026.AgentFramework
 
                         if (_runContinuations > MaxContinuationsPerRun)
                         {
+                            // The assistant turn (with its tool_use blocks) is already in
+                            // history; the API requires their tool_result blocks next, so
+                            // record them before leaving the loop.
+                            if (hasToolUse && toolResults.Count > 0)
+                                _conversationHistory.Add(new Message { Role = "user", Content = toolResults.Cast<object>().ToList() });
                             OnResponse?.Invoke("⚠️ The reply was cut off at the output limit " + MaxContinuationsPerRun + " times in a row. Try a smaller request, for example one room or one group of elements at a time.");
                             break;
                         }
@@ -1562,15 +1567,27 @@ namespace RevitMCPBridge2026.AgentFramework
                     foreach (var kv in toolBlocks)
                     {
                         JObject inputObj;
-                        try { inputObj = JObject.Parse(kv.Value.Input.ToString()); }
-                        catch
+                        var rawInput = kv.Value.Input.ToString().Trim();
+                        if (rawInput.Length == 0)
                         {
-                            // The stream ended inside this tool call's JSON (output cap
-                            // or dropped connection). Dispatching it with empty input
-                            // runs nothing and confuses the model; drop it and let the
-                            // continuation logic ask for it again in full.
-                            truncated = true;
-                            continue;
+                            // No-parameter tools (listMethods, ping, getLevels…) stream no
+                            // input_json_delta at all: an empty buffer IS the valid input {}.
+                            // 10/5/2026: treating this as a cut-off dropped the call, forced
+                            // four bogus continuations, and poisoned Barrett's pane.
+                            inputObj = new JObject();
+                        }
+                        else
+                        {
+                            try { inputObj = JObject.Parse(rawInput); }
+                            catch
+                            {
+                                // The stream ended inside this tool call's JSON (output cap
+                                // or dropped connection). Dispatching it with partial input
+                                // runs the wrong thing; drop it and let the continuation
+                                // logic ask for it again in full.
+                                truncated = true;
+                                continue;
+                            }
                         }
                         content.Add(new ContentBlock { Type = "tool_use", Id = kv.Value.Id, Name = kv.Value.Name, Input = inputObj });
                     }
@@ -1612,8 +1629,50 @@ namespace RevitMCPBridge2026.AgentFramework
             }, token);
         }
 
+        // Every tool_use block in an assistant message must be answered by a
+        // tool_result in the very next message or the API rejects the whole
+        // request (400 "tool_use ids were found without tool_result blocks"),
+        // and keeps rejecting it on every later message. Any path that leaves
+        // the loop between "assistant turn added" and "results added" (cancel,
+        // exception, give-up) used to poison the pane for good. Repair in place.
+        private void RepairOrphanedToolUses()
+        {
+            int repaired = 0;
+            for (int i = 0; i < _conversationHistory.Count; i++)
+            {
+                var msg = _conversationHistory[i];
+                if (msg.Role != "assistant" || !(msg.Content is List<ContentBlock> blocks)) continue;
+                var ids = blocks.Where(b => b.Type == "tool_use" && !string.IsNullOrEmpty(b.Id)).Select(b => b.Id).ToList();
+                if (ids.Count == 0) continue;
+
+                var answered = new HashSet<string>();
+                List<object> nextResults = null;
+                if (i + 1 < _conversationHistory.Count && _conversationHistory[i + 1].Role == "user"
+                    && _conversationHistory[i + 1].Content is List<object> raw && raw.Count > 0 && raw[0] is ToolResultBlock)
+                {
+                    nextResults = raw;
+                    foreach (var r in raw) if (r is ToolResultBlock trb) answered.Add(trb.ToolUseId);
+                }
+                var missing = ids.Where(id => !answered.Contains(id)).ToList();
+                if (missing.Count == 0) continue;
+
+                var fill = missing.Select(id => (object)new ToolResultBlock
+                {
+                    Type = "tool_result", ToolUseId = id, IsError = true,
+                    Content = JsonConvert.SerializeObject(new { error = "Result unavailable: this call was interrupted before it completed. Re-issue it if still needed." })
+                }).ToList();
+                if (nextResults != null) nextResults.InsertRange(0, fill);
+                else { _conversationHistory.Insert(i + 1, new Message { Role = "user", Content = fill }); i++; }
+                repaired += missing.Count;
+            }
+            if (repaired > 0)
+                TelemetryService.Track(_bimMonkeyApiKey, "history_repaired", metadata: new { orphaned_tool_uses = repaired },
+                    revitVersion: _revitVersion, pluginVersion: _pluginVersion);
+        }
+
         private List<object> FormatMessagesForAPI()
         {
+            RepairOrphanedToolUses();
             var formatted = new List<object>();
 
             foreach (var msg in _conversationHistory)
