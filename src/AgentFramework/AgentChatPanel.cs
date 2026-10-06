@@ -4014,6 +4014,20 @@ namespace RevitMCPBridge2026.AgentFramework
         // while Revit regenerates; 30 s made them "time out" with the change already
         // applied, and the retry re-sent the write (9/30/2026, Barrett).
         private const int MCPLongTimeoutMs = 120000;
+        // Document-level operations and scripts routinely run for minutes on a model
+        // that lives on a shared drive: 10/6/2026 Barrett's two opens "timed out" at
+        // 120 s while Revit was still loading them (the pane then had to ask Revit
+        // which documents were actually open). Revit is blocked for the duration
+        // either way, so a longer wait costs nothing and avoids a false failure.
+        private const int MCPVeryLongTimeoutMs = 600000;
+        private static readonly string[] VeryLongRunningMethods =
+        {
+            "openDocument", "saveDocument", "saveAsTemplate", "closeDocument", "syncWithCentral",
+            "purgeUnused", "reloadLinks", "createNewDocument", "switchDocument",
+            "exportToIFC", "exportViewsToDWG", "exportSheetsToDWG", "batchExportDWG",
+            "exportSheetsToPDF", "batchExportPDF", "exportToNWC", "batchExportImages",
+            "executeRevitScript", "runSavedScript", "executePlan", "executeBatch"
+        };
         private static readonly string[] LongRunningMethods =
         {
             "executeRevitScript", "runSavedScript", "executePlan", "executeBatch", "verifyBatch",
@@ -4026,7 +4040,8 @@ namespace RevitMCPBridge2026.AgentFramework
             "export", "capture", "read", "query", "describe", "count", "is", "has", "recall", "memory"
         };
         private static int MCPTimeoutFor(string methodName)
-            => LongRunningMethods.Contains(methodName) ? MCPLongTimeoutMs : MCPTimeoutMs;
+            => VeryLongRunningMethods.Contains(methodName) ? MCPVeryLongTimeoutMs
+             : LongRunningMethods.Contains(methodName) ? MCPLongTimeoutMs : MCPTimeoutMs;
         private static bool IsWriteMethod(string methodName)
             => !ReadOnlyPrefixes.Any(p => methodName.StartsWith(p, StringComparison.OrdinalIgnoreCase));
 
