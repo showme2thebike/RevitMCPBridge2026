@@ -83,13 +83,14 @@ namespace RevitMCPBridge2026.AgentFramework
                 new ToolDefinition
                 {
                     Name = "analyzeView",
-                    Description = "VISUAL VERIFICATION: Capture the active Revit view/sheet and analyze it with AI vision. Use after placing elements to confirm they appear correctly. IMPORTANT: This captures the Revit viewport only — it does NOT see the browser, Street View, or any other application. To analyze a browser screenshot or local image file, use browser_take_screenshot or analyzeImage instead.",
+                    Description = "VISUAL VERIFICATION: Capture the active Revit view/sheet (or a view in another open document via documentTitle) and analyze it with AI vision. Use after placing elements to confirm they appear correctly. IMPORTANT: This captures the Revit viewport only — it does NOT see the browser, Street View, or any other application. To analyze a browser screenshot or local image file, use browser_take_screenshot or analyzeImage instead.",
                     InputSchema = new
                     {
                         type = "object",
                         properties = new
                         {
                             viewId   = new { type = "integer", description = "View or sheet ID to analyze (optional, uses active view)" },
+                            documentTitle = new { type = "string", description = "Title of another OPEN document to capture from (optional; default = active document). Use listViews with the same documentTitle to find a viewId there. Lets you verify a second model without switching." },
                             question = new { type = "string",  description = "What to look for or verify" }
                         },
                         required = new[] { "question" }

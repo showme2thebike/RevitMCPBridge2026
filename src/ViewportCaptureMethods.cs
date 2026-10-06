@@ -33,13 +33,43 @@ namespace RevitMCPBridge
         /// - quality (optional): Image quality 1-100 for JPG. Default 90.
         /// - fitToView (optional): If true, fits content to image. Default true.
         /// </param>
+        /// <summary>
+        /// Resolve the document a capture or listing targets. documentTitle
+        /// (optional) selects another OPEN project by exact or partial title;
+        /// default is the active document. 10/6/2026: analyzeView could only see
+        /// the active file, so a two-model compare session had to be verified by
+        /// query alone; the export API itself works on any open document.
+        /// </summary>
+        private static Document ResolveDocument(UIApplication uiApp, JObject parameters, out string error)
+        {
+            error = null;
+            var title = parameters?["documentTitle"]?.ToString();
+            var active = uiApp.ActiveUIDocument?.Document;
+            if (string.IsNullOrWhiteSpace(title)) return active;
+            Document partial = null;
+            var open = new List<string>();
+            foreach (Document d in uiApp.Application.Documents)
+            {
+                if (d.IsFamilyDocument || d.IsLinked) continue;
+                open.Add(d.Title);
+                if (d.Title.Equals(title, StringComparison.OrdinalIgnoreCase)) return d;
+                if (partial == null && d.Title.IndexOf(title, StringComparison.OrdinalIgnoreCase) >= 0) partial = d;
+            }
+            if (partial != null) return partial;
+            error = JsonConvert.SerializeObject(new { success = false, error = $"No open document matches '{title}'", openDocuments = open });
+            return null;
+        }
+
         [MCPMethod("captureViewport", Category = "ViewportCapture", Description = "Capture the current view or a specified view to an image file")]
         public static string CaptureViewport(UIApplication uiApp, JObject parameters)
         {
             try
             {
-                var doc = uiApp.ActiveUIDocument.Document;
+                var doc = ResolveDocument(uiApp, parameters, out var docError);
+                if (doc == null)
+                    return docError ?? JsonConvert.SerializeObject(new { success = false, error = "No active document" });
                 var uidoc = uiApp.ActiveUIDocument;
+                var docIsActive = uidoc != null && uidoc.Document.Equals(doc);
 
                 // Get view to capture
                 View view;
@@ -58,7 +88,9 @@ namespace RevitMCPBridge
                 }
                 else
                 {
-                    view = uidoc.ActiveView;
+                    view = docIsActive ? uidoc.ActiveView : doc.ActiveView;
+                    if (view == null)
+                        return JsonConvert.SerializeObject(new { success = false, error = $"'{doc.Title}' has no active view; pass viewId (see listViews with documentTitle)." });
                 }
 
                 // Validate view can be exported
@@ -138,7 +170,12 @@ namespace RevitMCPBridge
                 options.SetViewsAndSheets(new List<ElementId> { view.Id });
 
                 // Export the image
-                doc.ExportImage(options);
+                try { doc.ExportImage(options); }
+                catch (Autodesk.Revit.Exceptions.InvalidOperationException ex) when (!docIsActive)
+                {
+                    return JsonConvert.SerializeObject(new { success = false,
+                        error = $"Revit refused to export from '{doc.Title}' while another document is active ({ex.Message}). Call switchDocument to it first, then analyzeView." });
+                }
 
                 // Verify file was created — Revit renames exported files by appending view type/name
                 var actualPath = outputPath;
@@ -607,12 +644,14 @@ namespace RevitMCPBridge
         /// - viewType (optional): Filter by type: FloorPlan, CeilingPlan, Elevation, Section, ThreeD, Schedule, etc.
         /// - includeTemplates (optional): Include view templates. Default false.
         /// </param>
-        [MCPMethod("listViews", Category = "ViewportCapture", Description = "List all views in the document")]
+        [MCPMethod("listViews", Category = "ViewportCapture", Description = "List all views in the document (documentTitle: another open document)")]
         public static string ListViews(UIApplication uiApp, JObject parameters)
         {
             try
             {
-                var doc = uiApp.ActiveUIDocument.Document;
+                var doc = ResolveDocument(uiApp, parameters, out var docError);
+                if (doc == null)
+                    return docError ?? JsonConvert.SerializeObject(new { success = false, error = "No active document" });
 
                 var includeTemplates = parameters["includeTemplates"]?.ToObject<bool>() ?? false;
                 var viewTypeFilter = parameters["viewType"]?.ToString();
@@ -796,6 +835,7 @@ namespace RevitMCPBridge
             {
                 var captureParams = new JObject();
                 if (parameters?["viewId"] != null) captureParams["viewId"] = parameters["viewId"];
+                if (parameters?["documentTitle"] != null) captureParams["documentTitle"] = parameters["documentTitle"];
                 captureParams["width"] = 1200;
                 captureParams["height"] = 800;
                 return CaptureViewportToBase64(uiApp, captureParams);
