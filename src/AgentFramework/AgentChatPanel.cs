@@ -81,6 +81,8 @@ namespace RevitMCPBridge2026.AgentFramework
         private bool _isOffline;
         private Border _offlineBanner;
         private System.Threading.Timer _connectivityTimer;
+        private System.Threading.Timer _revitJobTimer;   // cloud → Revit job queue poller (10/2026)
+        private int _revitJobBusy;                       // 1 while a job runs
         private string _firmMemory;
         private string _projectNotes;
         private PlaywrightMCPClient _playwright;
@@ -325,6 +327,8 @@ namespace RevitMCPBridge2026.AgentFramework
             _thinkingTimer?.Stop();
             _connectivityTimer?.Dispose();
             _connectivityTimer = null;
+            _revitJobTimer?.Dispose();
+            _revitJobTimer = null;
         }
 
         /// <summary>
@@ -2079,6 +2083,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private void InitializeAgent()
         {
+            StartRevitJobPoller();
             // Settings save rebuilds the agent (new model/keys) — carry the live
             // conversation over so a mid-task model switch doesn't lose context.
             var priorHistory = _agent?.ExportConversationHistory();
@@ -2515,6 +2520,147 @@ namespace RevitMCPBridge2026.AgentFramework
                     _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
                 }
             });
+        }
+
+        // ── Revit job queue: cloud → this Revit ─────────────────────────────────
+        // A remote MCP tool (export_sheet_pdf) queues a job for the firm. While this
+        // panel is up and a document is open we poll every 8 s; a job is handed to
+        // us only when its project matches the ACTIVE document. Only the allowlisted
+        // job types below run — nothing from the cloud edits a model. Results are
+        // uploaded to BIM Monkey storage and the requester gets download links.
+        private const string RevitJobsBase = "https://bimmonkey-production.up.railway.app/api/revit-jobs";
+        private void StartRevitJobPoller()
+        {
+            _revitJobTimer?.Dispose();
+            _revitJobTimer = new System.Threading.Timer(async _ => { try { await PollRevitJobsAsync(); } catch { } }, null, 12000, 8000);
+        }
+        private async Task PollRevitJobsAsync()
+        {
+            if (_isClosing || string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+            if (!RevitMCPBridge.AgentFramework.SessionTokenManager.IsValid) return;
+            if (System.Threading.Interlocked.CompareExchange(ref _revitJobBusy, 1, 0) != 0) return;
+            try
+            {
+                string activeDoc = null;
+                try { activeDoc = _uiApp?.ActiveUIDocument?.Document?.Title; } catch { }
+                if (string.IsNullOrEmpty(activeDoc)) return;
+                JObject job = null;
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    client.Timeout = TimeSpan.FromSeconds(15);
+                    var url = RevitJobsBase + "/next?activeDocument=" + Uri.EscapeDataString(activeDoc) + "&client=" + Uri.EscapeDataString(Environment.MachineName);
+                    var resp = await client.GetAsync(url);   // no retry: this runs every 8 s anyway
+                    if (!resp.IsSuccessStatusCode) return;
+                    var body = JObject.Parse(await resp.Content.ReadAsStringAsync());
+                    job = body["job"] as JObject;
+                }
+                if (job == null) return;
+                await RunRevitJobAsync(job, activeDoc);
+            }
+            finally { System.Threading.Interlocked.Exchange(ref _revitJobBusy, 0); }
+        }
+        private async Task RunRevitJobAsync(JObject job, string activeDoc)
+        {
+            var jobId = job["id"]?.ToString();
+            var jobType = job["jobType"]?.ToString();
+            var prms = job["params"] as JObject ?? new JObject();
+            if (jobType != "export_sheet_pdf")
+            {
+                await CompleteRevitJobAsync(jobId, activeDoc, null, $"Unsupported job type '{jobType}'");
+                return;
+            }
+            var wanted = (prms["sheetNumbers"] as JArray)?.Select(x => x.ToString().Trim()).Where(x => x.Length > 0).ToList() ?? new List<string>();
+            Dispatcher.Invoke(() => AddSystemMessage($"Connector request: exporting {wanted.Count} sheet(s) to PDF from \"{activeDoc}\" ({string.Join(", ", wanted)})."));
+            string tempDir = Path.Combine(Path.GetTempPath(), "BimMonkeyRevitJobs", jobId ?? Guid.NewGuid().ToString("N"));
+            var failed = new JArray();
+            try
+            {
+                // 1. sheet numbers → ids (active document)
+                var sheetsJson = await ExecuteMCPWithRetryAsync("getAllSheets", new JObject());
+                var sheets = JObject.Parse(sheetsJson);
+                var list = (sheets["sheets"] ?? sheets["result"]?["sheets"] ?? sheets["result"]) as JArray;
+                if (list == null) { await CompleteRevitJobAsync(jobId, activeDoc, null, "Could not read the sheet list from Revit"); return; }
+                var byNumber = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
+                foreach (var t in list.OfType<JObject>())
+                {
+                    var num = (t["sheetNumber"] ?? t["number"])?.ToString()?.Trim();
+                    if (!string.IsNullOrEmpty(num) && !byNumber.ContainsKey(num)) byNumber[num] = t;
+                }
+                var ids = new JArray();
+                foreach (var w in wanted)
+                {
+                    if (byNumber.TryGetValue(w, out var t)) ids.Add((t["sheetId"] ?? t["id"]).Value<long>());
+                    else failed.Add(new JObject { ["sheetNumber"] = w, ["error"] = "No sheet with this number in the active document" });
+                }
+                if (ids.Count == 0)
+                {
+                    var sample = string.Join(", ", byNumber.Keys.Take(25));
+                    await CompleteRevitJobAsync(jobId, activeDoc, failed, $"None of the requested sheets exist in \"{activeDoc}\". Sheets here: {sample}");
+                    return;
+                }
+                // 2. export (one PDF per sheet; Revit 2026 cannot combine)
+                Directory.CreateDirectory(tempDir);
+                var exportJson = await ExecuteMCPWithRetryAsync("exportSheetsToPDF", new JObject
+                {
+                    ["sheetIds"] = ids, ["outputFolder"] = tempDir, ["fileName"] = "{SheetNumber} - {SheetName}", ["combineIntoSingle"] = false
+                });
+                var export = JObject.Parse(exportJson);
+                if (export["success"]?.ToObject<bool>() != true)
+                {
+                    await CompleteRevitJobAsync(jobId, activeDoc, failed, export["error"]?.ToString() ?? "Export failed");
+                    return;
+                }
+                foreach (var f in (export["failedSheets"] as JArray)?.OfType<JObject>() ?? Enumerable.Empty<JObject>()) failed.Add(f);
+                // 3. upload each file
+                int uploaded = 0;
+                foreach (var f in (export["exportedFiles"] as JArray)?.OfType<JObject>() ?? Enumerable.Empty<JObject>())
+                {
+                    var path = f["fullPath"]?.ToString();
+                    if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
+                    using (var client = new System.Net.Http.HttpClient())
+                    {
+                        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                        client.Timeout = TimeSpan.FromMinutes(3);
+                        var form = new System.Net.Http.MultipartFormDataContent();
+                        form.Add(new System.Net.Http.ByteArrayContent(File.ReadAllBytes(path))
+                        {
+                            Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/pdf") }
+                        }, "file", Path.GetFileName(path));
+                        form.Add(new System.Net.Http.StringContent(Path.GetFileName(path)), "fileName");
+                        form.Add(new System.Net.Http.StringContent(f["sheetNumber"]?.ToString() ?? ""), "sheetNumber");
+                        form.Add(new System.Net.Http.StringContent(f["sheetName"]?.ToString() ?? ""), "sheetName");
+                        var resp = await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client, $"{RevitJobsBase}/{jobId}/files", form);
+                        if (resp.IsSuccessStatusCode) uploaded++;
+                        else failed.Add(new JObject { ["sheetNumber"] = f["sheetNumber"]?.ToString(), ["error"] = $"Upload failed ({(int)resp.StatusCode})" });
+                    }
+                }
+                await CompleteRevitJobAsync(jobId, activeDoc, failed, uploaded == 0 ? "No PDF could be uploaded" : null);
+                Dispatcher.Invoke(() => AddSystemMessage($"Connector request done: {uploaded} PDF(s) uploaded" + (failed.Count > 0 ? $", {failed.Count} failed" : "") + "."));
+                TelemetryService.Track(_bimMonkeyApiKey, "tool_call", toolName: "revit_job_export_sheet_pdf", success: uploaded > 0,
+                    metadata: new { uploaded, failed = failed.Count });
+            }
+            catch (Exception ex)
+            {
+                try { await CompleteRevitJobAsync(jobId, activeDoc, failed, ex.Message); } catch { }
+                Dispatcher.Invoke(() => AddSystemMessage($"Connector request failed: {ex.Message}"));
+            }
+            finally
+            {
+                try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
+            }
+        }
+        private async Task CompleteRevitJobAsync(string jobId, string activeDoc, JArray failedSheets, string error)
+        {
+            using (var client = new System.Net.Http.HttpClient())
+            {
+                client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                client.Timeout = TimeSpan.FromSeconds(30);
+                var payload = new JObject { ["document"] = activeDoc, ["failedSheets"] = failedSheets ?? new JArray() };
+                if (!string.IsNullOrEmpty(error)) payload["error"] = error;
+                var content = new System.Net.Http.StringContent(payload.ToString(Formatting.None), System.Text.Encoding.UTF8, "application/json");
+                await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client, $"{RevitJobsBase}/{jobId}/complete", content);
+            }
         }
 
         private void StartConnectivityCheck()
