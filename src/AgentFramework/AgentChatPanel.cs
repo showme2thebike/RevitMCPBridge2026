@@ -3970,7 +3970,12 @@ namespace RevitMCPBridge2026.AgentFramework
             // Handle vision analysis — inject whichever key is available
             if (methodName == "analyzeView")
             {
-                parameters = parameters ?? new JObject();
+                // Work on a COPY. AgentCore hands us the same JObject it keeps as the
+                // tool_use input in the conversation history; mutating it wrote the
+                // Anthropic key and model name into the model's own context (sent back
+                // on every later turn, visible to the model, saved with the session).
+                // Found 10/7/2026 when Banana Chat itself flagged it to Barrett.
+                parameters = parameters != null ? (JObject)parameters.DeepClone() : new JObject();
                 parameters["model"] = _selectedModel;
                 // Private AI firms route vision through the backend proxy (their
                 // Bedrock) — never the local Anthropic key, which would bypass it.
