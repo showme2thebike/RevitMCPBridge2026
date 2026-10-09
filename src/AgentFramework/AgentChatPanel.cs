@@ -4166,6 +4166,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private const int MaxRetryAttempts = 3;
         private const int InitialRetryDelayMs = 500;
         private const int MCPTimeoutMs = 30000;
+        private const int MCPWriteTimeoutMs = 15000; // lock wait + connect + write; a blocked write never recovers on its own
         // Scripts, plans and batch/import operations can legitimately run for minutes
         // while Revit regenerates; 30 s made them "time out" with the change already
         // applied, and the retry re-sent the write (9/30/2026, Barrett).
@@ -4220,9 +4221,18 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     // WRITE under lock on a thread pool thread — Connect(5000) and WriteLine
                     // are blocking; running on STA/UI thread causes "Not Responding".
-                    var readerCapture = await Task.Run(() =>
+                    // 10/9/2026 (Barrett, 1006d): a write into a half-dead pipe — the server
+                    // had restarted on a document open and the old server end stopped
+                    // reading — blocked here forever. Nothing timed out, nothing was logged,
+                    // and every later call waited on _pipeLock behind it until Revit was
+                    // restarted. Bound both the lock wait and the connect+write; on either
+                    // timeout dispose the pipe (which unblocks the stuck write) and retry
+                    // with a fresh connection.
+                    var writeTask = Task.Run(() =>
                     {
-                        lock (_pipeLock)
+                        if (!System.Threading.Monitor.TryEnter(_pipeLock, MCPWriteTimeoutMs))
+                            throw new MCPConnectionException("Pipe is busy with a stuck request", null);
+                        try
                         {
                             try
                             {
@@ -4235,8 +4245,22 @@ namespace RevitMCPBridge2026.AgentFramework
                                 ForceClosePipe();
                                 throw new MCPConnectionException("Write failed", ioEx);
                             }
+                            catch (TimeoutException tEx) // Connect(5000) when no server is listening
+                            {
+                                ForceClosePipe();
+                                throw new MCPConnectionException("Revit's BIM Monkey server is not listening", tEx);
+                            }
                         }
+                        finally { System.Threading.Monitor.Exit(_pipeLock); }
                     });
+                    if (await Task.WhenAny(writeTask, Task.Delay(MCPWriteTimeoutMs)) != writeTask)
+                    {
+                        ForceClosePipe(); // faults the blocked WriteLine so the lock is released
+                        TelemetryService.Track(_bimMonkeyApiKey, "quality_failure",
+                            toolName: methodName, metadata: new { reason = "write_timeout", attempt });
+                        throw new MCPConnectionException("Write to Revit timed out", null);
+                    }
+                    var readerCapture = await writeTask;
 
                     // READ outside the lock with a real timeout via Task.WhenAny.
                     // ReadLine() is blocking — Task.Run puts it on a thread pool thread.
