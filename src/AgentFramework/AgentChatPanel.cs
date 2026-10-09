@@ -2541,9 +2541,14 @@ namespace RevitMCPBridge2026.AgentFramework
             if (System.Threading.Interlocked.CompareExchange(ref _revitJobBusy, 1, 0) != 0) return;
             try
             {
-                string activeDoc = null;
-                try { activeDoc = _uiApp?.ActiveUIDocument?.Document?.Title; } catch { }
+                // Never touch the Revit API from this timer thread. The panel already
+                // tracks the active document on Revit's thread (_lockedDocTitle, updated
+                // on document events) — read that instead. 10/9/2026: every Revit call
+                // hung for Barrett on the first build with this poller; the off-thread
+                // ActiveUIDocument read was the only new Revit API access.
+                string activeDoc = _lockedDocTitle;
                 if (string.IsNullOrEmpty(activeDoc)) return;
+                if (Environment.GetEnvironmentVariable("BIMMONKEY_DISABLE_JOB_POLLER") == "1") return;
                 JObject job = null;
                 using (var client = new System.Net.Http.HttpClient())
                 {
