@@ -742,6 +742,44 @@ namespace RevitMCPBridge2026.AgentFramework
             _pasteBanner.Child = bannerRow;
             outerStack.Children.Add(_pasteBanner);
 
+            // Magic Wand brief progress chip — hidden until a brief is loaded
+            _briefBanner = new Border
+            {
+                Background  = ChatTheme.SuccessBg,
+                BorderBrush = ChatTheme.SuccessBorder,
+                BorderThickness = new Thickness(0, 1, 0, 1),
+                Padding    = new Thickness(10, 6, 10, 6),
+                Margin     = new Thickness(0, 0, 0, 6),
+                Visibility = Visibility.Collapsed
+            };
+            var briefRow = new DockPanel { LastChildFill = true };
+            _briefStopBtn = new Button
+            {
+                Content = "✕", ToolTip = "Stop this brief (the files stay on disk)",
+                Padding = new Thickness(6, 0, 6, 0), FontSize = 11,
+                Background = Brushes.Transparent, BorderThickness = new Thickness(0), Cursor = System.Windows.Input.Cursors.Hand,
+            };
+            _briefStopBtn.Click += (s2, e2) => EndBrief();
+            DockPanel.SetDock(_briefStopBtn, Dock.Right);
+            briefRow.Children.Add(_briefStopBtn);
+            _briefNextBtn = new Button
+            {
+                Content = "Next part →", ToolTip = "Attach the next part of the brief and prefill the message",
+                Padding = new Thickness(10, 2, 10, 2), FontSize = 12, Margin = new Thickness(8, 0, 0, 0),
+                Visibility = Visibility.Collapsed, Cursor = System.Windows.Input.Cursors.Hand,
+            };
+            _briefNextBtn.Click += (s2, e2) => LoadBriefPart(_briefIndex + 1);
+            DockPanel.SetDock(_briefNextBtn, Dock.Right);
+            briefRow.Children.Add(_briefNextBtn);
+            _briefLabel = new TextBlock
+            {
+                Foreground = ChatTheme.SuccessText, FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            briefRow.Children.Add(_briefLabel);
+            _briefBanner.Child = briefRow;
+            outerStack.Children.Add(_briefBanner);
+
             // Row 1: full-width text box
             _inputTextBox = new System.Windows.Controls.TextBox
             {
@@ -764,7 +802,7 @@ namespace RevitMCPBridge2026.AgentFramework
             _inputTextBox.AllowDrop = true;
             _inputTextBox.PreviewDragEnter += (s, e) => { e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) && (e.Data.GetData(DataFormats.FileDrop) as string[])?.Any(IsSupportedDropFile) == true ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; };
             _inputTextBox.PreviewDragOver  += (s, e) => { e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) && (e.Data.GetData(DataFormats.FileDrop) as string[])?.Any(IsSupportedDropFile) == true ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; };
-            _inputTextBox.PreviewDrop      += (s, e) => { if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return; var files = e.Data.GetData(DataFormats.FileDrop) as string[]; if (files == null) return; e.Handled = true; foreach (var f in files) { var ext = Path.GetExtension(f).ToLowerInvariant(); if (ext == ".pdf") ShowPdfChoiceDialog(f); else if (IsImageExtension(ext)) AttachImageFile(f, ext); } };
+            _inputTextBox.PreviewDrop      += (s, e) => { if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return; var files = e.Data.GetData(DataFormats.FileDrop) as string[]; if (files == null) return; e.Handled = true; foreach (var f in files) { var ext = Path.GetExtension(f).ToLowerInvariant(); if (ext == ".pdf") ShowPdfChoiceDialog(f); else if (IsImageExtension(ext)) AttachImageFile(f, ext); else if (IsTextExtension(ext)) AttachTextFile(f); } };
             outerStack.Children.Add(_inputTextBox);
 
             // Row 2: secondary buttons left, Send right
@@ -775,7 +813,7 @@ namespace RevitMCPBridge2026.AgentFramework
             var secondaryButtons = new StackPanel { Orientation = Orientation.Horizontal };
 
             var attachButton = CreateButton("📎", false);
-            attachButton.ToolTip = "Attach image (visual context for Banana Chat) or PDF (upload to Training Library)";
+            attachButton.ToolTip = "Attach an image (visual context), a PDF (Training Library), or a .md/.txt brief (sent to Banana Chat as a document)";
             attachButton.Click += async (s, e) => await BrowseAndAttachImageAsync();
             secondaryButtons.Children.Add(attachButton);
 
@@ -1121,6 +1159,197 @@ namespace RevitMCPBridge2026.AgentFramework
         }
 
         // Sprint 11 — attach a PDF redline from ribbon button
+        // ── Magic Wand: document → build brief → Banana Chat, one part at a time ──────────
+        private const string BriefGenerateUrl = "https://bimmonkey-production.up.railway.app/api/plugin/brief/generate";
+        private class BriefPart { public int Index; public int Total; public string Title; public string FileName; public string Path; public string Markdown; }
+        private List<BriefPart> _briefParts;
+        private int _briefIndex = -1;                 // 0-based index of the part currently loaded; -1 = none
+        private bool _briefPartRunning;               // true from Send until OnComplete for the current part
+        private double _briefCostAtPartStart;         // session $ when the current part was sent
+        private readonly List<double> _briefPartCosts = new List<double>();
+        private int _usageIn, _usageOut, _usageCacheRead, _usageCacheWrite;   // latest cumulative usage from OnUsage
+        private Border _briefBanner; private TextBlock _briefLabel; private Button _briefNextBtn, _briefStopBtn;
+
+        private double CurrentSessionCost()
+        {
+            try { return EstimateSessionCost(_usageIn, _usageOut, _usageCacheRead, _usageCacheWrite, _selectedModel) ?? 0.0; }
+            catch { return 0.0; }
+        }
+
+        /// <summary>Attach a .md/.txt file as a text document block (no path hunting by the model).</summary>
+        private void AttachTextFile(string path)
+        {
+            try
+            {
+                var text = System.IO.File.ReadAllText(path);
+                if (text.Length > 400000) text = text.Substring(0, 400000);
+                var name = System.IO.Path.GetFileName(path);
+                AddAttachment(new AttachedImage { TextData = text, MediaType = "text/plain", Base64Data = "", Label = name });
+                TelemetryService.Track(_bimMonkeyApiKey, "brief_attached", metadata: new { file = name, chars = text.Length, via = "attach" });
+            }
+            catch (Exception ex)
+            {
+                AddAssistantMessage($"Could not attach {System.IO.Path.GetFileName(path)}: {ex.Message}");
+            }
+        }
+
+        /// <summary>Magic Wand entry point: send the document to the server, save the parts, load Part 1.</summary>
+        public async Task StartMagicWandAsync(string documentPath, string projectName, string projectDir)
+        {
+            var fileName = System.IO.Path.GetFileName(documentPath);
+            var ext = System.IO.Path.GetExtension(documentPath).ToLowerInvariant();
+            AddAssistantMessage($"Magic Wand: reading **{fileName}** and writing a build brief. This usually takes one to three minutes.");
+            SetProcessing(true);
+            UpdateProgress("Writing build brief…");
+            try
+            {
+                var payload = new JObject
+                {
+                    ["fileName"]    = fileName,
+                    ["projectName"] = projectName ?? "",
+                };
+                if (IsTextExtension(ext))
+                {
+                    payload["mediaType"] = "text/plain";
+                    payload["text"] = System.IO.File.ReadAllText(documentPath);
+                }
+                else
+                {
+                    payload["mediaType"] = ext == ".pdf" ? "application/pdf" : ImageMediaType(ext);
+                    payload["data"] = Convert.ToBase64String(System.IO.File.ReadAllBytes(documentPath));
+                }
+
+                string body;
+                using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(10) })
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    var content = new System.Net.Http.StringContent(payload.ToString(Newtonsoft.Json.Formatting.None), System.Text.Encoding.UTF8, "application/json");
+                    var resp = await client.PostAsync(BriefGenerateUrl, content);
+                    body = await resp.Content.ReadAsStringAsync();
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        string err = null;
+                        try { err = JObject.Parse(body)["error"]?.ToString(); } catch { }
+                        throw new Exception(err ?? $"server returned {(int)resp.StatusCode}");
+                    }
+                }
+
+                var json = JObject.Parse(body);
+                if (json["success"]?.Value<bool>() != true)
+                    throw new Exception(json["error"]?.ToString() ?? "no brief returned");
+
+                var dir = System.IO.Path.Combine(
+                    !string.IsNullOrEmpty(projectDir) ? projectDir
+                        : System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "BIM Monkey"),
+                    "Briefs");
+                System.IO.Directory.CreateDirectory(dir);
+
+                var parts = new List<BriefPart>();
+                foreach (var p in json["parts"] as JArray ?? new JArray())
+                {
+                    var bp = new BriefPart
+                    {
+                        Index    = p["index"]?.Value<int>() ?? parts.Count + 1,
+                        Total    = p["total"]?.Value<int>() ?? 1,
+                        Title    = p["title"]?.ToString() ?? "Build Brief",
+                        FileName = p["fileName"]?.ToString() ?? $"Brief_{parts.Count + 1:00}.md",
+                        Markdown = p["markdown"]?.ToString() ?? "",
+                    };
+                    bp.Path = System.IO.Path.Combine(dir, bp.FileName);
+                    System.IO.File.WriteAllText(bp.Path, bp.Markdown);
+                    parts.Add(bp);
+                }
+                if (parts.Count == 0) throw new Exception("the brief had no parts");
+
+                _briefParts = parts;
+                _briefPartCosts.Clear();
+                _briefIndex = -1;
+                var usage = json["usage"];
+                TelemetryService.Track(_bimMonkeyApiKey, "brief_generated", metadata: new
+                {
+                    source_ext = ext, parts = parts.Count,
+                    input_tokens = usage?["input_tokens"]?.Value<int>() ?? 0,
+                    output_tokens = usage?["output_tokens"]?.Value<int>() ?? 0,
+                });
+
+                var list = string.Join("\n", parts.Select(p => $"{p.Index:00}. {p.Title}"));
+                AddAssistantMessage($"Brief written: **{parts.Count} parts**, saved to `{dir}`.\n\n{list}\n\nPart 1 is attached below. Read it over, then press Send to build it. I will offer the next part when this one finishes.");
+                LoadBriefPart(0);
+            }
+            catch (Exception ex)
+            {
+                AddErrorMessage($"Magic Wand could not write the brief: {ex.Message}");
+            }
+            finally
+            {
+                HideProgress();
+                SetProcessing(false);
+            }
+        }
+
+        /// <summary>Attach part i (0-based) as a text document and prefill the send box.</summary>
+        private void LoadBriefPart(int i)
+        {
+            if (_briefParts == null || i < 0 || i >= _briefParts.Count) { EndBrief(); return; }
+            var part = _briefParts[i];
+            _briefIndex = i;
+            _briefPartRunning = false;
+            _pendingAttachments.RemoveAll(a => a.TextData != null && a.Label != null && a.Label.StartsWith("Brief "));
+            AddAttachment(new AttachedImage { TextData = part.Markdown, MediaType = "text/plain", Base64Data = "", Label = $"Brief {part.Index}/{part.Total}: {part.FileName}" });
+            if (_inputTextBox != null)
+                _inputTextBox.Text = $"Build Part {part.Index} of {part.Total} from the attached brief ({part.Title}). " +
+                                     "Report the type mapping and any VERIFY assumptions first, then build, then summarize what you placed and what is left open.";
+            _briefNextBtn.Visibility = Visibility.Collapsed;
+            UpdateBriefBanner($"Brief: Part {part.Index} of {part.Total} loaded · {part.Title}");
+            TelemetryService.Track(_bimMonkeyApiKey, "brief_part_loaded", metadata: new { index = part.Index, total = part.Total });
+        }
+
+        /// <summary>Called when the user sends a message while a brief part is loaded.</summary>
+        private void OnBriefPartSent()
+        {
+            if (_briefParts == null || _briefIndex < 0) return;
+            _briefPartRunning = true;
+            _briefCostAtPartStart = CurrentSessionCost();
+            var part = _briefParts[_briefIndex];
+            UpdateBriefBanner($"Brief: building Part {part.Index} of {part.Total} · {part.Title}");
+        }
+
+        /// <summary>Called from OnComplete: close out the part, show cost so far and the estimate for the rest.</summary>
+        private void OnBriefRunComplete()
+        {
+            if (_briefParts == null || _briefIndex < 0 || !_briefPartRunning) return;
+            _briefPartRunning = false;
+            var part = _briefParts[_briefIndex];
+            double partCost = Math.Max(0, CurrentSessionCost() - _briefCostAtPartStart);
+            _briefPartCosts.Add(partCost);
+            double spent = _briefPartCosts.Sum();
+            int remaining = part.Total - part.Index;
+            double avg = _briefPartCosts.Count > 0 ? spent / _briefPartCosts.Count : 0;
+            string est = remaining > 0 ? $" · about ${avg * remaining:F2} more for the remaining {remaining}" : " · done";
+            UpdateBriefBanner($"Brief: Part {part.Index} of {part.Total} finished · ${partCost:F2} this part, ${spent:F2} so far{est}");
+            _briefNextBtn.Visibility = remaining > 0 ? Visibility.Visible : Visibility.Collapsed;
+            TelemetryService.Track(_bimMonkeyApiKey, "brief_part_completed", metadata: new { index = part.Index, total = part.Total, cost_usd = Math.Round(partCost, 4), spent_usd = Math.Round(spent, 4) });
+            if (remaining > 0)
+                AddAssistantMessage($"Part {part.Index} of {part.Total} finished (${partCost:F2}). Check the model, then click **Next part →** above the message box to load Part {part.Index + 1}.");
+            else
+                AddAssistantMessage($"All {part.Total} parts finished. Total for the brief: ${spent:F2}.");
+        }
+
+        private void UpdateBriefBanner(string text)
+        {
+            if (_briefBanner == null) return;
+            _briefLabel.Text = text;
+            _briefBanner.Visibility = Visibility.Visible;
+        }
+
+        private void EndBrief()
+        {
+            _briefParts = null; _briefIndex = -1; _briefPartRunning = false;
+            _pendingAttachments.RemoveAll(a => a.TextData != null && a.Label != null && a.Label.StartsWith("Brief "));
+            RefreshAttachmentPreview();
+            if (_briefBanner != null) _briefBanner.Visibility = Visibility.Collapsed;
+        }
+
         public void AttachRedlinePdf(string filePath)
         {
             try
@@ -1140,8 +1369,10 @@ namespace RevitMCPBridge2026.AgentFramework
         private static bool IsSupportedDropFile(string path)
         {
             var ext = Path.GetExtension(path).ToLowerInvariant();
-            return ext == ".pdf" || IsImageExtension(ext);
+            return ext == ".pdf" || IsImageExtension(ext) || IsTextExtension(ext);
         }
+
+        private static bool IsTextExtension(string ext) => ext == ".md" || ext == ".txt" || ext == ".markdown";
 
         private static bool IsImageExtension(string ext) =>
             ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp" || ext == ".gif";
@@ -1173,7 +1404,7 @@ namespace RevitMCPBridge2026.AgentFramework
             var dlg = new OpenFileDialog
             {
                 Title       = "Attach file",
-                Filter      = "All supported (*.png;*.jpg;*.jpeg;*.webp;*.gif;*.pdf)|*.png;*.jpg;*.jpeg;*.webp;*.gif;*.pdf|Images (*.png;*.jpg;*.jpeg;*.webp;*.gif)|*.png;*.jpg;*.jpeg;*.webp;*.gif|PDF files (*.pdf)|*.pdf",
+                Filter      = "All supported (*.png;*.jpg;*.jpeg;*.webp;*.gif;*.pdf;*.md;*.txt)|*.png;*.jpg;*.jpeg;*.webp;*.gif;*.pdf;*.md;*.txt|Images (*.png;*.jpg;*.jpeg;*.webp;*.gif)|*.png;*.jpg;*.jpeg;*.webp;*.gif|PDF files (*.pdf)|*.pdf|Briefs and notes (*.md;*.txt)|*.md;*.txt",
                 Multiselect = false,
             };
             if (dlg.ShowDialog() != true) return;
@@ -1184,6 +1415,10 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 // Route PDFs to Training Library upload (same flow as drag-and-drop)
                 ShowPdfChoiceDialog(dlg.FileName);
+            }
+            else if (IsTextExtension(ext))
+            {
+                AttachTextFile(dlg.FileName);
             }
             else
             {
@@ -2219,11 +2454,12 @@ namespace RevitMCPBridge2026.AgentFramework
                 }
             });
             _agent.OnError += (msg) => Dispatcher.Invoke(() => { AddErrorMessage(msg); HideProgress(); SetProcessing(false); });
-            _agent.OnComplete += () => Dispatcher.Invoke(() => { HideProgress(); SetProcessing(false); });
+            _agent.OnComplete += () => Dispatcher.Invoke(() => { HideProgress(); SetProcessing(false); OnBriefRunComplete(); });
 
             // TOKEN USAGE — split input/output display matching 0421h format
             _agent.OnUsage += (inputTokens, outputTokens, cacheRead, cacheCreation) => Dispatcher.Invoke(() =>
             {
+                _usageIn = inputTokens; _usageOut = outputTokens; _usageCacheRead = cacheRead; _usageCacheWrite = cacheCreation;
                 int totalInput = inputTokens + cacheRead + cacheCreation;
                 string inStr  = totalInput   >= 1000 ? $"{totalInput   / 1000}K" : totalInput.ToString();
                 string outStr = outputTokens >= 1000 ? $"{outputTokens / 1000}K" : outputTokens.ToString();
@@ -6390,6 +6626,7 @@ namespace RevitMCPBridge2026.AgentFramework
             public string Base64Data { get; set; }
             public string MediaType { get; set; }   // "image/png" or "image/jpeg"
             public string Label { get; set; }        // display label in preview strip
+            public string TextData { get; set; }     // set for .md/.txt attachments — sent as a text document block
         }
 
         private async void InputTextBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)  // hooked as PreviewKeyDown
@@ -7178,11 +7415,14 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                         blocks.Add(new { type = "text", text = message });
                     foreach (var att in _pendingAttachments)
                     {
-                        if (att.MediaType == "application/pdf")
+                        if (att.TextData != null)
+                            blocks.Add(new { type = "document", source = new { type = "text", media_type = "text/plain", data = att.TextData }, title = att.Label ?? "document" });
+                        else if (att.MediaType == "application/pdf")
                             blocks.Add(new { type = "document", source = new { type = "base64", media_type = att.MediaType, data = att.Base64Data } });
                         else
                             blocks.Add(new { type = "image", source = new { type = "base64", media_type = att.MediaType, data = att.Base64Data } });
                     }
+                    if (_pendingAttachments.Any(a => a.TextData != null && a.Label != null && a.Label.StartsWith("Brief "))) OnBriefPartSent();
                     _agent.SetNextMessageContent(blocks);
                     _pendingAttachments.Clear();
                     RefreshAttachmentPreview();

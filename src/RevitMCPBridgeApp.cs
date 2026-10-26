@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
@@ -384,6 +384,19 @@ namespace RevitMCPBridge
             var runScriptButton = scriptsPanel.AddItem(runScriptButtonData) as PushButton;
             runScriptButton.LargeImage = CreateButtonIcon("scripts", 32);
             runScriptButton.Image      = CreateButtonIcon("scripts", 16);
+
+            // Magic Wand — client document → phased build brief → Banana Chat
+            var magicWandButtonData = new PushButtonData("MagicWand", "Magic\nWand", asm,
+                "RevitMCPBridge.Commands.MagicWandCommand")
+            {
+                ToolTip = "Turn a sketch, PDF or notes into a step-by-step build brief that Banana Chat runs one part at a time",
+                LongDescription = "Pick a client document (PDF, image, Markdown or text). BIM Monkey writes a phased build brief "
+                    + "from it, saves the parts next to your project, and loads Part 1 into Banana Chat ready to run.\n\n"
+                    + "Banana Chat shows which part you are on and the running cost, and offers the next part when one finishes.",
+            };
+            var magicWandButton = scriptsPanel.AddItem(magicWandButtonData) as PushButton;
+            magicWandButton.LargeImage = CreateButtonIcon("wand", 32);
+            magicWandButton.Image      = CreateButtonIcon("wand", 16);
 
             // ── Server Control ────────────────────────────────────────────
             var serverPanel = application.CreateRibbonPanel(_tabName, "Server Control");
@@ -891,6 +904,9 @@ namespace RevitMCPBridge
                             break;
                         case "scripts":
                             DrawScriptsIcon(dc, size);
+                            break;
+                        case "wand":
+                            DrawWandIcon(dc, size);
                             break;
                         case "overlapfix":
                             DrawOverlapFixIcon(dc, size);
@@ -1740,6 +1756,53 @@ namespace RevitMCPBridge
                 ctx.LineTo(new Point(bx - bs * 0.25, by - bs * 0.55),    true, false);
             }
             dc.DrawGeometry(dark, null, bolt);
+        }
+
+        private void DrawWandIcon(DrawingContext dc, int size)
+        {
+            // Diagonal magic wand (lower-left to upper-right) with a four-point star at the tip
+            // and two small sparkles — flat white fill, dark outline, matching the other ribbon icons
+            double s       = size / 32.0;
+            var fill       = new SolidColorBrush(Colors.White);
+            var dark       = new SolidColorBrush(Color.FromRgb(60, 60, 60));
+            var outlinePen = new Pen(dark, Math.Max(1, 1.5 * s)) { LineJoin = PenLineJoin.Round };
+            var sparkPen   = new Pen(dark, Math.Max(1, 1.6 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+
+            // Wand shaft: a thin rotated rectangle from (6,26) to (20,12)
+            var shaft = new StreamGeometry();
+            using (var ctx = shaft.Open())
+            {
+                double w = 2.2 * s; // half-width across the shaft
+                // direction (1,-1)/sqrt2 ; normal (1,1)/sqrt2
+                double nx = 0.7071 * w, ny = 0.7071 * w;
+                ctx.BeginFigure(new Point(5 * s + nx, 27 * s - ny), true, true);
+                ctx.LineTo(new Point(19 * s + nx, 13 * s - ny), true, false);
+                ctx.LineTo(new Point(19 * s - nx, 13 * s + ny), true, false);
+                ctx.LineTo(new Point(5 * s - nx, 27 * s + ny), true, false);
+            }
+            dc.DrawGeometry(fill, outlinePen, shaft);
+
+            // Four-point star at the tip, centered (23,9)
+            double cx = 23 * s, cy = 9 * s, R = 7 * s, r = 2.4 * s;
+            var star = new StreamGeometry();
+            using (var ctx = star.Open())
+            {
+                ctx.BeginFigure(new Point(cx, cy - R), true, true);
+                ctx.LineTo(new Point(cx + r, cy - r), true, false);
+                ctx.LineTo(new Point(cx + R, cy), true, false);
+                ctx.LineTo(new Point(cx + r, cy + r), true, false);
+                ctx.LineTo(new Point(cx, cy + R), true, false);
+                ctx.LineTo(new Point(cx - r, cy + r), true, false);
+                ctx.LineTo(new Point(cx - R, cy), true, false);
+                ctx.LineTo(new Point(cx - r, cy - r), true, false);
+            }
+            dc.DrawGeometry(fill, outlinePen, star);
+
+            // Two small sparkles
+            dc.DrawLine(sparkPen, new Point(9 * s, 7 * s),  new Point(9 * s, 11 * s));
+            dc.DrawLine(sparkPen, new Point(7 * s, 9 * s),  new Point(11 * s, 9 * s));
+            dc.DrawLine(sparkPen, new Point(27 * s, 21 * s), new Point(27 * s, 24 * s));
+            dc.DrawLine(sparkPen, new Point(25.5 * s, 22.5 * s), new Point(28.5 * s, 22.5 * s));
         }
 
         private void DrawScriptsIcon(DrawingContext dc, int size)
