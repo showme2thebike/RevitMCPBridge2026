@@ -1198,7 +1198,7 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             var fileName = System.IO.Path.GetFileName(documentPath);
             var ext = System.IO.Path.GetExtension(documentPath).ToLowerInvariant();
-            AddAssistantMessage($"Magic Wand: reading **{fileName}** and writing a build brief. This usually takes one to three minutes.");
+            AddAssistantMessage($"Magic Wand: reading **{fileName}** and writing a build brief. A sketch takes two to five minutes; a multi-page PDF can take ten. You can keep working in Revit while it writes.");
             SetProcessing(true);
             UpdateProgress("Writing build brief…");
             try
@@ -1219,24 +1219,43 @@ namespace RevitMCPBridge2026.AgentFramework
                     payload["data"] = Convert.ToBase64String(System.IO.File.ReadAllBytes(documentPath));
                 }
 
-                string body;
-                using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(10) })
+                // Start the job (returns at once), then poll until it is done. A 30K-token brief
+                // takes longer than the HTTP proxy allows, which is what produced "server returned 502".
+                JObject json;
+                using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromMinutes(2) })
                 {
                     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
                     var content = new System.Net.Http.StringContent(payload.ToString(Newtonsoft.Json.Formatting.None), System.Text.Encoding.UTF8, "application/json");
                     var resp = await client.PostAsync(BriefGenerateUrl, content);
-                    body = await resp.Content.ReadAsStringAsync();
-                    if (!resp.IsSuccessStatusCode)
+                    var body = await resp.Content.ReadAsStringAsync();
+                    JObject started = null;
+                    try { started = JObject.Parse(body); } catch { }
+                    if (!resp.IsSuccessStatusCode || started?["success"]?.Value<bool>() != true)
+                        throw new Exception(started?["error"]?.ToString() ?? $"server returned {(int)resp.StatusCode}");
+                    var jobId = started["jobId"]?.ToString();
+                    if (string.IsNullOrEmpty(jobId)) throw new Exception("server did not return a job id");
+
+                    var started_at = DateTime.UtcNow;
+                    var deadline = started_at.AddMinutes(25);
+                    while (true)
                     {
-                        string err = null;
-                        try { err = JObject.Parse(body)["error"]?.ToString(); } catch { }
-                        throw new Exception(err ?? $"server returned {(int)resp.StatusCode}");
+                        await Task.Delay(TimeSpan.FromSeconds(5));
+                        var el = DateTime.UtcNow - started_at;
+                        UpdateProgress($"Writing build brief… {(int)el.TotalMinutes}:{el.Seconds:00}");
+                        System.Net.Http.HttpResponseMessage pr;
+                        try { pr = await client.GetAsync(BriefGenerateUrl.Replace("/generate", "/jobs/") + jobId); }
+                        catch (Exception) { if (DateTime.UtcNow > deadline) throw; continue; }   // transient network blip: keep polling
+                        var pb = await pr.Content.ReadAsStringAsync();
+                        JObject pj = null;
+                        try { pj = JObject.Parse(pb); } catch { }
+                        var status = pj?["status"]?.ToString();
+                        if (status == "done") { json = pj; break; }
+                        if (status == "error") throw new Exception(pj?["error"]?.ToString() ?? "brief generation failed");
+                        if (!pr.IsSuccessStatusCode && (int)pr.StatusCode != 502 && (int)pr.StatusCode != 504)
+                            throw new Exception(pj?["error"]?.ToString() ?? $"server returned {(int)pr.StatusCode}");
+                        if (DateTime.UtcNow > deadline) throw new Exception("timed out after 25 minutes; the brief may still finish on the server — try again with a smaller document");
                     }
                 }
-
-                var json = JObject.Parse(body);
-                if (json["success"]?.Value<bool>() != true)
-                    throw new Exception(json["error"]?.ToString() ?? "no brief returned");
 
                 var dir = System.IO.Path.Combine(
                     !string.IsNullOrEmpty(projectDir) ? projectDir
