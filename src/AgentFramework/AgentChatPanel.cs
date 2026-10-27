@@ -121,10 +121,9 @@ namespace RevitMCPBridge2026.AgentFramework
         // Fallback model list used when the API fetch fails
         private static readonly Dictionary<string, string> FallbackModels = new Dictionary<string, string>
         {
-            { "claude-sonnet-5",           "Sonnet 5 — Recommended ($2/$10 per 1M tokens)" },
-            { "claude-sonnet-5-5",         "Sonnet 5.5 — New, testing ($2/$10 per 1M tokens)" },
-            { "claude-opus-4-8",           "Opus 4.8 — Most capable ($5/$25 per 1M tokens)" },
-            { "claude-fable-5",            "Fable 5 — Most powerful ($10/$50 per 1M tokens)" },
+            { "claude-sonnet-5-5",         "Sonnet 5.5 — Recommended ($2/$10 per 1M tokens)" },
+            { "claude-opus-5-5",           "Opus 5.5 — Most capable ($4/$20 per 1M tokens)" },
+            { "claude-fable-5-1",          "Fable 5.1 — Most powerful ($10/$50 per 1M tokens)" },
             { "claude-haiku-4-5-20251001", "Haiku 4.5 — Fast & inexpensive ($1/$5 per 1M tokens)" },
         };
 
@@ -1509,7 +1508,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private static readonly string ConfigDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops");
         private static readonly string ConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "config.json");
         private static readonly string SessionPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "session.json");
-        private static readonly string DefaultModel = "claude-sonnet-5";
+        private static readonly string DefaultModel = "claude-sonnet-5-5";
 
         // Session data for persistence
         private List<ChatMessage> _sessionMessages = new List<ChatMessage>();
@@ -3189,6 +3188,9 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             if (modelId == "claude-sonnet-5-5")          return "Sonnet 5.5";
             if (modelId == "claude-sonnet-5")            return "Sonnet 5";
+            if (modelId == "claude-opus-5-5")            return "Opus 5.5";
+            if (modelId == "claude-fable-5-1")           return "Fable 5.1";
+            if (modelId == "claude-haiku-5-5")           return "Haiku 5.5";
             if (modelId == "claude-sonnet-4-6")          return "Sonnet 4.6";
             if (modelId == "claude-fable-5")             return "Fable 5";
             if (modelId == "claude-opus-4-8")            return "Opus 4.8";
@@ -3225,6 +3227,9 @@ namespace RevitMCPBridge2026.AgentFramework
                         var outputCost = item["outputCost"]?.ToObject<double>();
                         if (id != null && inputCost.HasValue && outputCost.HasValue)
                             _modelPricing[id] = (inputCost.Value, outputCost.Value);
+                        var cacheReadCost = item["cacheReadCost"]?.ToObject<double>();
+                        if (id != null && cacheReadCost.HasValue)
+                            _modelCacheReadPrice[id] = cacheReadCost.Value;
                     }
 
                     // Update settings combo if open
@@ -3506,8 +3511,11 @@ namespace RevitMCPBridge2026.AgentFramework
         // Pricing per million tokens (dollars) — updated dynamically from /api/config/models
         private static Dictionary<string, (double input, double output)> _modelPricing = new Dictionary<string, (double, double)>
         {
-            { "claude-sonnet-5",            (2.00,  10.00) }, // standard price (launch intro made permanent)
             { "claude-sonnet-5-5",          (2.00,  10.00) },
+            { "claude-opus-5-5",            (4.00,  20.00) },
+            { "claude-fable-5-1",           (10.00, 50.00) },
+            { "claude-haiku-5-5",           (0.50,  2.50)  }, // over-100K tier; plugin prompts are always above it
+            { "claude-sonnet-5",            (2.00,  10.00) }, // retired from the picker 2026-10-27, kept for history
             { "claude-sonnet-4-6",          (3.00,  15.00) },
             { "claude-fable-5",             (10.00, 50.00) },
             { "claude-opus-4-8",            (5.00,  25.00) },
@@ -3515,20 +3523,25 @@ namespace RevitMCPBridge2026.AgentFramework
             { "claude-haiku-4-5-20251001",  (1.00,  5.00)  },
         };
 
+        // Cache-read price per 1M tokens when the server sends one (otherwise 10% of input)
+        private static readonly Dictionary<string, double> _modelCacheReadPrice = new Dictionary<string, double>();
+
         private double? EstimateSessionCost(int inputTokens, int outputTokens, int cacheRead, int cacheCreation, string modelId)
         {
             if (string.IsNullOrEmpty(modelId)) return null;
-            (double input, double output) pricing = (2.00, 10.00); // default: Sonnet 5 intro
-            foreach (var kv in _modelPricing)
+            (double input, double output) pricing = (2.00, 10.00); // default: Sonnet 5.5
+            string matched = null;
+            foreach (var kv in _modelPricing.OrderByDescending(k => k.Key.Length))   // longest id first: 5-5 before 5
             {
-                if (modelId.StartsWith(kv.Key, StringComparison.OrdinalIgnoreCase) || modelId == kv.Key)
+                if (modelId == kv.Key || modelId.StartsWith(kv.Key + "-", StringComparison.OrdinalIgnoreCase))
                 {
-                    pricing = kv.Value;
+                    pricing = kv.Value; matched = kv.Key;
                     break;
                 }
             }
+            double cacheReadPrice = (matched != null && _modelCacheReadPrice.TryGetValue(matched, out var crp)) ? crp : pricing.input * 0.10;
             double regularCost    = (inputTokens    / 1_000_000.0 * pricing.input) + (outputTokens / 1_000_000.0 * pricing.output);
-            double cacheReadCost  =  cacheRead       / 1_000_000.0 * pricing.input * 0.10;
+            double cacheReadCost  =  cacheRead       / 1_000_000.0 * cacheReadPrice;
             double cacheWriteCost =  cacheCreation   / 1_000_000.0 * pricing.input * 1.25;
             return regularCost + cacheReadCost + cacheWriteCost;
         }
