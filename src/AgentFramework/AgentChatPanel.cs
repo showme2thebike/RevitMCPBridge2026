@@ -122,9 +122,10 @@ namespace RevitMCPBridge2026.AgentFramework
         private static readonly Dictionary<string, string> FallbackModels = new Dictionary<string, string>
         {
             { "claude-sonnet-5",           "Sonnet 5 — Recommended ($2/$10 per 1M tokens)" },
+            { "claude-sonnet-5-5",         "Sonnet 5.5 — New, testing ($2/$10 per 1M tokens)" },
             { "claude-opus-4-8",           "Opus 4.8 — Most capable ($5/$25 per 1M tokens)" },
             { "claude-fable-5",            "Fable 5 — Most powerful ($10/$50 per 1M tokens)" },
-            { "claude-haiku-4-5-20251001", "Haiku 4.5 — Fast & inexpensive ($0.80/$4 per 1M tokens)" },
+            { "claude-haiku-4-5-20251001", "Haiku 4.5 — Fast & inexpensive ($1/$5 per 1M tokens)" },
         };
 
         // Persistent MCP connection
@@ -3186,6 +3187,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
         private string GetModelDisplayName(string modelId)
         {
+            if (modelId == "claude-sonnet-5-5")          return "Sonnet 5.5";
             if (modelId == "claude-sonnet-5")            return "Sonnet 5";
             if (modelId == "claude-sonnet-4-6")          return "Sonnet 4.6";
             if (modelId == "claude-fable-5")             return "Fable 5";
@@ -3504,12 +3506,13 @@ namespace RevitMCPBridge2026.AgentFramework
         // Pricing per million tokens (dollars) — updated dynamically from /api/config/models
         private static Dictionary<string, (double input, double output)> _modelPricing = new Dictionary<string, (double, double)>
         {
-            { "claude-sonnet-5",            (2.00,  10.00) }, // intro pricing until 2026-08-31
+            { "claude-sonnet-5",            (2.00,  10.00) }, // standard price (launch intro made permanent)
+            { "claude-sonnet-5-5",          (2.00,  10.00) },
             { "claude-sonnet-4-6",          (3.00,  15.00) },
             { "claude-fable-5",             (10.00, 50.00) },
             { "claude-opus-4-8",            (5.00,  25.00) },
             { "claude-opus-4-6",            (5.00,  25.00) },
-            { "claude-haiku-4-5-20251001",  (0.80,  4.00)  },
+            { "claude-haiku-4-5-20251001",  (1.00,  5.00)  },
         };
 
         private double? EstimateSessionCost(int inputTokens, int outputTokens, int cacheRead, int cacheCreation, string modelId)
