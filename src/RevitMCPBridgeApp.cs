@@ -1760,49 +1760,48 @@ namespace RevitMCPBridge
 
         private void DrawWandIcon(DrawingContext dc, int size)
         {
-            // Diagonal magic wand (lower-left to upper-right) with a four-point star at the tip
-            // and two small sparkles — flat white fill, dark outline, matching the other ribbon icons
+            // Diagonal magic wand (lower-left to upper-right), white handle and white four-point
+            // stars with a mid-grey outline, so it reads on the light ribbon like the other icons
             double s       = size / 32.0;
             var fill       = new SolidColorBrush(Colors.White);
-            var dark       = new SolidColorBrush(Color.FromRgb(60, 60, 60));
-            var outlinePen = new Pen(dark, Math.Max(1, 1.5 * s)) { LineJoin = PenLineJoin.Round };
-            var sparkPen   = new Pen(dark, Math.Max(1, 1.6 * s)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+            var grey       = new SolidColorBrush(Color.FromRgb(120, 120, 120));
+            var outlinePen = new Pen(grey, Math.Max(1, 1.4 * s)) { LineJoin = PenLineJoin.Round };
 
-            // Wand shaft: a thin rotated rectangle from (6,26) to (20,12)
+            // Handle: a rotated rectangle from (4,28) to (17.5,14.5); offsets are along the
+            // normal (1,1)/sqrt2 so the width is across the handle, not along it
+            double w  = 2.4 * s;                 // half-width across the handle
+            double nx = 0.7071 * w, ny = 0.7071 * w;
             var shaft = new StreamGeometry();
             using (var ctx = shaft.Open())
             {
-                double w = 2.2 * s; // half-width across the shaft
-                // direction (1,-1)/sqrt2 ; normal (1,1)/sqrt2
-                double nx = 0.7071 * w, ny = 0.7071 * w;
-                ctx.BeginFigure(new Point(5 * s + nx, 27 * s - ny), true, true);
-                ctx.LineTo(new Point(19 * s + nx, 13 * s - ny), true, false);
-                ctx.LineTo(new Point(19 * s - nx, 13 * s + ny), true, false);
-                ctx.LineTo(new Point(5 * s - nx, 27 * s + ny), true, false);
+                ctx.BeginFigure(new Point(4 * s + nx, 28 * s + ny), true, true);
+                ctx.LineTo(new Point(17.5 * s + nx, 14.5 * s + ny), true, false);
+                ctx.LineTo(new Point(17.5 * s - nx, 14.5 * s - ny), true, false);
+                ctx.LineTo(new Point(4 * s - nx, 28 * s - ny), true, false);
             }
             dc.DrawGeometry(fill, outlinePen, shaft);
 
-            // Four-point star at the tip, centered (23,9)
-            double cx = 23 * s, cy = 9 * s, R = 7 * s, r = 2.4 * s;
+            // Stars: big one at the tip, two small sparkles
+            DrawFourPointStar(dc, fill, outlinePen, 22.5 * s, 9.5 * s, 8.5 * s, 3.0 * s);
+            DrawFourPointStar(dc, fill, outlinePen, 8.5 * s, 8.5 * s, 4.2 * s, 1.5 * s);
+            DrawFourPointStar(dc, fill, outlinePen, 26.5 * s, 23 * s, 3.6 * s, 1.3 * s);
+        }
+
+        private static void DrawFourPointStar(DrawingContext dc, Brush fill, Pen pen, double cx, double cy, double outer, double inner)
+        {
             var star = new StreamGeometry();
             using (var ctx = star.Open())
             {
-                ctx.BeginFigure(new Point(cx, cy - R), true, true);
-                ctx.LineTo(new Point(cx + r, cy - r), true, false);
-                ctx.LineTo(new Point(cx + R, cy), true, false);
-                ctx.LineTo(new Point(cx + r, cy + r), true, false);
-                ctx.LineTo(new Point(cx, cy + R), true, false);
-                ctx.LineTo(new Point(cx - r, cy + r), true, false);
-                ctx.LineTo(new Point(cx - R, cy), true, false);
-                ctx.LineTo(new Point(cx - r, cy - r), true, false);
+                ctx.BeginFigure(new Point(cx, cy - outer), true, true);
+                ctx.LineTo(new Point(cx + inner, cy - inner), true, false);
+                ctx.LineTo(new Point(cx + outer, cy), true, false);
+                ctx.LineTo(new Point(cx + inner, cy + inner), true, false);
+                ctx.LineTo(new Point(cx, cy + outer), true, false);
+                ctx.LineTo(new Point(cx - inner, cy + inner), true, false);
+                ctx.LineTo(new Point(cx - outer, cy), true, false);
+                ctx.LineTo(new Point(cx - inner, cy - inner), true, false);
             }
-            dc.DrawGeometry(fill, outlinePen, star);
-
-            // Two small sparkles
-            dc.DrawLine(sparkPen, new Point(9 * s, 7 * s),  new Point(9 * s, 11 * s));
-            dc.DrawLine(sparkPen, new Point(7 * s, 9 * s),  new Point(11 * s, 9 * s));
-            dc.DrawLine(sparkPen, new Point(27 * s, 21 * s), new Point(27 * s, 24 * s));
-            dc.DrawLine(sparkPen, new Point(25.5 * s, 22.5 * s), new Point(28.5 * s, 22.5 * s));
+            dc.DrawGeometry(fill, pen, star);
         }
 
         private void DrawScriptsIcon(DrawingContext dc, int size)
