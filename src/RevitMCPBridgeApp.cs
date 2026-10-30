@@ -294,6 +294,18 @@ namespace RevitMCPBridge
                     Log.Warning(tokenEx, "SessionTokenManager failed to start (non-fatal)");
                 }
 
+                // --- auto-update (docs/plugin-auto-update.md §3.4): reconcile a staged install, then check off-thread ---
+                try
+                {
+                    RevitMCPBridge.Update.UpdateService.Instance.ReconcileOnStartup();
+                    _ = System.Threading.Tasks.Task.Run(() => RevitMCPBridge.Update.UpdateService.Instance.CheckAsync("startup"));
+                }
+                catch (Exception updEx)
+                {
+                    Log.Warning(updEx, "[Update] startup wiring failed (non-fatal)");
+                }
+                // --- end auto-update ---
+
                 // Auto-start server on Revit startup (respects Settings → Auto-start toggle, default: on)
                 try
                 {
@@ -2412,6 +2424,18 @@ namespace RevitMCPBridge
                     _mcpServer.Stop();
                     Log.Information("MCP Server stopped");
                 }
+
+                // --- auto-update: the last Revit out launches the re-verified, staged installer (§3.4, R4/R6) ---
+                try
+                {
+                    var updateLaunch = RevitMCPBridge.Update.UpdateService.Instance.TryLaunchPendingOnShutdown();
+                    Log.Information("[Update] shutdown hook: {Result}", updateLaunch);
+                }
+                catch (Exception updEx)
+                {
+                    Log.Warning(updEx, "[Update] shutdown hook failed (non-fatal)");
+                }
+                // --- end auto-update ---
 
                 Log.Information("MCP Bridge shutdown complete");
                 Log.CloseAndFlush();

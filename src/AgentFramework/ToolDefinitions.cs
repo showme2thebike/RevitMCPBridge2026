@@ -294,6 +294,37 @@ OBSERVE + NARRATE workflow once photos are available:
                         },
                         required = new[] { "sessionId", "pageNumber" }
                     }
+                },
+                // First-line support (docs/support-agent.md §3.3). Answers come from BIM Monkey's own
+                // guides plus this firm's account state on the server — never guess at setup, key,
+                // billing, update or error questions.
+                new ToolDefinition
+                {
+                    Name = "support_help",
+                    Description = "Answer setup, key, billing, update, error or account questions from BIM Monkey's current guides and this firm's account state. ALWAYS call this instead of guessing whenever the user asks how to install or reinstall the plugin, where to get or paste an API key (Anthropic or BIM Monkey), why a key or request was rejected, what a plugin error means, how to update the plugin, what their trial/subscription/billing status is, or anything about their BIM Monkey account. Relay the returned answer in your own words and list any returned actions as next steps.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            question = new { type = "string", description = "The user's support question, in full, including any error text they quoted." }
+                        },
+                        required = new[] { "question" }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "support_escalate",
+                    Description = "Hand the conversation to a person at BIM Monkey with context; use when support_help could not resolve it or the user asks for a human. Pass a short summary of the problem and what was already tried. Tell the user the request was logged, and that it was emailed only if the result says so.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            summary = new { type = "string", description = "One or two sentences: the problem, what support_help answered, and what the user still needs. No API keys." }
+                        },
+                        required = new[] { "summary" }
+                    }
                 }
             };
         }

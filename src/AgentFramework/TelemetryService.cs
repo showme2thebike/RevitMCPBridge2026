@@ -8,7 +8,7 @@ namespace RevitMCPBridge2026.AgentFramework
 {
     internal static class TelemetryService
     {
-        private const string ApiBase = "https://bimmonkey-production.up.railway.app";
+        internal const string ApiBase = "https://bimmonkey-production.up.railway.app"; // shared with Support/SupportClient
         private static readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
 
         // Session GUID stamped on every event — set by AgentCore at session start

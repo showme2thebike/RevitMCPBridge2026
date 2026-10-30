@@ -292,6 +292,10 @@ namespace RevitMCPBridge2026.AgentFramework
         public event Action<string> OnToolResult;
         public event Action<string> OnResponse;
         public event Action<string> OnError;
+        // Fired next to OnError when the chat API answered 401/402: "anthropic" (the user's own key was
+        // rejected) or "bimmonkey" (BIM Monkey key / subscription). Panel shows a static help card
+        // (docs/support-agent.md §3.3). OnError still fires, so telemetry and the raw message are unchanged.
+        public event Action<string> OnAuthError;
         public event Action OnComplete;
         public event Action<string> OnLocalModel;
         public event Action<VerificationResult> OnVerification;
@@ -1614,6 +1618,11 @@ namespace RevitMCPBridge2026.AgentFramework
                         throw new TransientApiException(status.HasValue ? $"HTTP {(int)status.Value}" : ex.Message, receivedAny, ex);
                     TelemetryService.Track(_bimMonkeyApiKey, "api_error",
                         metadata: new { error = ex.Message, body = errorBody?.Length > 200 ? errorBody.Substring(0, 200) : errorBody, attempt });
+                    var authProvider = RevitMCPBridge.Support.AuthErrorClassifier.Classify(status.HasValue ? (int)status.Value : (int?)null, errorBody);
+                    if (authProvider != RevitMCPBridge.Support.AuthErrorProvider.None)
+                    {
+                        try { OnAuthError?.Invoke(RevitMCPBridge.Support.AuthErrorClassifier.ToWireName(authProvider)); } catch { }
+                    }
                     OnError?.Invoke($"API Error: {ex.Message} - {errorBody}");
                     return null;
                 }

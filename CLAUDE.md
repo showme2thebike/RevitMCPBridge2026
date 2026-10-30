@@ -2,7 +2,7 @@
 
 ## Knowledge File Encryption
 All `.md` files in `knowledge/` are AES-256 encrypted at build time.
-- Key: `CONTENT_ENCRYPTION_KEY` (64 hex chars) — set in Railway env vars
+- Key: `CONTENT_ENCRYPTION_KEY` (64 hex chars) — lives in AWS Secrets Manager `bimmonkey/prod` (since 2026-10-28); NEVER written into this or any repo file. The value that used to sit here was exposed in the Oct 2026 Railway incident and is scheduled for rotation with the next prod plugin build.
 - Script: `bimmonkey-ai-git/scripts/encrypt_knowledge.js`
 - `build_plugin_zip.ps1` runs this automatically — set `$env:CONTENT_ENCRYPTION_KEY` before building
 - To add a new knowledge file: add plaintext `.md`, then run the build script (encrypt runs automatically)
@@ -11,8 +11,8 @@ All `.md` files in `knowledge/` are AES-256 encrypted at build time.
 
 ## Build & Deploy
 ```bash
-# 0. Set encryption key (get from Railway → bimmonkey-production → Variables)
-$env:CONTENT_ENCRYPTION_KEY = "cb158b53d99cec1c26919c05159c1b65ed893a16855df5c61d1bd645aeeb1655"
+# 0. Set encryption key for this shell only (aws secretsmanager get-secret-value --secret-id bimmonkey/prod, field CONTENT_ENCRYPTION_KEY)
+$env:CONTENT_ENCRYPTION_KEY = "<fetch from AWS Secrets Manager bimmonkey/prod - never paste the value into any file>"
 
 # 1. Build plugin
 dotnet publish -c Release --no-self-contained
@@ -74,7 +74,7 @@ BIM_MONKEY_API_KEY=bm_...   # firm-specific key in CLAUDE.md in Documents\BimMon
 
 ## Key Facts
 - 705 MCP endpoints via named pipe `\\.\pipe\RevitMCPBridge2026`
-- C# .NET Framework 4.8, Revit 2026 add-in
+- C#: net8.0-windows for Revit 2024/2025/2026, net10.0-windows for 2027 (NOT .NET Framework 4.8); one csproj, year via -p:RevitYear
 - All document modifications must be in Transaction blocks
 - Restart Revit after deploying new DLL
 

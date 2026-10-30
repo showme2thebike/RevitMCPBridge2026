@@ -78,8 +78,21 @@ namespace RevitMCPBridge2026.AgentFramework
         private bool _isClosing;
         private bool _allowClose;
         private bool _subscriptionBlocked;
+        // --- auto-update ---
+        private Border _updateBanner;
+        private string _updateBannerVersion;
+        private bool _updateBannerStaged;
+        private string _updateBannerDismissedVersion;
+        private bool _updateBlocked;
+        // --- end auto-update ---
         private bool _isOffline;
         private Border _offlineBanner;
+        // --- support agent (docs/support-agent.md §3.3) ---
+        private string _lastApiErrorMessage;              // last OnError text, keys masked, ≤300 chars; sent to support_help as lastError
+        private Border _anthropicKeyBanner;               // static help card for an Anthropic 401
+        private Border _bimMonkeyAuthBanner;              // static help card for a BIM Monkey 401/402
+        private List<RevitMCPBridge.Support.SupportAction> _pendingSupportActions; // rendered as buttons under the next assistant reply
+        // --- end support agent ---
         private System.Threading.Timer _connectivityTimer;
         private System.Threading.Timer _revitJobTimer;   // cloud → Revit job queue poller (10/2026)
         private int _revitJobBusy;                       // 1 while a job runs
@@ -206,6 +219,15 @@ namespace RevitMCPBridge2026.AgentFramework
 
             // Always push model snapshot on load — independent of session/greeting path
             Loaded += (s, e) => { TryPushModelSnapshot(); TrySyncKnowledgeFiles(); TryRestoreAgentState(); };
+
+            // --- auto-update: banner when a verified release is offered; the startup check may already have fired ---
+            RevitMCPBridge.Update.UpdateService.Instance.UpdateOffered += (s, e) => ShowUpdateBanner(e);
+            Loaded += (s, e) =>
+            {
+                var offer = RevitMCPBridge.Update.UpdateService.Instance.CurrentOffer;
+                if (offer != null) ShowUpdateBanner(offer);
+            };
+            // --- end auto-update ---
 
             // Diagnostic: confirm constructor ran and Loaded handler registered
             try { File.AppendAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "snapshot_debug.txt"), $"{DateTime.Now:o} Constructor ran, Loaded handler registered\r\n"); } catch { }
@@ -339,6 +361,12 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             _isClosing = false;
             _ = FetchModelsAndPricingAsync(); // refresh pricing in background on every open
+
+            // --- auto-update: throttled (6 h) check on every pane open; re-surface an existing offer ---
+            _ = RevitMCPBridge.Update.UpdateService.Instance.CheckAsync("panel");
+            var pendingOffer = RevitMCPBridge.Update.UpdateService.Instance.CurrentOffer;
+            if (pendingOffer != null) ShowUpdateBanner(pendingOffer);
+            // --- end auto-update ---
 
             // Unloaded disposes the recovery timer; if the pane was closed while offline,
             // re-check immediately instead of leaving the banner latched forever.
@@ -2471,8 +2499,22 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     AddAssistantMessage(msg);
                 }
+                // A successful reply means the key works again — drop the auth help cards,
+                // then render any support_help actions as buttons under this message.
+                HideAuthBanners();
+                FlushSupportActionRow();
             });
-            _agent.OnError += (msg) => Dispatcher.Invoke(() => { AddErrorMessage(msg); HideProgress(); SetProcessing(false); });
+            _agent.OnError += (msg) => Dispatcher.Invoke(() =>
+            {
+                _lastApiErrorMessage = RevitMCPBridge.Support.SupportRedaction.MaskAndTruncate(msg, 300);
+                AddErrorMessage(msg); HideProgress(); SetProcessing(false);
+            });
+            // 401/402 from the chat API: static help card next to the raw error (no network call, sending stays enabled).
+            _agent.OnAuthError += (provider) => Dispatcher.Invoke(() =>
+            {
+                if (provider == "anthropic") ShowAnthropicKeyBanner();
+                else if (provider == "bimmonkey") ShowBimMonkeyAuthBanner(401);
+            });
             _agent.OnComplete += () => Dispatcher.Invoke(() => { HideProgress(); SetProcessing(false); OnBriefRunComplete(); });
 
             // TOKEN USAGE — split input/output display matching 0421h format
@@ -2600,7 +2642,14 @@ namespace RevitMCPBridge2026.AgentFramework
                     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
                     client.Timeout = TimeSpan.FromSeconds(10);
                     var resp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, "https://bimmonkey-production.up.railway.app/api/auth/verify");
-                    if (!resp.IsSuccessStatusCode) return; // fail open
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        // 401/402 from the BIM Monkey API: show the remedy card but keep failing open —
+                        // chat talks to api.anthropic.com directly and still works (docs/support-agent.md §3.3).
+                        var code = (int)resp.StatusCode;
+                        if (code == 401 || code == 402) ShowBimMonkeyAuthBanner(code);
+                        return;
+                    }
 
                     var body = await resp.Content.ReadAsStringAsync();
                     var obj = JObject.Parse(body);
@@ -2769,13 +2818,318 @@ namespace RevitMCPBridge2026.AgentFramework
                     _chatHistory.Children.Remove(_offlineBanner);
                     _offlineBanner = null;
                 }
-                if (!_subscriptionBlocked)
+                if (!_subscriptionBlocked && !_updateBlocked) // --- auto-update: keep chat paused while an update is required ---
                 {
                     _sendButton.IsEnabled = true;
                     _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
                 }
             });
         }
+
+        // --- auto-update (docs/plugin-auto-update.md §3.4) — modeled on ShowSubscriptionBanner ---
+        private void ShowUpdateBanner(RevitMCPBridge.Update.UpdateOfferedEventArgs offer)
+        {
+            if (offer == null) return;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    var m = offer.Manifest;
+                    var required = offer.Required;
+                    if (!required && _updateBannerDismissedVersion == m.Version) return;              // user said "Later"
+                    if (_updateBanner != null && _updateBannerVersion == m.Version && _updateBannerStaged == offer.AlreadyStaged) return;
+                    HideUpdateBanner();
+
+                    var red = new SolidColorBrush(Color.FromRgb(180, 60, 60));
+                    var fg = required ? ChatTheme.ErrorText : ChatTheme.WarnText;
+                    var banner = new Border
+                    {
+                        Margin = new Thickness(8, 8, 8, 4),
+                        Padding = new Thickness(14, 12, 14, 12),
+                        Background = required ? ChatTheme.ErrorBg : ChatTheme.WarnBg,
+                        BorderBrush = required ? red : ChatTheme.WarnBorder,
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(6),
+                    };
+                    var stack = new StackPanel();
+                    var msg = new TextBlock
+                    {
+                        Text = offer.AlreadyStaged
+                            ? $"Update {m.Version} downloaded and verified. It installs when you close Revit."
+                            : required
+                                ? $"Update required. Update {m.Version} is ready — Banana Chat is paused until it installs when you close Revit."
+                                : $"Update {m.Version} is ready. It installs when you close Revit.",
+                        Foreground = fg,
+                        FontSize = 13,
+                        FontWeight = required ? FontWeights.SemiBold : FontWeights.Normal,
+                        TextWrapping = TextWrapping.Wrap,
+                    };
+                    stack.Children.Add(msg);
+                    if (!string.IsNullOrWhiteSpace(m.Notes))
+                        stack.Children.Add(new TextBlock { Text = m.Notes, Foreground = fg, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) });
+
+                    var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+                    var progress = new TextBlock { Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0), TextWrapping = TextWrapping.Wrap };
+
+                    if (!offer.AlreadyStaged && !string.IsNullOrEmpty(offer.DownloadUrl))
+                    {
+                        var download = MakeUpdateButton("Download now", required ? red : ChatTheme.Neutral, true);
+                        download.Click += async (s, e) =>
+                        {
+                            download.IsEnabled = false;
+                            progress.Text = "Downloading… 0%";
+                            var prog = new Progress<double>(p => progress.Text = $"Downloading… {(int)(p * 100)}%");
+                            bool ok = false;
+                            try { ok = await RevitMCPBridge.Update.UpdateService.Instance.DownloadAsync(m, offer.DownloadUrl, prog); }
+                            catch { ok = false; }
+                            if (ok)
+                            {
+                                msg.Text = $"Update {m.Version} downloaded and verified. It installs when you close Revit.";
+                                progress.Text = "";
+                                buttons.Children.Remove(download);
+                                _updateBannerStaged = true;
+                            }
+                            else
+                            {
+                                progress.Text = "The download could not be verified, so nothing was installed. Please try again later.";
+                                download.IsEnabled = true;
+                            }
+                        };
+                        buttons.Children.Add(download);
+                    }
+                    if (!string.IsNullOrEmpty(m.NotesUrl))
+                    {
+                        var notes = MakeUpdateButton("What's new", ChatTheme.Neutral, false);
+                        notes.Click += (s, e) =>
+                        {
+                            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(m.NotesUrl) { UseShellExecute = true }); }
+                            catch { }
+                        };
+                        buttons.Children.Add(notes);
+                    }
+                    if (!required)
+                    {
+                        var later = MakeUpdateButton("Later", ChatTheme.Neutral, false);
+                        later.Click += (s, e) => { _updateBannerDismissedVersion = m.Version; HideUpdateBanner(); };
+                        buttons.Children.Add(later);
+                    }
+                    buttons.Children.Add(progress);
+                    stack.Children.Add(buttons);
+                    banner.Child = stack;
+
+                    _updateBanner = banner;
+                    _updateBannerVersion = m.Version;
+                    _updateBannerStaged = offer.AlreadyStaged;
+                    _chatHistory.Children.Insert(0, banner);
+
+                    if (required && !_updateBlocked)
+                    {
+                        _updateBlocked = true;
+                        if (_inputTextBox != null) _inputTextBox.IsEnabled = false;
+                        if (_sendButton != null) _sendButton.IsEnabled = false;
+                        if (_statusText != null) _statusText.Text = "Update required";
+                    }
+                }
+                catch (Exception ex) { Serilog.Log.Warning(ex, "[Update] banner failed"); }
+            }));
+        }
+
+        private void HideUpdateBanner()
+        {
+            if (_updateBanner == null) return;
+            _chatHistory.Children.Remove(_updateBanner);
+            _updateBanner = null;
+            _updateBannerVersion = null;
+            _updateBannerStaged = false;
+        }
+
+        private static Button MakeUpdateButton(string text, Brush background, bool primary)
+        {
+            return new Button
+            {
+                Content = text,
+                FontSize = 12,
+                FontWeight = primary ? FontWeights.SemiBold : FontWeights.Normal,
+                Foreground = Brushes.White,
+                Background = background,
+                BorderBrush = background,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 0, 6, 0),
+                Cursor = System.Windows.Input.Cursors.Hand,
+            };
+        }
+        // --- end auto-update ---
+
+        // --- support agent (docs/support-agent.md §3.3) ---
+        private const string SupportHelpUrl = "https://bimmonkey.ai/getting-started#keys";
+
+        /// <summary>support_help: server-side answer from the guides + this firm's account state. Returns JSON the model relays.</summary>
+        private async Task<string> HandleSupportHelpAsync(JObject parameters)
+        {
+            var question = parameters?["question"]?.ToString();
+            var r = await RevitMCPBridge.Support.SupportClient.AskAsync(_bimMonkeyApiKey, question,
+                RevitMCPBridge.Support.SupportClient.PluginVersion, TelemetryService.DefaultRevitVersion,
+                _lastApiErrorMessage, System.Threading.CancellationToken.None);
+            if (!r.Ok)
+                return JsonConvert.SerializeObject(new { success = false, error = r.Error, status = r.Status });
+
+            if (r.Actions.Count > 0)
+            {
+                var actions = r.Actions;
+                _ = Dispatcher.BeginInvoke(new Action(() => _pendingSupportActions = actions));
+            }
+
+            return JsonConvert.SerializeObject(new
+            {
+                success = true,
+                answer = r.Answer,
+                actions = r.Actions.Select(a => new { type = a.Type, label = a.Label, url = a.Url }).ToList(),
+                sources = r.Sources
+            });
+        }
+
+        /// <summary>support_escalate: logs a ticket for a person at BIM Monkey. Only the summary/question travel — never chat history or keys.</summary>
+        private async Task<string> HandleSupportEscalateAsync(JObject parameters)
+        {
+            var summary = parameters?["summary"]?.ToString();
+            var r = await RevitMCPBridge.Support.SupportClient.EscalateAsync(_bimMonkeyApiKey, summary,
+                _lastUserMessage, _lastAssistantResponse,
+                RevitMCPBridge.Support.SupportClient.PluginVersion, TelemetryService.DefaultRevitVersion,
+                System.Threading.CancellationToken.None);
+            if (!r.Ok)
+                return JsonConvert.SerializeObject(new { success = false, error = r.Error, status = r.Status });
+            return JsonConvert.SerializeObject(new
+            {
+                success = true,
+                ticketId = r.TicketId,
+                emailed = r.Emailed,
+                message = r.Emailed
+                    ? "Logged and emailed to BIM Monkey support; someone will follow up by email."
+                    : "Logged with BIM Monkey support; someone will follow up."
+            });
+        }
+
+        /// <summary>Renders open_settings / open_url actions from the last support_help call as a button row under the latest assistant message.</summary>
+        private void FlushSupportActionRow()
+        {
+            var actions = _pendingSupportActions;
+            _pendingSupportActions = null;
+            if (actions == null || actions.Count == 0) return;
+            try
+            {
+                var row = new WrapPanel { Margin = new Thickness(8, 0, 8, 8), HorizontalAlignment = HorizontalAlignment.Left };
+                foreach (var a in actions)
+                {
+                    if (a.Type == "open_settings")
+                    {
+                        var btn = MakeUpdateButton(string.IsNullOrWhiteSpace(a.Label) ? "Open Settings" : a.Label, ChatTheme.Neutral, true);
+                        btn.Click += (s, e) => ShowSettingsDialog();
+                        row.Children.Add(btn);
+                    }
+                    else if (a.Type == "open_url" && !string.IsNullOrEmpty(a.Url)
+                             && a.Url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var url = a.Url;
+                        var btn = MakeUpdateButton(string.IsNullOrWhiteSpace(a.Label) ? "Open" : a.Label, ChatTheme.Neutral, false);
+                        btn.Click += (s, e) => OpenExternal(url);
+                        row.Children.Add(btn);
+                    }
+                    // "escalate" is relayed by the model in text; the user asks and support_escalate runs.
+                }
+                if (row.Children.Count == 0) return;
+                _chatHistory.Children.Add(row);
+                ScrollToBottom();
+            }
+            catch (Exception ex) { Serilog.Log.Warning(ex, "[Support] action row failed"); }
+        }
+
+        private static void OpenExternal(string url)
+        {
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true }); }
+            catch { }
+        }
+
+        /// <summary>
+        /// Anthropic 401 help card (ShowOfflineBanner pattern). Static text, no network call, sending stays
+        /// enabled so the user can fix the key and retry; hidden on the next successful reply.
+        /// </summary>
+        private void ShowAnthropicKeyBanner()
+        {
+            if (_anthropicKeyBanner != null) return;
+            _anthropicKeyBanner = BuildAuthBanner(
+                "Your Anthropic API key was rejected. Open Settings and paste a current key from console.anthropic.com. Your BIM Monkey key is not affected.",
+                ("Open Settings", () => ShowSettingsDialog()),
+                ("Help", () => OpenExternal(SupportHelpUrl)));
+            _chatHistory.Children.Insert(0, _anthropicKeyBanner);
+        }
+
+        /// <summary>BIM Monkey API 401 (key rejected) / 402 (subscription or trial ended) help card.</summary>
+        private void ShowBimMonkeyAuthBanner(int status)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                if (_bimMonkeyAuthBanner != null)
+                {
+                    _chatHistory.Children.Remove(_bimMonkeyAuthBanner);
+                    _bimMonkeyAuthBanner = null;
+                }
+                if (status == 402)
+                {
+                    _bimMonkeyAuthBanner = BuildAuthBanner(
+                        "Your BIM Monkey subscription or trial has ended. Reactivate at bimmonkey.ai.",
+                        ("Open bimmonkey.ai", () => OpenExternal("https://bimmonkey.ai")));
+                }
+                else
+                {
+                    _bimMonkeyAuthBanner = BuildAuthBanner(
+                        "Your BIM Monkey key was rejected. Open Settings and paste the key from app.bimmonkey.ai (Settings → API key). Your Anthropic key is not affected.",
+                        ("Open Settings", () => ShowSettingsDialog()),
+                        ("Help", () => OpenExternal(SupportHelpUrl)));
+                }
+                _chatHistory.Children.Insert(0, _bimMonkeyAuthBanner);
+            });
+        }
+
+        private void HideAuthBanners()
+        {
+            if (_anthropicKeyBanner != null) { _chatHistory.Children.Remove(_anthropicKeyBanner); _anthropicKeyBanner = null; }
+            if (_bimMonkeyAuthBanner != null) { _chatHistory.Children.Remove(_bimMonkeyAuthBanner); _bimMonkeyAuthBanner = null; }
+        }
+
+        private static Border BuildAuthBanner(string text, params (string Label, Action OnClick)[] buttons)
+        {
+            var banner = new Border
+            {
+                Margin = new Thickness(8, 8, 8, 4),
+                Padding = new Thickness(14, 12, 14, 12),
+                Background = ChatTheme.WarnBg,
+                BorderBrush = ChatTheme.WarnBorder,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+            };
+            var stack = new StackPanel();
+            stack.Children.Add(new TextBlock
+            {
+                Text = text,
+                Foreground = ChatTheme.WarnText,
+                FontSize = 13,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+            bool first = true;
+            foreach (var (label, onClick) in buttons)
+            {
+                var btn = MakeUpdateButton(label, ChatTheme.Neutral, first);
+                var handler = onClick;
+                btn.Click += (s, e) => handler();
+                row.Children.Add(btn);
+                first = false;
+            }
+            stack.Children.Add(row);
+            banner.Child = stack;
+            return banner;
+        }
+        // --- end support agent ---
 
         // ── Revit job queue: cloud → this Revit ─────────────────────────────────
         // A remote MCP tool (export_sheet_pdf) queues a job for the firm. While this
@@ -4277,6 +4631,12 @@ namespace RevitMCPBridge2026.AgentFramework
                 catch { }
                 return visionResult;
             }
+
+            // First-line support agent (docs/support-agent.md §3.3) — server-side answer on BIM Monkey's key
+            if (methodName == "support_help")
+                return await HandleSupportHelpAsync(parameters);
+            if (methodName == "support_escalate")
+                return await HandleSupportEscalateAsync(parameters);
 
             // BIM Monkey: query the approved library on Railway
             if (methodName == "queryLibrary")
@@ -7333,7 +7693,10 @@ namespace RevitMCPBridge2026.AgentFramework
                     startupBlock = sb.ToString();
                 }
 
-                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{userNameBlock}{startupBlock}{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{memoryBlock}{projectNotesBlock}{persistentIntelBlock}
+                // First-line support (docs/support-agent.md §3.3): one line, so setup/key/billing questions go to the tool, not a guess.
+                var supportBlock = "\n\nFor questions about setup, API keys, billing, plugin updates, errors or your account, call support_help; call support_escalate to reach a person.";
+
+                var systemPrompt = $@"You are an expert Revit automation assistant with full access to the Revit API. You are integrated directly into Autodesk Revit and can read and modify the model.{userNameBlock}{startupBlock}{firmBlock}{correctionsBlock}{cadVisualBlock}{libraryBlock}{memoryBlock}{projectNotesBlock}{persistentIntelBlock}{supportBlock}
 
 CURRENT PROJECT: {projectName}
 

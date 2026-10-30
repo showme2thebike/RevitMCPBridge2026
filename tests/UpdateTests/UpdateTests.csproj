@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Unit tests for src/Update (docs/plugin-auto-update.md §5). No Revit references: the Update
+       sources are linked in directly, together with the two pure-.NET helpers they depend on. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RollForward>Major</RollForward>
+    <LangVersion>12.0</LangVersion>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>RevitMCPBridge.UpdateTests</RootNamespace>
+    <AssemblyName>UpdateTests</AssemblyName>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <DefineConstants>$(DefineConstants);UPDATE_TESTS</DefineConstants>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS8600;CS8601;CS8602;CS8603;CS8604;CS8618;CS8625</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\Update\*.cs" Link="Update\%(Filename)%(Extension)" />
+    <Compile Include="..\..\src\AgentFramework\TelemetryService.cs" Link="AgentFramework\TelemetryService.cs" />
+    <Compile Include="..\..\src\AgentFramework\ApiRetry.cs" Link="AgentFramework\ApiRetry.cs" />
+    <!-- Support agent (docs/support-agent.md §3.3): pure .NET, same linked-source approach -->
+    <Compile Include="..\..\src\Support\*.cs" Link="Support\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Serilog" Version="3.1.1" />
+  </ItemGroup>
+
+</Project>
