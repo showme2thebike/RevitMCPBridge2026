@@ -145,8 +145,57 @@ namespace RevitMCPBridge.AgentFramework
                     catch { /* name list is a convenience; GetAsync works without it */ }
                 }
             }
-            catch { /* offline: GetOrLocal keeps serving local copies */ }
-            finally { Preloaded = true; }
+            catch { /* offline: fall through to the on-disk cache below */ }
+            finally
+            {
+                // Online: persist what we have for next time. Offline: fill from last time.
+                if (_cache.Count > 0 && !string.IsNullOrEmpty(ApiKey)) SaveCacheToDisk();
+                else LoadCacheFromDisk();
+                Preloaded = true;
+            }
+        }
+
+        // ── Per-user offline cache ────────────────────────────────────────────────────────
+        // The installer no longer ships knowledge, so with no network at session start there would be
+        // nothing to read. Keep the last successful preload on disk, protected with Windows DPAPI in
+        // CurrentUser scope: readable only by this Windows account on this machine, no shared key
+        // anywhere, and still nothing a decompiler or a trial account can use elsewhere.
+        public static string CachePath { get; set; } = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BIM Monkey", "knowledge-cache.bin");
+
+        internal static void SaveCacheToDisk()
+        {
+            try
+            {
+                if (_cache.IsEmpty) return;
+                var json = new JObject();
+                foreach (var kv in _cache) json[kv.Key] = kv.Value;
+                var plain = System.Text.Encoding.UTF8.GetBytes(json.ToString(Newtonsoft.Json.Formatting.None));
+                var sealed_ = System.Security.Cryptography.ProtectedData.Protect(plain, null, System.Security.Cryptography.DataProtectionScope.CurrentUser);
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(CachePath));
+                System.IO.File.WriteAllBytes(CachePath, sealed_);
+            }
+            catch { /* cache is a convenience; never fail the session over it */ }
+        }
+
+        /// <summary>Fills the in-memory cache from the DPAPI file. Returns the number of files loaded.</summary>
+        internal static int LoadCacheFromDisk()
+        {
+            try
+            {
+                if (!System.IO.File.Exists(CachePath)) return 0;
+                var plain = System.Security.Cryptography.ProtectedData.Unprotect(System.IO.File.ReadAllBytes(CachePath), null, System.Security.Cryptography.DataProtectionScope.CurrentUser);
+                var json = JObject.Parse(System.Text.Encoding.UTF8.GetString(plain));
+                var n = 0;
+                foreach (var p in json.Properties())
+                {
+                    var name = Normalize(p.Name);
+                    if (name == null || p.Value.Type != JTokenType.String) continue;
+                    if (_cache.TryAdd(name, p.Value.ToString())) n++;
+                }
+                return n;
+            }
+            catch { return 0; } // another user's file, a corrupt file, or DPAPI unavailable: ignore
         }
 
         /// <summary>Test seam: forget everything fetched this session.</summary>

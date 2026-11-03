@@ -17,8 +17,10 @@ namespace RevitMCPBridge.AgentFramework
         public const string VersionHeader = "X-Plugin-Version";
 
         /// <summary>byok-passthrough: forwards the user's Anthropic key per request when proxied.
-        /// knowledge-api: reads knowledge from the API into memory; needs no content key.</summary>
-        public const string Capabilities = "byok-passthrough,knowledge-api";
+        /// knowledge-api: reads knowledge from the API into memory; needs no content key.
+        /// server-prompt: when proxied, sends only its dynamic context and lets the server prepend
+        /// the master rules and core knowledge (AgentChatPanel honours inference-config.serverPrompt).</summary>
+        public const string Capabilities = "byok-passthrough,knowledge-api,server-prompt";
 
         public static readonly string Version =
             Assembly.GetExecutingAssembly()

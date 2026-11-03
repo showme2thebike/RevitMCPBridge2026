@@ -87,6 +87,53 @@ namespace RevitMCPBridge.UpdateTests
         }
 
         [Fact]
+        public void Disk_cache_round_trips_through_DPAPI_and_is_ignored_when_corrupt()
+        {
+            var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "bm-ks-" + System.Guid.NewGuid().ToString("N") + ".bin");
+            var original = KnowledgeStore.CachePath;
+            try
+            {
+                KnowledgeStore.CachePath = path;
+                // Nothing cached → nothing written.
+                KnowledgeStore.SaveCacheToDisk();
+                Assert.False(System.IO.File.Exists(path));
+
+                // Seed via the local fallback path, then persist. (GetOrLocal does not cache; use the
+                // internal seam: a fake "server" result is what PreloadAsync would have put in.)
+                KnowledgeStore.ResetForTests();
+                KnowledgeStore.LocalFallback = null;
+                // Simulate a successful preload by loading a cache we construct ourselves:
+                var seed = new Newtonsoft.Json.Linq.JObject { ["error-recovery.md"] = "RECOVER", ["_index.md"] = "INDEX" };
+                var sealedBytes = System.Security.Cryptography.ProtectedData.Protect(
+                    System.Text.Encoding.UTF8.GetBytes(seed.ToString(Newtonsoft.Json.Formatting.None)), null,
+                    System.Security.Cryptography.DataProtectionScope.CurrentUser);
+                System.IO.File.WriteAllBytes(path, sealedBytes);
+
+                Assert.Equal(2, KnowledgeStore.LoadCacheFromDisk());
+                Assert.Equal("RECOVER", KnowledgeStore.GetOrLocal("error-recovery"));
+                Assert.Equal("INDEX", KnowledgeStore.TryGetCached("_index.md"));
+
+                // Now the store writes its own cache; it must be unreadable as plaintext and reload cleanly.
+                KnowledgeStore.SaveCacheToDisk();
+                var raw = System.IO.File.ReadAllBytes(path);
+                Assert.DoesNotContain("RECOVER", System.Text.Encoding.UTF8.GetString(raw));
+                KnowledgeStore.ResetForTests();
+                Assert.Equal(2, KnowledgeStore.LoadCacheFromDisk());
+
+                // Corrupt file → ignored, nothing loaded, no throw.
+                KnowledgeStore.ResetForTests();
+                System.IO.File.WriteAllBytes(path, new byte[] { 1, 2, 3, 4, 5 });
+                Assert.Equal(0, KnowledgeStore.LoadCacheFromDisk());
+                Assert.Equal(0, KnowledgeStore.CachedCount);
+            }
+            finally
+            {
+                KnowledgeStore.CachePath = original;
+                try { System.IO.File.Delete(path); } catch { }
+            }
+        }
+
+        [Fact]
         public void Reset_clears_everything()
         {
             KnowledgeStore.LocalFallback = n => "x";
