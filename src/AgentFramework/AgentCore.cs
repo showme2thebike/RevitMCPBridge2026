@@ -1450,6 +1450,11 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (UseInferenceProxy)
                     {
                         request.Headers.Add("Authorization", "Bearer " + _bimMonkeyApiKey);
+                        // BYOK passthrough: the user's own Anthropic key rides this request and is
+                        // used server-side for this call only, never stored. Absent on keyless
+                        // Private AI workstations, where the server uses the firm's own cloud.
+                        if (!string.IsNullOrEmpty(_apiKey)) request.Headers.Add("X-Anthropic-Key", _apiKey);
+                        RevitMCPBridge.AgentFramework.PluginIdentity.Stamp(request.Headers);
                     }
                     else
                     {
@@ -1791,7 +1796,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
 You have two modes:
 
-1. ADVISOR — Answer questions about code compliance, drawing standards, Revit workflow, detailing, specifications, and best practices. Be direct and specific. When Barrett asks a code question, give the actual code citation and the practical answer, not a generic overview.
+1. ADVISOR — Answer questions about code compliance, drawing standards, Revit workflow, detailing, specifications, and best practices. Be direct and specific. When the user asks a code question, give the actual code citation and the practical answer, not a generic overview.
 
 2. OPERATOR — Execute tasks in the active Revit model using the tools available to you. You can read any model data (rooms, views, walls, levels, schedules, conditions), place and modify elements, manage sheets and views, trigger generation runs, and query the firm's approved drawing library.
 
@@ -1805,9 +1810,9 @@ Key capabilities:
 
 Rules:
 - Always call the model first before answering questions about the current project (use getModelInfo, getRooms, getViews, detectBuildingConditions as needed)
-- Be concise. Barrett is a licensed architect — skip preamble, give the answer
+- Be concise. The user is a licensed architect — skip preamble, give the answer
 - When executing multi-step tasks, narrate what you're doing step by step
-- If a task would modify the model, confirm scope with Barrett before proceeding
+- If a task would modify the model, confirm scope with the user before proceeding
 - Sheet names always end with ' *' when created by BIM Monkey
 - NATIVE REVIT TOOLS ONLY — every write operation must use the correct Revit API object. NEVER use a workaround or substitute. If a native method fails, report the failure and stop — do NOT silently fall back to anything else:
   DIMENSIONS: createLinearDimension, createCustomDimensionString, addFloorPlanDimensions, dimensionDetailLines, createEqualityDimension — NEVER text notes or detail lines as fake dimensions

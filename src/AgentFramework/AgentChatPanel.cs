@@ -2155,6 +2155,20 @@ namespace RevitMCPBridge2026.AgentFramework
         // Knowledge base directory - resolved at runtime with fallbacks
         private static readonly string KnowledgeDir = ResolveKnowledgeDir();
 
+        // Knowledge now comes from the API into memory (KnowledgeStore); the local folder is only
+        // the fallback for anything the server does not serve. Static initialisers run in order,
+        // so this is wired right after KnowledgeDir resolves and before any load path can run.
+        private static readonly bool _knowledgeStoreWired = WireKnowledgeStore();
+        private static bool WireKnowledgeStore()
+        {
+            RevitMCPBridge.AgentFramework.KnowledgeStore.LocalFallback = name =>
+            {
+                var path = Path.Combine(KnowledgeDir, name);
+                return File.Exists(path) ? ReadKnowledgeFile(path) : null;
+            };
+            return true;
+        }
+
         /// <summary>
         /// Read a knowledge file, decrypting it if the BM01 magic header is present.
         /// Falls back to plaintext if ContentKey is unavailable (dev) or file is unencrypted.
@@ -2253,30 +2267,22 @@ namespace RevitMCPBridge2026.AgentFramework
             sb.AppendLine("Note: Use 'getKnowledgeFile' tool to load additional knowledge files on demand.");
             sb.AppendLine("See _index.md below for all 99 available knowledge files.\n");
 
-            try
+            // Runs on every send, so it must never wait on the network: cached copies from the
+            // session preload, else the local file, else the file is simply absent this message.
+            foreach (var fileName in CoreKnowledgeFiles)
             {
-                if (Directory.Exists(KnowledgeDir))
+                try
                 {
-                    foreach (var fileName in CoreKnowledgeFiles)
-                    {
-                        var filePath = Path.Combine(KnowledgeDir, fileName);
-                        if (File.Exists(filePath))
-                        {
-                            try
-                            {
-                                var content = ReadKnowledgeFile(filePath);
-                                sb.AppendLine($"--- {fileName} ---");
-                                sb.AppendLine(content);
-                                sb.AppendLine();
-                            }
-                            catch { }
-                        }
-                    }
+                    var content = RevitMCPBridge.AgentFramework.KnowledgeStore.GetOrLocal(fileName);
+                    if (string.IsNullOrEmpty(content)) continue;
+                    sb.AppendLine($"--- {fileName} ---");
+                    sb.AppendLine(content);
+                    sb.AppendLine();
                 }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error loading core knowledge: {ex.Message}");
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error loading core knowledge {fileName}: {ex.Message}");
+                }
             }
 
             return sb.ToString();
@@ -2289,16 +2295,29 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             try
             {
-                // Ensure .md extension
-                if (!fileName.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
-                    fileName += ".md";
+                var normalized = RevitMCPBridge.AgentFramework.KnowledgeStore.Normalize(fileName);
+                if (normalized == null) return $"'{fileName}' is not a valid knowledge file name.";
+                var content = RevitMCPBridge.AgentFramework.KnowledgeStore.GetOrLocal(normalized);
+                return content ?? $"Knowledge file '{normalized}' not found. Use listKnowledgeFiles to see available files.";
+            }
+            catch (Exception ex)
+            {
+                return $"Error loading knowledge file: {ex.Message}";
+            }
+        }
 
-                var filePath = Path.Combine(KnowledgeDir, fileName);
-                if (File.Exists(filePath))
-                {
-                    return ReadKnowledgeFile(filePath);
-                }
-                return $"Knowledge file '{fileName}' not found. Use listKnowledgeFiles to see available files.";
+        /// <summary>
+        /// Same as <see cref="LoadKnowledgeFile"/> but will fetch from the API on a cache miss.
+        /// Used by the getKnowledgeFile tool, which runs off the send path and may wait.
+        /// </summary>
+        public static async Task<string> LoadKnowledgeFileAsync(string fileName)
+        {
+            try
+            {
+                var normalized = RevitMCPBridge.AgentFramework.KnowledgeStore.Normalize(fileName);
+                if (normalized == null) return $"'{fileName}' is not a valid knowledge file name.";
+                var content = await RevitMCPBridge.AgentFramework.KnowledgeStore.GetAsync(normalized).ConfigureAwait(false);
+                return content ?? $"Knowledge file '{normalized}' not found. Use listKnowledgeFiles to see available files.";
             }
             catch (Exception ex)
             {
@@ -2315,12 +2334,9 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             try
             {
-                var filePath = Path.Combine(KnowledgeDir, "cad-visual-rules.md");
-                if (!File.Exists(filePath)) return;
-
                 // Load the full file — all 10 sections are important.
                 // The file is ~4K tokens, well within context budget.
-                var full = ReadKnowledgeFile(filePath).Trim();
+                var full = (RevitMCPBridge.AgentFramework.KnowledgeStore.GetOrLocal("cad-visual-rules.md") ?? "").Trim();
                 if (full.Length > 200)
                 {
                     _cadVisualRulesQuickRef = full;
@@ -2340,22 +2356,21 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             try
             {
+                // Server names first (the canonical set), plus anything only the local folder has.
+                var names = new HashSet<string>(RevitMCPBridge.AgentFramework.KnowledgeStore.RemoteNames, StringComparer.OrdinalIgnoreCase);
                 if (Directory.Exists(KnowledgeDir))
-                {
-                    var files = Directory.GetFiles(KnowledgeDir, "*.md")
-                        .Select(f => Path.GetFileName(f))
-                        .OrderBy(f => f)
-                        .ToList();
+                    foreach (var f in Directory.GetFiles(KnowledgeDir, "*.md")) names.Add(Path.GetFileName(f));
+                if (names.Count == 0)
+                    return JsonConvert.SerializeObject(new { success = false, error = "No knowledge files available (offline and no local folder)" });
 
-                    return JsonConvert.SerializeObject(new
-                    {
-                        success = true,
-                        count = files.Count,
-                        files = files,
-                        hint = "Use getKnowledgeFile(fileName) to load a specific file"
-                    });
-                }
-                return JsonConvert.SerializeObject(new { success = false, error = "Knowledge directory not found" });
+                var files = names.OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList();
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    count = files.Count,
+                    files = files,
+                    hint = "Use getKnowledgeFile(fileName) to load a specific file"
+                });
             }
             catch (Exception ex)
             {
@@ -3298,6 +3313,9 @@ namespace RevitMCPBridge2026.AgentFramework
                 using (var client = new System.Net.Http.HttpClient())
                 {
                     client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    // Tells /api/corrections/knowledge whether this build will be proxied; if so the
+                    // cross-firm platform context is injected server-side and omitted from this payload.
+                    RevitMCPBridge.AgentFramework.PluginIdentity.Stamp(client.DefaultRequestHeaders);
                     client.Timeout = TimeSpan.FromSeconds(10);
 
                     // 1. Synthesized standards doc (learning from all past sessions)
@@ -3613,6 +3631,9 @@ namespace RevitMCPBridge2026.AgentFramework
                 using (var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) })
                 {
                     client.DefaultRequestHeaders.Add("Authorization", "Bearer " + _bimMonkeyApiKey);
+                    // The server routes this build through the proxy only because the
+                    // capability header says it can carry the user's key (inferenceProxy.js).
+                    RevitMCPBridge.AgentFramework.PluginIdentity.Stamp(client.DefaultRequestHeaders);
                     var resp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, "https://bimmonkey-production.up.railway.app/api/plugin/inference-config");
                     if (!resp.IsSuccessStatusCode) return;
                     var data = Newtonsoft.Json.Linq.JObject.Parse(await resp.Content.ReadAsStringAsync());
@@ -3849,6 +3870,9 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 url = AgentCore.InferenceProxyUrl;
                 anthropic.DefaultRequestHeaders.Add("Authorization", "Bearer " + _bimMonkeyApiKey);
+                // Same passthrough as AgentCore: the user's key is used server-side for this call only.
+                if (!string.IsNullOrEmpty(_apiKey)) anthropic.DefaultRequestHeaders.Add("X-Anthropic-Key", _apiKey);
+                RevitMCPBridge.AgentFramework.PluginIdentity.Stamp(anthropic.DefaultRequestHeaders);
             }
             else
             {
@@ -4560,8 +4584,8 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     return await Task.FromResult(JsonConvert.SerializeObject(new { success = false, error = "fileName parameter is required" }));
                 }
-                var content = LoadKnowledgeFile(fileName);
-                return await Task.FromResult(JsonConvert.SerializeObject(new { success = true, fileName = fileName, content = content }));
+                var content = await LoadKnowledgeFileAsync(fileName);
+                return JsonConvert.SerializeObject(new { success = true, fileName = fileName, content = content });
             }
 
             // Playwright browser tools — route to Playwright MCP process
@@ -6447,40 +6471,24 @@ namespace RevitMCPBridge2026.AgentFramework
             });
         }
 
+        // Pulls the core knowledge files from the API into memory for this session. Replaces the
+        // old startup sync, which wrote plaintext copies into the add-in folder on disk — the
+        // opposite of what the encrypted corpus was meant to achieve. Nothing is written to disk.
         private void TrySyncKnowledgeFiles()
         {
             if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+            RevitMCPBridge.AgentFramework.KnowledgeStore.ApiKey = _bimMonkeyApiKey;
             System.Threading.Tasks.Task.Run(async () =>
             {
                 try
                 {
-                    using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
-                    var manifestJson = await RevitMCPBridge.AgentFramework.ApiRetry.GetStringAsync(client, "https://bimmonkey-production.up.railway.app/api/plugin/knowledge/manifest");
-                    var manifest = JObject.Parse(manifestJson);
-                    var files = manifest["files"] as JObject;
-                    if (files == null) return;
-                    var knowledgeDir = KnowledgeDir;
-                    if (!Directory.Exists(knowledgeDir)) return;
-                    foreach (var entry in files)
-                    {
-                        var fileName = entry.Key;
-                        var remoteHash = entry.Value?.ToString();
-                        var localPath = Path.Combine(knowledgeDir, fileName);
-                        string localHash = null;
-                        if (File.Exists(localPath))
-                        {
-                            using var sha = System.Security.Cryptography.SHA256.Create();
-                            var bytes = File.ReadAllBytes(localPath);
-                            localHash = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
-                        }
-                        if (localHash == remoteHash) continue;
-                        var content = await client.GetStringAsync(
-                            $"https://bimmonkey-production.up.railway.app/api/plugin/knowledge/{Uri.EscapeDataString(fileName)}");
-                        File.WriteAllText(localPath, content, System.Text.Encoding.UTF8);
-                    }
+                    await RevitMCPBridge.AgentFramework.KnowledgeStore.PreloadAsync(CoreKnowledgeFiles);
+                    // The CAD rules block was loaded from the local copy at construction; now the
+                    // server copy is in memory, prefer it for the rest of the session.
+                    LoadCadVisualRulesQuickRef();
+                    System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] Knowledge preloaded: {RevitMCPBridge.AgentFramework.KnowledgeStore.CachedCount} files in memory");
                 }
-                catch { /* fire and forget */ }
+                catch { /* fire and forget — GetOrLocal keeps serving local copies */ }
             });
         }
 
@@ -7647,8 +7655,8 @@ namespace RevitMCPBridge2026.AgentFramework
                 var persistentIntelBlock = "\n\nPERSISTENT INTELLIGENCE — CRITICAL:\n" +
                     "You have a memory system that survives across sessions.\n\n" +
                     "CORRECTION CAPTURE FLOW:\n" +
-                    "When Barrett criticizes a write operation (says 'no', 'wrong', 'not like that', 'that's not right', 'wait', 'stop', 'undo', 'don't do that', 'I'll fix', 'let me fix'):\n" +
-                    "  • If he hasn't told you the fix: respond EXACTLY → \"Got it — can you show me how you'd do it? I'll watch while you work. Type 'done' when you're finished.\"\n" +
+                    "When the user criticizes a write operation (says 'no', 'wrong', 'not like that', 'that's not right', 'wait', 'stop', 'undo', 'don't do that', 'I'll fix', 'let me fix'):\n" +
+                    "  • If they haven't told you the fix: respond EXACTLY → \"Got it — can you show me how you'd do it? I'll watch while you work. Type 'done' when you're finished.\"\n" +
                     "    Do NOT call memoryStoreCorrection yet — wait for the diff.\n" +
                     "  • If he states the fix directly ('always put X', 'use Y not Z'): call memoryStoreCorrection immediately.\n" +
                     "When you receive a message starting with 'CORRECTION DIFF:':\n" +

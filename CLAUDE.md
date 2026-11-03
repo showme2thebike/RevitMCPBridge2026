@@ -1,13 +1,23 @@
 # BIM Monkey — RevitMCPBridge2026
 
-## Knowledge File Encryption
-All `.md` files in `knowledge/` are AES-256 encrypted at build time.
-- Key: `CONTENT_ENCRYPTION_KEY` (64 hex chars) — lives in AWS Secrets Manager `bimmonkey/prod` (since 2026-10-28); NEVER written into this or any repo file. The value that used to sit here was exposed in the Oct 2026 Railway incident and is scheduled for rotation with the next prod plugin build.
-- Script: `bimmonkey-ai-git/scripts/encrypt_knowledge.js`
-- `build_plugin_zip.ps1` runs this automatically — set `$env:CONTENT_ENCRYPTION_KEY` before building
-- To add a new knowledge file: add plaintext `.md`, then run the build script (encrypt runs automatically)
-- The plugin decrypts in-memory using the key returned by `/api/auth/session`
-- Never commit plaintext knowledge files — always check BM01 magic header (`42 4D 01 00`) before committing
+## Knowledge Files (changed v0.4.20261103 — plugin exposure audit)
+The plugin now reads knowledge from the API into memory for the session (`src/AgentFramework/KnowledgeStore.cs`;
+server routes `/api/plugin/knowledge/*`). Nothing is written to disk. The `knowledge/` folder the installer
+ships is only a FALLBACK for files the API does not serve and for offline use.
+- **Plaintext source of truth is `bimmonkey-ai-git/api/knowledge/`** (private repo). Edit knowledge there.
+- This repo's `knowledge/` is committed as CIPHERTEXT (BM01 header `42 4D 01 00`), encrypted with
+  `CONTENT_ENCRYPTION_KEY` (AWS Secrets Manager `bimmonkey/prod`; NEVER in any repo file; the value that used
+  to sit here leaked in the Oct 2026 Railway incident — rotation rides the first stable self-update release,
+  docs/plugin-auto-update.md §3.5).
+- Six files exist ONLY here as ciphertext and are not yet in `api/knowledge/`: `cad-dwg-practices`,
+  `insert-views-workflow`, `photo-metrology`, `revit-api-wall-roof-2026`, `revit-workflow-patterns`,
+  `test-wall-profile-write`. Decrypt them with the key and add them to `api/knowledge/` before removing the
+  four `knowledge\*` Source lines from the `.iss`.
+- `build_plugin_zip.ps1` encrypts any plaintext `.md` here when `$env:CONTENT_ENCRYPTION_KEY` is set; without
+  the key it verifies every file already carries BM01 and refuses to build if any plaintext would ship.
+- Builds announcing `knowledge-api` (every build from v0.4.20261103, see `PluginIdentity.cs`) are NOT handed the
+  content key by `/api/auth/session`; older builds still are.
+- Audit, design rules and tier table: `bimmonkey-ai-git/docs/security/plugin-exposure-audit-2026-11.md`.
 
 ## Build & Deploy
 ```bash

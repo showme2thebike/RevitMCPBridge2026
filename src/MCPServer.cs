@@ -520,12 +520,32 @@ namespace RevitMCPBridge
             }
         }
         
+        /// <summary>
+        /// Creates a server instance restricted to the user running Revit. The pipe used to be
+        /// created with no ACL at all, so any local process as any user could connect and drive
+        /// every MCP method — including executeRevitScript — inside a subscriber's Revit. The
+        /// wrapper, Claude Desktop and the plugin's own chat all run as this user, so nothing
+        /// legitimate is excluded.
+        /// </summary>
+        private NamedPipeServerStream CreateServerPipe()
+        {
+            var security = new PipeSecurity();
+            var me = System.Security.Principal.WindowsIdentity.GetCurrent().User;
+            if (me != null)
+            {
+                security.AddAccessRule(new PipeAccessRule(me, PipeAccessRights.FullControl,
+                    System.Security.AccessControl.AccessControlType.Allow));
+            }
+            return NamedPipeServerStreamAcl.Create(
+                _pipeName, PipeDirection.InOut, 254, PipeTransmissionMode.Byte, PipeOptions.None,
+                0, 0, security);
+        }
+
         private async Task RunServer(CancellationToken cancellationToken)
         {
             // Pre-create the first server instance before entering the loop so it's
             // immediately ready when the first client connects.
-            NamedPipeServerStream standbyPipe = new NamedPipeServerStream(
-                _pipeName, PipeDirection.InOut, 254, PipeTransmissionMode.Byte, PipeOptions.None);
+            NamedPipeServerStream standbyPipe = CreateServerPipe();
             // WaitForConnectionAsync(token) actually cancels when the token fires.
             // Task.Run(() => WaitForConnection(), token) does NOT — the token only
             // prevents task scheduling if already cancelled, leaving a zombie pipe
@@ -545,8 +565,7 @@ namespace RevitMCPBridge
                     // Immediately pre-create the NEXT server instance so it's ready
                     // before the current client finishes — eliminates the reconnect gap
                     // that causes "semaphore timeout" on the next connection attempt.
-                    standbyPipe = new NamedPipeServerStream(
-                        _pipeName, PipeDirection.InOut, 254, PipeTransmissionMode.Byte, PipeOptions.None);
+                    standbyPipe = CreateServerPipe();
                     standbyWait = standbyPipe.WaitForConnectionAsync(cancellationToken);
 
                     _ = Task.Run(async () => await HandleClient(clientPipe, cancellationToken), cancellationToken);
@@ -564,8 +583,7 @@ namespace RevitMCPBridge
                     // Recreate standby pipe after error
                     standbyPipe?.Dispose();
                     await Task.Delay(1000, cancellationToken);
-                    standbyPipe = new NamedPipeServerStream(
-                        _pipeName, PipeDirection.InOut, 254, PipeTransmissionMode.Byte, PipeOptions.None);
+                    standbyPipe = CreateServerPipe();
                     standbyWait = standbyPipe.WaitForConnectionAsync(cancellationToken);
                 }
             }

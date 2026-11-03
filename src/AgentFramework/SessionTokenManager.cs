@@ -102,6 +102,9 @@ namespace RevitMCPBridge.AgentFramework
             {
                 var req = new HttpRequestMessage(HttpMethod.Post, SESSION_URL);
                 req.Headers.Add("Authorization", $"Bearer {_apiKey}");
+                // Announcing knowledge-api means the server omits the shared content key from the
+                // session payload — this build reads knowledge from the API, not from disk.
+                PluginIdentity.Stamp(req.Headers);
                 var resp = await _http.SendAsync(req).ConfigureAwait(false);
 
                 if (resp.StatusCode == System.Net.HttpStatusCode.PaymentRequired ||
