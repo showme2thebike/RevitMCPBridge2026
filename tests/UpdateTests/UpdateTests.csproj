@@ -23,6 +23,7 @@
     <!-- Knowledge-from-API + request identity (plugin exposure audit, Nov 2026): pure .NET -->
     <Compile Include="..\..\src\AgentFramework\PluginIdentity.cs" Link="AgentFramework\PluginIdentity.cs" />
     <Compile Include="..\..\src\AgentFramework\KnowledgeStore.cs" Link="AgentFramework\KnowledgeStore.cs" />
+    <Compile Include="..\..\src\AgentFramework\ProtectedSecret.cs" Link="AgentFramework\ProtectedSecret.cs" />
     <!-- Support agent (docs/support-agent.md §3.3): pure .NET, same linked-source approach -->
     <Compile Include="..\..\src\Support\*.cs" Link="Support\%(Filename)%(Extension)" />
   </ItemGroup>

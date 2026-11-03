@@ -1585,9 +1585,15 @@ namespace RevitMCPBridge2026.AgentFramework
                 {
                     var config = JObject.Parse(File.ReadAllText(ConfigPath));
 
-                    var savedKey = config["anthropic_api_key"]?.ToString();
+                    // The user's own Anthropic key is DPAPI-wrapped on disk (ProtectedSecret). Older
+                    // builds wrote it as plaintext; read that once and re-save wrapped below.
+                    var savedKey = RevitMCPBridge.AgentFramework.ProtectedSecret.Unprotect(config["anthropic_api_key"]?.ToString());
                     if (!string.IsNullOrEmpty(savedKey))
+                    {
                         _apiKey = savedKey;
+                        if (!RevitMCPBridge.AgentFramework.ProtectedSecret.IsProtected(config["anthropic_api_key"]?.ToString()))
+                            _configNeedsRewrite = true; // plaintext from an older build: migrate on this load
+                    }
 
                     var bmManuallySet = config["bm_key_manually_set"]?.Value<bool>() ?? false;
                     var savedBmKey    = config["bim_monkey_api_key"]?.ToString();
@@ -1607,7 +1613,12 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 System.Diagnostics.Debug.WriteLine($"Error loading config: {ex.Message}");
             }
+            if (_configNeedsRewrite) { _configNeedsRewrite = false; SaveConfig(); }
         }
+
+        // Set by LoadConfig when the on-disk key is still plaintext (written by a build before
+        // v0.4.20261103); SaveConfig then rewrites it DPAPI-wrapped and the plaintext is gone.
+        private bool _configNeedsRewrite = false;
 
         /// <summary>
         /// Read both API keys from Claude Code's settings.json (~/.claude/settings.json).
@@ -1679,8 +1690,10 @@ namespace RevitMCPBridge2026.AgentFramework
                     config = new JObject();
                 }
 
-                // Update settings
-                config["anthropic_api_key"]   = _apiKey;
+                // Update settings. The Anthropic key is the customer's billable secret: never on
+                // disk in plaintext (ProtectedSecret, DPAPI CurrentUser). The BM key is ours to
+                // revoke and is also in the installer-written CLAUDE.md, so it stays as-is.
+                config["anthropic_api_key"]   = RevitMCPBridge.AgentFramework.ProtectedSecret.Protect(_apiKey);
                 config["bim_monkey_api_key"]  = _bimMonkeyApiKey;
                 // Flag the BM key as manual only when it actually differs from the
                 // installer-written key — a Settings save for an unrelated change (e.g.
@@ -1758,7 +1771,11 @@ namespace RevitMCPBridge2026.AgentFramework
             {
                 if (File.Exists(SessionPath))
                 {
-                    var json = File.ReadAllText(SessionPath);
+                    // DPAPI-wrapped since v0.4.20261103 (the transcript is the user's own, but it can
+                    // carry client and project details). A plaintext file from an older build still
+                    // loads and is rewritten wrapped on the next save.
+                    var json = RevitMCPBridge.AgentFramework.ProtectedSecret.Unprotect(File.ReadAllText(SessionPath));
+                    if (string.IsNullOrEmpty(json)) return null;
                     return JsonConvert.DeserializeObject<SessionData>(json);
                 }
             }
@@ -1857,9 +1874,10 @@ namespace RevitMCPBridge2026.AgentFramework
 
                 var json = JsonConvert.SerializeObject(session, Formatting.Indented);
 
-                // Write to temp file first, then rename (atomic operation)
+                // Write to temp file first, then rename (atomic operation). Wrapped with DPAPI so the
+                // transcript is readable only by this Windows account on this machine.
                 var tempPath = SessionPath + ".tmp";
-                File.WriteAllText(tempPath, json);
+                File.WriteAllText(tempPath, RevitMCPBridge.AgentFramework.ProtectedSecret.Protect(json) ?? "");
 
                 if (File.Exists(SessionPath))
                 {

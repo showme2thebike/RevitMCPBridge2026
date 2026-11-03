@@ -144,6 +144,36 @@ namespace RevitMCPBridge.UpdateTests
         }
     }
 
+    public class ProtectedSecretTests
+    {
+        [Fact]
+        public void Round_trips_and_is_not_plaintext_on_disk()
+        {
+            var sealed_ = ProtectedSecret.Protect("sk-ant-api03-example-not-a-real-key");
+            Assert.StartsWith("dpapi:", sealed_);
+            Assert.DoesNotContain("sk-ant", sealed_);
+            Assert.True(ProtectedSecret.IsProtected(sealed_));
+            Assert.Equal("sk-ant-api03-example-not-a-real-key", ProtectedSecret.Unprotect(sealed_));
+        }
+
+        [Fact]
+        public void Plaintext_passes_through_so_old_configs_migrate_on_next_save()
+        {
+            Assert.False(ProtectedSecret.IsProtected("sk-ant-plain"));
+            Assert.Equal("sk-ant-plain", ProtectedSecret.Unprotect("sk-ant-plain"));
+        }
+
+        [Fact]
+        public void Empty_corrupt_and_foreign_values_read_as_absent()
+        {
+            Assert.Null(ProtectedSecret.Protect(""));
+            Assert.Null(ProtectedSecret.Protect(null));
+            Assert.Null(ProtectedSecret.Unprotect(null));
+            Assert.Null(ProtectedSecret.Unprotect("dpapi:not-base64!!"));
+            Assert.Null(ProtectedSecret.Unprotect("dpapi:" + System.Convert.ToBase64String(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 })));
+        }
+    }
+
     public class PluginIdentityTests
     {
         [Fact]
