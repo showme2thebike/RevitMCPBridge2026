@@ -61,6 +61,10 @@ namespace RevitMCPBridge2026.AgentFramework
         // True when the server proxies us by forwarding OUR key per request (byok-passthrough), as
         // opposed to Private AI where the firm's cloud pays. Decides whether vision calls carry the key.
         private bool _serverPassthrough = false;
+        // Fixed strip ABOVE the scrolling chat history for the update banner. The first field test
+        // (2026-11-04) inserted the banner at index 0 of _chatHistory: a restored session scrolls to the
+        // bottom and "new chat" clears the history, so the banner was either out of view or removed.
+        private StackPanel _bannerHost;
         // First-party model names the firm's Private AI cloud can serve
         // (normalized, from inference-config). null = direct Anthropic — all
         // picker models available. Used to badge unavailable models honestly.
@@ -542,7 +546,18 @@ namespace RevitMCPBridge2026.AgentFramework
 
             _chatHistory = new StackPanel();
             _chatScrollViewer.Content = _chatHistory;
-            border.Child = _chatScrollViewer;
+
+            // Row 0: banners that must stay visible regardless of scroll position or chat clears.
+            // Row 1: the scrolling history.
+            var chatArea = new Grid();
+            chatArea.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            chatArea.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            _bannerHost = new StackPanel();
+            Grid.SetRow(_bannerHost, 0);
+            Grid.SetRow(_chatScrollViewer, 1);
+            chatArea.Children.Add(_bannerHost);
+            chatArea.Children.Add(_chatScrollViewer);
+            border.Child = chatArea;
 
             return border;
         }
@@ -3023,7 +3038,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                     _updateBanner = banner;
                     _updateBannerVersion = m.Version;
                     _updateBannerStaged = offer.AlreadyStaged;
-                    _chatHistory.Children.Insert(0, banner);
+                    (_bannerHost ?? (Panel)_chatHistory).Children.Insert(0, banner);
 
                     if (required && !_updateBlocked)
                     {
@@ -3040,7 +3055,8 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
         private void HideUpdateBanner()
         {
             if (_updateBanner == null) return;
-            _chatHistory.Children.Remove(_updateBanner);
+            _bannerHost?.Children.Remove(_updateBanner);
+            _chatHistory.Children.Remove(_updateBanner); // no-op unless an old-style insert happened
             _updateBanner = null;
             _updateBannerVersion = null;
             _updateBannerStaged = false;
