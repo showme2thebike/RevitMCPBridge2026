@@ -29,6 +29,7 @@ namespace RevitMCPBridge.Update
         [JsonProperty("lastAcceptedManifestVersion")] public long LastAcceptedManifestVersion { get; set; }
         [JsonProperty("lastCheckUtc")] public DateTimeOffset? LastCheckUtc { get; set; }
         [JsonProperty("lastOfferedVersion")] public string? LastOfferedVersion { get; set; }
+        [JsonProperty("skippedVersion")] public string? SkippedVersion { get; set; }
         [JsonProperty("pending")] public PendingUpdate? Pending { get; set; }
 
         public static string DefaultDirectory =>

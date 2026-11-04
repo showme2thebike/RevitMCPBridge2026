@@ -24,6 +24,8 @@ namespace RevitMCPBridge.Update
         public string? DownloadUrl { get; }
         /// <summary>True when a verified installer for this version already sits in the updates folder.</summary>
         public bool AlreadyStaged { get; internal set; }
+        /// <summary>True when the automatic background download ran and failed verification; the UI offers a manual retry.</summary>
+        public bool AutoDownloadFailed { get; internal set; }
 
         public UpdateOfferedEventArgs(ReleaseManifest manifest, bool required, string? downloadUrl, bool alreadyStaged)
         {
@@ -44,7 +46,15 @@ namespace RevitMCPBridge.Update
         public HttpMessageHandler? HttpHandler { get; set; }
         /// <summary>(eventType, metadata) sink; production posts through TelemetryService.</summary>
         public Action<string, object?>? Telemetry { get; set; }
-        public TimeSpan PanelCheckInterval { get; set; } = TimeSpan.FromHours(6);
+        // One hour (was six): a release should reach every open Revit the same working day. The check is
+        // one small GET; the startup check is separate and always runs once.
+        public TimeSpan PanelCheckInterval { get; set; } = TimeSpan.FromHours(1);
+        /// <summary>
+        /// Download and verify an offered release in the background as soon as it is offered, so the only
+        /// user action left is closing Revit. Eric 2026-11-04: "why does the user even have to click download".
+        /// The banner keeps a "Skip this version" control; required updates were never skippable.
+        /// </summary>
+        public bool AutoDownload { get; set; } = true;
         public TimeSpan CheckTimeout { get; set; } = TimeSpan.FromSeconds(10);
 #if UPDATE_TESTS
         /// <summary>Test-only: lets DownloadAsync accept http://127.0.0.1 (HttpListener has no TLS).</summary>
@@ -83,6 +93,8 @@ namespace RevitMCPBridge.Update
         private bool _disabledLogged;
         private DateTimeOffset? _lastCheckAttemptUtc;
         private int _downloading;
+        /// <summary>The background download started by the last offer (null if none); tests await it.</summary>
+        public Task? AutoDownloadTask { get; private set; }
         private static Mutex? _launchMutex; // held until process exit on purpose
 
         public event EventHandler<UpdateOfferedEventArgs>? UpdateOffered;
@@ -296,6 +308,15 @@ namespace RevitMCPBridge.Update
                          && string.Equals(state.Pending.Sha256, manifest.Sha256, StringComparison.OrdinalIgnoreCase)
                          && File.Exists(state.Pending.Path);
 
+            // "Skip this version" is persisted; a required update (below minSupportedVersion) overrides it.
+            if (!required && string.Equals(state.SkippedVersion, manifest.Version, StringComparison.Ordinal))
+            {
+                Log.Information("[Update] {Version} was skipped by the user; not offering", manifest.Version);
+                state.LastOfferedVersion = manifest.Version;
+                SaveState(state);
+                return;
+            }
+
             state.LastOfferedVersion = manifest.Version;
             SaveState(state);
 
@@ -305,6 +326,36 @@ namespace RevitMCPBridge.Update
             Log.Information("[Update] offering {Version} (manifest {MV}, required={Required}, staged={Staged})",
                 manifest.Version, manifest.ManifestVersion, required, staged);
             RaiseOffer(new UpdateOfferedEventArgs(manifest, required, downloadUrl, staged));
+
+            if (_o.AutoDownload && !staged && !string.IsNullOrEmpty(downloadUrl))
+                AutoDownloadTask = AutoDownloadAsync(manifest, required, downloadUrl!);
+        }
+
+        // Background download after an offer. Success re-raises the offer as staged so the banner turns into
+        // "installs when you close Revit"; failure re-raises with AutoDownloadFailed so the banner shows a retry.
+        private async Task AutoDownloadAsync(ReleaseManifest manifest, bool required, string downloadUrl)
+        {
+            try
+            {
+                var ok = await DownloadAsync(manifest, downloadUrl).ConfigureAwait(false);
+                var again = new UpdateOfferedEventArgs(manifest, required, downloadUrl, ok) { AutoDownloadFailed = !ok };
+                RaiseOffer(again);
+            }
+            catch (Exception ex) { Log.Warning(ex, "[Update] auto-download failed"); }
+        }
+
+        /// <summary>User chose "Skip this version": remember it so later checks stay quiet about it.</summary>
+        public void SkipVersion(string version)
+        {
+            try
+            {
+                var state = LoadState();
+                state.SkippedVersion = version;
+                SaveState(state);
+                if (CurrentOffer != null && CurrentOffer.Manifest.Version == version && !CurrentOffer.Required) CurrentOffer = null;
+                Telemetry("update_skipped", new { version });
+            }
+            catch (Exception ex) { Log.Warning(ex, "[Update] skip failed"); }
         }
 
         private void RaiseOffer(UpdateOfferedEventArgs args)
@@ -482,6 +533,14 @@ namespace RevitMCPBridge.Update
                 {
                     ClearPending(state, deleteFiles: true);
                     return "stale";
+                }
+                // The user skipped this version after it was staged (auto-download runs before they can say no):
+                // honour the skip. A later required manifest clears the skip through the normal check path.
+                if (string.Equals(state.SkippedVersion, pending.Version, StringComparison.Ordinal))
+                {
+                    ClearPending(state, deleteFiles: true);
+                    Log.Information("[Update] pending {Version} was skipped by the user; not launching", pending.Version);
+                    return "skipped";
                 }
                 if (!File.Exists(pending.Path))
                 {

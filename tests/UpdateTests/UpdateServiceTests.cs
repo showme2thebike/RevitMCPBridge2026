@@ -104,6 +104,7 @@ namespace RevitMCPBridge.UpdateTests
                 HttpHandler = Http,
                 Telemetry = (e, m) => { lock (Telemetry) Telemetry.Add((e, m == null ? new JObject() : JObject.FromObject(m))); },
                 AllowLoopbackHttp = true,
+                AutoDownload = false, // tests that want it set it explicitly and await svc.AutoDownloadTask
             };
         }
 
@@ -280,7 +281,7 @@ namespace RevitMCPBridge.UpdateTests
         }
 
         [Fact]
-        public async Task Startup_check_runs_once_and_panel_checks_are_throttled_to_six_hours()
+        public async Task Startup_check_runs_once_and_panel_checks_are_throttled_to_one_hour()
         {
             using var h = new Harness();
             h.Http.Body = _ => h.ServerResponse(ReleaseSigner.DefaultManifest(h.Now), available: false);
@@ -289,9 +290,9 @@ namespace RevitMCPBridge.UpdateTests
             await svc.CheckAsync("startup"); Assert.Equal(1, h.Http.Calls);
             await svc.CheckAsync("startup"); Assert.Equal(1, h.Http.Calls);
             await svc.CheckAsync("panel");   Assert.Equal(1, h.Http.Calls);
-            h.Now = h.Now.AddHours(5);
+            h.Now = h.Now.AddMinutes(50);
             await svc.CheckAsync("panel");   Assert.Equal(1, h.Http.Calls);
-            h.Now = h.Now.AddHours(1.5);
+            h.Now = h.Now.AddMinutes(15);
             await svc.CheckAsync("panel");   Assert.Equal(2, h.Http.Calls);
 
             // Throttle persists across service instances via lastCheckUtc.
@@ -409,6 +410,108 @@ namespace RevitMCPBridge.UpdateTests
             Assert.StartsWith("authenticode_wintrust_", h.Reason("update_verify_failed"));
             Assert.Null(h.State().Pending);
             Assert.Empty(Directory.EnumerateFiles(svc.UpdatesDirectory, "*", SearchOption.AllDirectories));
+        }
+
+        [Fact]
+        public async Task Offer_auto_downloads_the_real_installer_and_reoffers_it_as_staged()
+        {
+            using var h = new Harness(installed: "v0.4.20261009a");
+            h.Options.AutoDownload = true;
+            var bytes = File.ReadAllBytes(ReleaseSigner.RealInstaller);
+            using var server = new LocalServer(r => Write(r, bytes));
+            var manifest = ReleaseSigner.DefaultManifest(h.Now, "v0.4.20261103", 7, bytes.Length, Sha(bytes));
+            h.Http.Body = _ => h.ServerResponse(manifest, downloadUrl: server.Url);
+            var svc = h.NewService();
+            var offers = new List<UpdateOfferedEventArgs>();
+            var stagedAtOffer = new List<bool>(); // DownloadAsync flips AlreadyStaged on the live offer object, so snapshot it
+            svc.UpdateOffered += (s, e) => { lock (offers) { offers.Add(e); stagedAtOffer.Add(e.AlreadyStaged); } };
+
+            await svc.CheckAsync("startup");
+            Assert.NotNull(svc.AutoDownloadTask);
+            await svc.AutoDownloadTask!;
+
+            Assert.Equal(2, offers.Count);
+            Assert.False(stagedAtOffer[0]);
+            Assert.True(offers[1].AlreadyStaged, h.Reason("update_verify_failed") ?? "no reason");
+            Assert.False(offers[1].AutoDownloadFailed);
+            Assert.Same(offers[1], svc.CurrentOffer);
+            Assert.Equal("v0.4.20261103", h.State().Pending?.Version);
+            Assert.Contains(h.Telemetry, t => t.Event == "update_downloaded");
+        }
+
+        [Fact]
+        public async Task Failed_auto_download_reoffers_with_the_retry_flag_and_nothing_staged()
+        {
+            using var h = new Harness(installed: "v0.4.20261009a");
+            h.Options.AutoDownload = true;
+            using var server = new LocalServer(r => Write(r, new byte[] { 1, 2, 3 })); // wrong bytes
+            var manifest = ReleaseSigner.DefaultManifest(h.Now, "v0.4.20261103", 7, 3, Sha(new byte[] { 9, 9, 9 }));
+            h.Http.Body = _ => h.ServerResponse(manifest, downloadUrl: server.Url);
+            var svc = h.NewService();
+            var offers = new List<UpdateOfferedEventArgs>();
+            svc.UpdateOffered += (s, e) => { lock (offers) offers.Add(e); };
+
+            await svc.CheckAsync("startup");
+            await svc.AutoDownloadTask!;
+
+            Assert.Equal(2, offers.Count);
+            Assert.True(offers[1].AutoDownloadFailed);
+            Assert.False(offers[1].AlreadyStaged);
+            Assert.Null(h.State().Pending);
+            Assert.Equal("sha256_mismatch", h.Reason("update_verify_failed"));
+        }
+
+        [Fact]
+        public async Task Skipped_version_is_not_offered_again_unless_required()
+        {
+            using var h = new Harness();
+            h.Http.Body = _ => h.ServerResponse(ReleaseSigner.DefaultManifest(h.Now));
+            var svc = h.NewService();
+            await svc.CheckAsync("startup");
+            Assert.NotNull(svc.CurrentOffer);
+
+            svc.SkipVersion("v0.4.20261103");
+            Assert.Null(svc.CurrentOffer);
+            Assert.Equal("v0.4.20261103", h.State().SkippedVersion);
+            Assert.Contains(h.Telemetry, t => t.Event == "update_skipped");
+
+            // a fresh service (new Revit session) stays quiet about the skipped version
+            var svc2 = h.NewService();
+            h.Now = h.Now.AddHours(2);
+            UpdateOfferedEventArgs? got = null;
+            svc2.UpdateOffered += (s, e) => got = e;
+            await svc2.CheckAsync("startup");
+            Assert.Null(got);
+
+            // ...but a required update (installed < minSupportedVersion) ignores the skip
+            var m = ReleaseSigner.DefaultManifest(h.Now, "v0.4.20261103", 8);
+            m["minSupportedVersion"] = "v0.4.20261101";
+            h.Http.Body = _ => h.ServerResponse(m, required: true);
+            var svc3 = h.NewService();
+            h.Now = h.Now.AddHours(2);
+            await svc3.CheckAsync("startup");
+            Assert.NotNull(svc3.CurrentOffer);
+            Assert.True(svc3.CurrentOffer!.Required);
+        }
+
+        [Fact]
+        public async Task Staged_installer_is_not_launched_on_shutdown_after_the_user_skips_that_version()
+        {
+            using var h = new Harness(installed: "v0.4.20261009a");
+            var bytes = File.ReadAllBytes(ReleaseSigner.RealInstaller);
+            var manifest = h.Manifest(bytes.Length, Sha(bytes));
+            using var server = new LocalServer(r => Write(r, bytes));
+            var svc = h.NewService();
+            Assert.True(await svc.DownloadAsync(manifest, server.Url));
+            var staged = h.State().Pending!.Path;
+            Assert.True(File.Exists(staged));
+
+            svc.SkipVersion(manifest.Version);
+
+            Assert.Equal("skipped", svc.TryLaunchPendingOnShutdown());
+            Assert.Null(h.State().Pending);
+            Assert.False(File.Exists(staged));
+            Assert.DoesNotContain(h.Telemetry, t => t.Event == "update_launched");
         }
 
         [Fact]

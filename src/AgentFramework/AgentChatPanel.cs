@@ -65,6 +65,7 @@ namespace RevitMCPBridge2026.AgentFramework
         // (2026-11-04) inserted the banner at index 0 of _chatHistory: a restored session scrolls to the
         // bottom and "new chat" clears the history, so the banner was either out of view or removed.
         private StackPanel _bannerHost;
+        private bool _updateBannerFailed;
         // First-party model names the firm's Private AI cloud can serve
         // (normalized, from inference-config). null = direct Anthropic — all
         // picker models available. Used to badge unavailable models honestly.
@@ -2955,7 +2956,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                     var m = offer.Manifest;
                     var required = offer.Required;
                     if (!required && _updateBannerDismissedVersion == m.Version) return;              // user said "Later"
-                    if (_updateBanner != null && _updateBannerVersion == m.Version && _updateBannerStaged == offer.AlreadyStaged) return;
+                    if (_updateBanner != null && _updateBannerVersion == m.Version && _updateBannerStaged == offer.AlreadyStaged && _updateBannerFailed == offer.AutoDownloadFailed) return;
                     HideUpdateBanner();
 
                     var red = new SolidColorBrush(Color.FromRgb(180, 60, 60));
@@ -2974,9 +2975,11 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                     {
                         Text = offer.AlreadyStaged
                             ? $"Update {m.Version} downloaded and verified. It installs when you close Revit."
-                            : required
-                                ? $"Update required. Update {m.Version} is ready — Banana Chat is paused until it installs when you close Revit."
-                                : $"Update {m.Version} is ready. It installs when you close Revit.",
+                            : offer.AutoDownloadFailed
+                                ? $"Update {m.Version} could not be downloaded and verified. Try again, or it will retry on the next check."
+                                : required
+                                    ? $"Update required. Update {m.Version} is downloading — Banana Chat is paused until it installs when you close Revit."
+                                    : $"Update {m.Version} is downloading. It installs when you close Revit.",
                         Foreground = fg,
                         FontSize = 13,
                         FontWeight = required ? FontWeights.SemiBold : FontWeights.Normal,
@@ -2989,9 +2992,9 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                     var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
                     var progress = new TextBlock { Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0), TextWrapping = TextWrapping.Wrap };
 
-                    if (!offer.AlreadyStaged && !string.IsNullOrEmpty(offer.DownloadUrl))
+                    if (!offer.AlreadyStaged && offer.AutoDownloadFailed && !string.IsNullOrEmpty(offer.DownloadUrl))
                     {
-                        var download = MakeUpdateButton("Download now", required ? red : ChatTheme.Neutral, true);
+                        var download = MakeUpdateButton("Try again", required ? red : ChatTheme.Neutral, true);
                         download.Click += async (s, e) =>
                         {
                             download.IsEnabled = false;
@@ -3027,9 +3030,16 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                     }
                     if (!required)
                     {
-                        var later = MakeUpdateButton("Later", ChatTheme.Neutral, false);
-                        later.Click += (s, e) => { _updateBannerDismissedVersion = m.Version; HideUpdateBanner(); };
-                        buttons.Children.Add(later);
+                        // Persisted: later checks stay quiet about this version. A staged installer still
+                        // applies on close only if the user never skipped (TryLaunchPendingOnShutdown reads state).
+                        var skip = MakeUpdateButton("Skip this version", ChatTheme.Neutral, false);
+                        skip.Click += (s, e) =>
+                        {
+                            _updateBannerDismissedVersion = m.Version;
+                            RevitMCPBridge.Update.UpdateService.Instance.SkipVersion(m.Version);
+                            HideUpdateBanner();
+                        };
+                        buttons.Children.Add(skip);
                     }
                     buttons.Children.Add(progress);
                     stack.Children.Add(buttons);
@@ -3038,6 +3048,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                     _updateBanner = banner;
                     _updateBannerVersion = m.Version;
                     _updateBannerStaged = offer.AlreadyStaged;
+                    _updateBannerFailed = offer.AutoDownloadFailed;
                     (_bannerHost ?? (Panel)_chatHistory).Children.Insert(0, banner);
 
                     if (required && !_updateBlocked)
@@ -3060,6 +3071,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             _updateBanner = null;
             _updateBannerVersion = null;
             _updateBannerStaged = false;
+            _updateBannerFailed = false;
         }
 
         private static Button MakeUpdateButton(string text, Brush background, bool primary)
