@@ -58,6 +58,9 @@ namespace RevitMCPBridge2026.AgentFramework
         // core knowledge itself (inference-config.serverPrompt). Then SendMessage sends only the
         // dynamic context. Never persisted: re-evaluated from the server at every session start.
         private bool _serverPrompt = false;
+        // True when the server proxies us by forwarding OUR key per request (byok-passthrough), as
+        // opposed to Private AI where the firm's cloud pays. Decides whether vision calls carry the key.
+        private bool _serverPassthrough = false;
         // First-party model names the firm's Private AI cloud can serve
         // (normalized, from inference-config). null = direct Anthropic — all
         // picker models available. Used to badge unavailable models honestly.
@@ -3726,6 +3729,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                     // Only trust serverPrompt when the server says it will proxy us: an older server
                     // never sets it, so this build keeps sending the full prompt there (fail-safe).
                     _serverPrompt = proxy && (data["serverPrompt"]?.ToObject<bool>() ?? false);
+                    _serverPassthrough = proxy && (data["passthrough"]?.ToObject<bool>() ?? false);
                     if (proxy != _useInferenceProxy)
                     {
                         _useInferenceProxy = proxy;
@@ -4721,10 +4725,16 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 parameters["model"] = _selectedModel;
                 // Private AI firms route vision through the backend proxy (their
                 // Bedrock) — never the local Anthropic key, which would bypass it.
+                // Passthrough firms also go through the server, but the server must
+                // bill the user's key, not ours: hand it over as passthroughKey so the
+                // vision route forwards it exactly like the chat route (2026-11-04).
                 if (!string.IsNullOrEmpty(_apiKey) && !_useInferenceProxy)
                     parameters["apiKey"] = _apiKey;
                 else if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
+                {
                     parameters["bimMonkeyApiKey"] = _bimMonkeyApiKey;
+                    if (_serverPassthrough && !string.IsNullOrEmpty(_apiKey)) parameters["passthroughKey"] = _apiKey;
+                }
                 else
                     return JsonConvert.SerializeObject(new { success = false, error = "Vision analysis requires a BIM Monkey API key. Open Settings and enter your key." });
                 var visionResult = await ExecuteMCPWithRetryAsync("analyzeView", parameters);

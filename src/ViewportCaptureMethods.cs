@@ -890,7 +890,8 @@ namespace RevitMCPBridge
                 if (!string.IsNullOrEmpty(apiKey))
                     analysisResult = CallClaudeVision(apiKey, base64Image, question, viewName, model);
                 else
-                    analysisResult = CallViaRailwayProxy(bimMonkeyApiKey, base64Image, question, viewName, model);
+                    analysisResult = CallViaRailwayProxy(bimMonkeyApiKey, base64Image, question, viewName, model,
+                        parameters?["passthroughKey"]?.ToString());
 
                 return JsonConvert.SerializeObject(new
                 {
@@ -911,12 +912,16 @@ namespace RevitMCPBridge
             }
         }
 
-        private static string CallViaRailwayProxy(string bimMonkeyApiKey, string base64Image, string question, string viewName, string model)
+        // passthroughKey: the user's Anthropic key, forwarded for this call only so the server bills the
+        // user rather than the platform (same header the chat route uses). Null for Private AI firms.
+        private static string CallViaRailwayProxy(string bimMonkeyApiKey, string base64Image, string question, string viewName, string model, string passthroughKey = null)
         {
             using (var client = new System.Net.Http.HttpClient())
             {
                 client.Timeout = TimeSpan.FromSeconds(60);
                 client.DefaultRequestHeaders.Add("Authorization", $"Bearer {bimMonkeyApiKey}");
+                if (!string.IsNullOrEmpty(passthroughKey)) client.DefaultRequestHeaders.Add("X-Anthropic-Key", passthroughKey);
+                RevitMCPBridge.AgentFramework.PluginIdentity.Stamp(client.DefaultRequestHeaders);
                 var payload = new JObject
                 {
                     ["image"]    = base64Image,
