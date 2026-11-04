@@ -855,15 +855,10 @@ namespace RevitMCPBridge2026.AgentFramework
             _snapButton.Click += async (s, e) => await SnapCurrentViewAsync();
             secondaryButtons.Children.Add(_snapButton);
 
-            _verifyButton = CreateVerifyButton();
-            _verifyButton.Margin = new Thickness(4, 0, 0, 0);
-            _verifyButton.Click += (s, e) =>
-            {
-                _visualVerifyEnabled = !_visualVerifyEnabled;
-                if (_agent != null) _agent.VisualVerifyEnabled = _visualVerifyEnabled;
-                UpdateVerifyButtonState(hover: false);
-            };
-            secondaryButtons.Children.Add(_verifyButton);
+            // The "Verify" toggle was removed 2026-11-03: the master rules already make the model
+            // call analyzeView after every placement (613 self-initiated looks in firm 14's last
+            // 30 days), so the forced screenshot only made it look twice. AgentCore keeps the
+            // VisualVerifyEnabled mechanism, dormant, in case a setting ever wants it back.
 
             _stopButton = CreateButton("Stop", false);
             _stopButton.Margin = new Thickness(4, 0, 0, 0);
@@ -1500,42 +1495,6 @@ namespace RevitMCPBridge2026.AgentFramework
             return button;
         }
 
-        private Button CreateVerifyButton()
-        {
-            var btn = new Button
-            {
-                Content = "Verify",
-                Padding = new Thickness(16, 8, 16, 8),
-                Background = ChatTheme.Neutral,
-                Foreground = Brushes.White,
-                BorderThickness = new Thickness(0),
-                Cursor = System.Windows.Input.Cursors.Hand,
-                ToolTip = "Visual verify OFF — enable to auto-capture the view after each placement for AI review"
-            };
-            btn.MouseEnter += (s, e) => UpdateVerifyButtonState(hover: true);
-            btn.MouseLeave += (s, e) => UpdateVerifyButtonState(hover: false);
-            return btn;
-        }
-
-        private void UpdateVerifyButtonState(bool hover)
-        {
-            if (_verifyButton == null) return;
-            if (_visualVerifyEnabled)
-            {
-                _verifyButton.Background = new SolidColorBrush(hover
-                    ? Color.FromRgb(235, 140, 20)   // lighter amber on hover
-                    : Color.FromRgb(217, 119, 6));   // amber #D97706 when active
-                _verifyButton.ToolTip = "Visual verify ON — view is auto-captured after each placement for AI review";
-            }
-            else
-            {
-                _verifyButton.Background = new SolidColorBrush(hover
-                    ? ChatTheme.HoverColor   // lighter gray on hover
-                    : ChatTheme.NeutralColor);    // standard gray when inactive
-                _verifyButton.ToolTip = "Visual verify OFF — enable to auto-capture the view after each placement for AI review";
-            }
-        }
-
         // Config file path - use user's home directory for portability
         private static readonly string ConfigDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops");
         private static readonly string ConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".bimops", "config.json");
@@ -1546,9 +1505,6 @@ namespace RevitMCPBridge2026.AgentFramework
         private List<ChatMessage> _sessionMessages = new List<ChatMessage>();
         private string _sessionProjectName;
 
-        // Visual verify toggle
-        private bool _visualVerifyEnabled = false;
-        private Button _verifyButton;
 
         // Compliance remediation tracking
         private string _activeComplianceRunId;
@@ -2522,7 +2478,6 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             // Re-check Private AI routing at the start of every session — the
             // fetch updates this agent's UseInferenceProxy before its first call.
             _agent.OnSessionStart = FetchInferenceConfigAsync;
-            _agent.VisualVerifyEnabled = _visualVerifyEnabled;
             var allTools = new System.Collections.Generic.List<ToolDefinition>(ToolDefinitions.GetAllTools());
             _agent.RegisterTools(allTools);
             _agent.SetToolExecutor(ExecuteMCPMethodAsync);
