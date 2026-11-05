@@ -1500,6 +1500,28 @@ namespace RevitMCPBridge2026.AgentFramework
                             try { evt = JObject.Parse(payload); } catch { continue; }
                             receivedAny = true;
 
+                            // Terminal error from the inference proxy (upstream failed after headers were sent).
+                            // Before 2026-11-05 this fell through the switch: a rejected Anthropic key ended the
+                            // turn as "completed" with an empty reply and no banner. Treat it exactly like the
+                            // direct path's WebException: classify, banner, telemetry, fail the run.
+                            var streamError = RevitMCPBridge.Support.ProxyStreamError.TryParse(evt);
+                            if (streamError != null)
+                            {
+                                TelemetryService.Track(_bimMonkeyApiKey, "api_error",
+                                    metadata: new { error = "proxy_stream_error", status = streamError.Status, body = streamError.Message.Length > 200 ? streamError.Message.Substring(0, 200) : streamError.Message, attempt },
+                                    revitVersion: _revitVersion, pluginVersion: _pluginVersion);
+                                TelemetryService.Track(_bimMonkeyApiKey, "api_call",
+                                    durationMs: (long)(DateTime.UtcNow - apiCallStart).TotalMilliseconds, success: false,
+                                    metadata: new { ttfb_ms = ttfbMs, model = _model, proxy = UseInferenceProxy, status = streamError.Status },
+                                    revitVersion: _revitVersion, pluginVersion: _pluginVersion);
+                                if (streamError.Provider != RevitMCPBridge.Support.AuthErrorProvider.None)
+                                {
+                                    try { OnAuthError?.Invoke(RevitMCPBridge.Support.AuthErrorClassifier.ToWireName(streamError.Provider)); } catch { }
+                                }
+                                OnError?.Invoke($"API Error: {streamError.UserMessage} - {streamError.Message}");
+                                return null;
+                            }
+
                             switch (evt["type"]?.ToString())
                             {
                                 case "message_start":
