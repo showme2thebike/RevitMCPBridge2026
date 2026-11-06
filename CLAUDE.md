@@ -147,3 +147,11 @@ there — without that it looks next to Revit.exe and fails. `VoiceTranscriber.R
 (it turned "topo solid" into "Toposolid"). Telemetry: `voice_input` (timings + char count only), `voice_error`,
 `voice_model_ready`. Tests: `tests/UpdateTests/VoiceTests.cs` (pure parts); end-to-end smoke = synthesize a WAV
 with System.Speech, run the three Voice classes outside Revit (done 2026-11-05: 7.3 s clip → 3.0 s on an i7-1355U).
+
+## Support knowledge base stays 1:1 with the plugin (since 2026-11-06)
+The in-chat support agent (`support_help`, server side) answers only from `bimmonkey-ai-git/api/knowledge/support/`.
+Any user-visible change here — a new button, workflow, banner, setting, tool, or a removed one — is not done until,
+in bimmonkey-ai-git: (1) `landing/release-notes.html` has the entry, (2) `node scripts/support/build_support_kb.mjs`
+has rebuilt the derived pages, (3) `api/knowledge/support/known-issues.md` says how the behavior looks to the user
+("if X, do Y" register, never bug admissions), and (4) that KB change is committed with the release. The commit hook
+and `npm test` over there enforce (1)–(2); (3) is on the author. Removed behavior = remove its KB text too.

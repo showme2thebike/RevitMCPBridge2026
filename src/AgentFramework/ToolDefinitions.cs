@@ -301,7 +301,7 @@ OBSERVE + NARRATE workflow once photos are available:
                 new ToolDefinition
                 {
                     Name = "support_help",
-                    Description = "Answer setup, key, billing, update, error or account questions from BIM Monkey's current guides and this firm's account state. ALWAYS call this instead of guessing whenever the user asks how to install or reinstall the plugin, where to get or paste an API key (Anthropic or BIM Monkey), why a key or request was rejected, what a plugin error means, how to update the plugin, what their trial/subscription/billing status is, or anything about their BIM Monkey account. Relay the returned answer in your own words and list any returned actions as next steps.",
+                    Description = "Answer setup, key, billing, update, error, feature or account questions from BIM Monkey's current guides and this firm's account state. ALWAYS call this instead of guessing whenever the user asks how to install or reinstall the plugin, where to get or paste an API key (Anthropic or BIM Monkey), why a key or request was rejected, what a plugin error means, how to update the plugin or why the update banner did or did not appear, how a BIM Monkey feature works (voice input, Magic Wand, scripts, Agent Access, uploads, standards), what is new in a release, what their trial/subscription/billing status is, or anything about their BIM Monkey account. Never describe a BIM Monkey feature from memory. Relay the returned answer in your own words and list any returned actions as next steps.",
                     InputSchema = new
                     {
                         type = "object",
