@@ -24,13 +24,46 @@ namespace RevitMCPBridge.Voice
         public bool IsRecording { get; private set; }
         public static bool HasMicrophone => WaveInEvent.DeviceCount > 0;
 
+        /// <summary>Name of the device the last Start() opened, for the "nothing captured" message and telemetry.</summary>
+        public string DeviceName { get; private set; } = "default microphone";
+        /// <summary>Loudest sample and loudest 100 ms window of the current/last clip, 0..1.</summary>
+        public double Peak { get; private set; }
+        public double MaxWindowRms { get; private set; }
+
+        /// <summary>
+        /// waveIn device 0 is the FIRST input Windows enumerates, not the one chosen in Settings → Sound → Input,
+        /// so on a machine with a webcam mic plus a headset the plugin could listen to the wrong one
+        /// (2026-11-06: ten near-silent clips in a row). Prefer the default communications endpoint matched by
+        /// name; otherwise WAVE_MAPPER (-1), which winmm resolves to the system default.
+        /// </summary>
+        public static (int Index, string Name) PickDevice()
+        {
+            var names = new List<string>();
+            for (int i = 0; i < WaveInEvent.DeviceCount; i++)
+            {
+                try { names.Add(WaveInEvent.GetCapabilities(i).ProductName); } catch { names.Add(""); }
+            }
+            string friendly = null;
+            try
+            {
+                using (var en = new NAudio.CoreAudioApi.MMDeviceEnumerator())
+                    friendly = en.GetDefaultAudioEndpoint(NAudio.CoreAudioApi.DataFlow.Capture, NAudio.CoreAudioApi.Role.Communications)?.FriendlyName;
+            }
+            catch { }
+            var idx = VoiceAudio.MatchInputDevice(names, friendly);
+            if (idx >= 0) return (idx, names[idx]);
+            return (-1, string.IsNullOrWhiteSpace(friendly) ? "default microphone" : friendly);
+        }
+
         public void Start()
         {
             lock (_gate)
             {
                 if (IsRecording) return;
-                _chunks.Clear(); _samples = 0;
-                _wave = new WaveInEvent { WaveFormat = new WaveFormat(VoiceAudio.SampleRate, 16, 1), BufferMilliseconds = 100 };
+                _chunks.Clear(); _samples = 0; Peak = 0; MaxWindowRms = 0;
+                var dev = PickDevice();
+                DeviceName = dev.Name;
+                _wave = new WaveInEvent { DeviceNumber = dev.Index, WaveFormat = new WaveFormat(VoiceAudio.SampleRate, 16, 1), BufferMilliseconds = 100 };
                 _wave.DataAvailable += OnData;
                 _wave.StartRecording();
                 IsRecording = true;
@@ -47,7 +80,10 @@ namespace RevitMCPBridge.Voice
                 _chunks.Add(f); _samples += f.Length;
                 full = _samples >= VoiceAudio.MaxSamples;
             }
-            try { Level?.Invoke(VoiceAudio.Rms(f)); } catch { }
+            var rms = VoiceAudio.Rms(f); // one 100 ms buffer = one window
+            var peak = VoiceAudio.Peak(f);
+            lock (_gate) { if (rms > MaxWindowRms) MaxWindowRms = rms; if (peak > Peak) Peak = peak; }
+            try { Level?.Invoke(rms); } catch { }
             if (full)
             {
                 Stop();

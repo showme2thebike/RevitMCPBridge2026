@@ -52,6 +52,41 @@ namespace RevitMCPBridge.UpdateTests
         }
 
         [Fact]
+        public void Speech_detection_judges_the_loudest_window_not_the_whole_clip()
+        {
+            // 10 s clip, 1 s of quiet speech (RMS ~0.0085) and 9 s of silence: whole-clip RMS ~0.0027 fails
+            // the 0.004 floor, the loudest 100 ms window passes it. Seen 2026-11-06.
+            var clip = new float[VoiceAudio.SampleRate * 10];
+            for (int i = 0; i < VoiceAudio.SampleRate; i++) clip[i] = (float)(0.012 * Math.Sin(i / 20.0));
+            Assert.True(VoiceAudio.Rms(clip) < 0.004);
+            Assert.True(VoiceAudio.WindowedMaxRms(clip) > 0.004);
+            Assert.True(VoiceAudio.LooksLikeSpeech(clip));
+            Assert.InRange(VoiceAudio.Peak(clip), 0.0119, 0.0121);
+            Assert.Equal(0, VoiceAudio.WindowedMaxRms(null));
+        }
+
+        [Fact]
+        public void Default_microphone_is_matched_by_truncated_waveIn_name()
+        {
+            // waveIn cuts names at 31 chars; the endpoint friendly name is the full string.
+            var names = new[] { "Microphone (HD Pro Webcam C920)", "Headset Microphone (Jabra Evolv", "" };
+            Assert.Equal(1, VoiceAudio.MatchInputDevice(names, "Headset Microphone (Jabra Evolve2 65)"));
+            Assert.Equal(0, VoiceAudio.MatchInputDevice(names, "Microphone (HD Pro Webcam C920)"));
+            Assert.Equal(-1, VoiceAudio.MatchInputDevice(names, "Microphone Array (Realtek)"));
+            Assert.Equal(-1, VoiceAudio.MatchInputDevice(names, null));
+            Assert.Equal(-1, VoiceAudio.MatchInputDevice(null, "x"));
+        }
+
+        [Fact]
+        public void Level_bar_has_five_steps_and_moves_for_quiet_speech()
+        {
+            Assert.Equal("\u25AF\u25AF\u25AF\u25AF\u25AF", VoiceAudio.LevelBar(0));
+            Assert.Equal(5, VoiceAudio.LevelBar(0.5).Length);
+            Assert.StartsWith("\u25AE\u25AE", VoiceAudio.LevelBar(0.01));
+            Assert.Equal("\u25AE\u25AE\u25AE\u25AE\u25AE", VoiceAudio.LevelBar(0.2));
+        }
+
+        [Fact]
         public void Transcript_cleanup_joins_segments_and_drops_non_speech_markers()
         {
             var text = VoiceAudio.CleanTranscript(new[] { " Place the north elevation", "  on sheet A201.", "[BLANK_AUDIO]", "(silence)", "", null, " Then renumber   the viewports." });

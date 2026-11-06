@@ -1571,6 +1571,12 @@ namespace RevitMCPBridge2026.AgentFramework
                 }
                 _voiceRecorder = new RevitMCPBridge.Voice.VoiceRecorder();
                 _voiceRecorder.AutoStopped += () => Dispatcher.BeginInvoke(new Action(async () => { if (_voiceState == VoiceState.Recording) await StopVoiceAndTranscribeAsync(); }));
+                // Live level bar: the one thing that tells the user whether the mic is hearing them at all.
+                _voiceRecorder.Level += lvl => Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (_voiceState == VoiceState.Recording && _statusText != null)
+                        _statusText.Text = $"Listening {RevitMCPBridge.Voice.VoiceAudio.LevelBar(lvl)}  click Stop or press Esc";
+                }));
                 _voiceRecorder.Start();
                 _voiceRecordStart = DateTime.UtcNow;
                 _voiceState = VoiceState.Recording;
@@ -1603,15 +1609,20 @@ namespace RevitMCPBridge2026.AgentFramework
             _voiceState = VoiceState.Transcribing;
             var recordMs = (long)(DateTime.UtcNow - _voiceRecordStart).TotalMilliseconds;
             float[] samples;
-            try { samples = _voiceRecorder?.Stop() ?? Array.Empty<float>(); } catch { samples = Array.Empty<float>(); }
+            var rec = _voiceRecorder;
+            try { samples = rec?.Stop() ?? Array.Empty<float>(); } catch { samples = Array.Empty<float>(); }
+            var device = rec?.DeviceName ?? "";
+            var peak = rec?.Peak ?? 0;
+            var maxRms = rec?.MaxWindowRms ?? 0;
             _voiceRecorder = null;
+            var speech = RevitMCPBridge.Voice.VoiceAudio.LooksLikeSpeech(samples);
             SetMic("…", true, enabled: false);
             if (_statusText != null) _statusText.Text = "Transcribing…";
             string text = "";
             var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                if (RevitMCPBridge.Voice.VoiceAudio.LooksLikeSpeech(samples))
+                if (speech)
                 {
                     var t = _voiceTranscriber;
                     text = await Task.Run(() => t.TranscribeAsync(samples));
@@ -1638,12 +1649,15 @@ namespace RevitMCPBridge2026.AgentFramework
             }
             else if (samples.Length > 0 && _statusText != null)
             {
-                AddSystemMessage("I didn't catch anything. Click the microphone and try again.");
+                // Say which microphone and how loud, so a dead or wrong input device is obvious from the chat alone.
+                AddSystemMessage(speech
+                    ? "I didn't catch any words. Click the microphone and try again."
+                    : $"The microphone ({device}) picked up almost nothing (peak {peak:P1}). Speak closer, or check Windows Settings → System → Sound → Input, then try again.");
             }
-            // Telemetry: timings and length only; never the audio or the words.
+            // Telemetry: timings, levels and the device's product name only; never the audio or the words.
             TelemetryService.Track(_bimMonkeyApiKey, "voice_input",
                 durationMs: sw.ElapsedMilliseconds, success: !string.IsNullOrEmpty(text),
-                metadata: new { record_ms = recordMs, transcribe_ms = sw.ElapsedMilliseconds, chars = text.Length, speech = RevitMCPBridge.Voice.VoiceAudio.LooksLikeSpeech(samples) });
+                metadata: new { record_ms = recordMs, transcribe_ms = sw.ElapsedMilliseconds, chars = text.Length, speech, peak = Math.Round(peak, 4), max_rms = Math.Round(maxRms, 4), device });
             _voiceState = VoiceState.Idle;
             SetMic("🎤", false);
             if (_statusText != null) _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
