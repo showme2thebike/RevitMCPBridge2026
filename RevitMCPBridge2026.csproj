@@ -80,6 +80,10 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
     <PackageReference Include="Serilog" Version="3.1.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
+    <!-- Push-to-talk (src/Voice): on-device Whisper + microphone capture. Native libs land in runtimeswin-x64 of the publish folder; build_plugin_zip.ps1 stages them into installer/files/<year>/runtimes/win-x64. -->
+    <PackageReference Include="Whisper.net" Version="1.9.1" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
 
 </Project>

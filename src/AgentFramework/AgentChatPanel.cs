@@ -66,6 +66,15 @@ namespace RevitMCPBridge2026.AgentFramework
         // bottom and "new chat" clears the history, so the banner was either out of view or removed.
         private StackPanel _bannerHost;
         private bool _updateBannerFailed;
+
+        // --- push-to-talk (src/Voice) ---
+        private enum VoiceState { Idle, Preparing, Recording, Transcribing }
+        private VoiceState _voiceState = VoiceState.Idle;
+        private Button _micButton;
+        private RevitMCPBridge.Voice.VoiceRecorder _voiceRecorder;
+        private RevitMCPBridge.Voice.VoiceTranscriber _voiceTranscriber;
+        private string _voiceModelPath;
+        private DateTime _voiceRecordStart;
         // First-party model names the firm's Private AI cloud can serve
         // (normalized, from inference-config). null = direct Anthropic — all
         // picker models available. Used to badge unavailable models honestly.
@@ -874,6 +883,19 @@ namespace RevitMCPBridge2026.AgentFramework
             _snapButton.Click += async (s, e) => await SnapCurrentViewAsync();
             secondaryButtons.Children.Add(_snapButton);
 
+            // Push-to-talk (src/Voice): click to start, click again (or Escape) to stop; the transcript lands in
+            // the input box for the user to read and send. Speech recognition runs on this machine (Whisper);
+            // the only network call is the one-time model download. Added 2026-11-05 at Barrett's request.
+            _micButton = CreateButton("🎤", false);
+            _micButton.Margin = new Thickness(4, 0, 0, 0);
+            _micButton.ToolTip = "Speak a prompt (click to start, click again to stop). Recognition runs on this computer.";
+            _micButton.Click += async (s, e) => await ToggleVoiceAsync();
+            secondaryButtons.Children.Add(_micButton);
+            _inputTextBox.PreviewKeyDown += (s, e) =>
+            {
+                if (e.Key == System.Windows.Input.Key.Escape && _voiceState == VoiceState.Recording) { CancelVoice(); e.Handled = true; }
+            };
+
             // The "Verify" toggle was removed 2026-11-03: the master rules already make the model
             // call analyzeView after every placement (613 self-initiated looks in firm 14's last
             // 30 days), so the forced screenshot only made it look twice. AgentCore keeps the
@@ -1496,6 +1518,135 @@ namespace RevitMCPBridge2026.AgentFramework
                     System.Diagnostics.Debug.WriteLine($"Attach file failed: {ex.Message}");
                 }
             }
+        }
+
+        // ------------------------------------------------------------------ push-to-talk
+        private void SetMic(string content, bool active, bool enabled = true)
+        {
+            if (_micButton == null) return;
+            _micButton.Content = content;
+            _micButton.IsEnabled = enabled;
+            _micButton.Background = active ? new SolidColorBrush(Color.FromRgb(180, 60, 60)) : ChatTheme.Neutral;
+        }
+
+        private async Task ToggleVoiceAsync()
+        {
+            switch (_voiceState)
+            {
+                case VoiceState.Idle: await StartVoiceAsync(); break;
+                case VoiceState.Recording: await StopVoiceAndTranscribeAsync(); break;
+                default: break; // preparing / transcribing: ignore clicks
+            }
+        }
+
+        private async Task StartVoiceAsync()
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) { AddSystemMessage("Voice input needs your BIM Monkey key (Settings)."); return; }
+            if (!RevitMCPBridge.Voice.VoiceRecorder.HasMicrophone) { AddSystemMessage("No microphone was found on this computer."); return; }
+            _voiceState = VoiceState.Preparing;
+            SetMic("…", true, enabled: false);
+            try
+            {
+                if (_voiceModelPath == null || _voiceTranscriber == null || !_voiceTranscriber.IsLoaded)
+                {
+                    var prior = _statusText?.Text;
+                    var store = new RevitMCPBridge.Voice.VoiceModelStore("https://bimmonkey-production.up.railway.app", () => _bimMonkeyApiKey);
+                    var info = await store.FetchInfoAsync();
+                    var firstDownload = store.ExistingVerified(info) == null;
+                    if (firstDownload && _statusText != null) _statusText.Text = "Downloading speech model (one time)… 0%";
+                    var progress = new Progress<double>(p => { if (_statusText != null && firstDownload) _statusText.Text = $"Downloading speech model (one time)… {(int)(p * 100)}%"; });
+                    _voiceModelPath = await store.EnsureAsync(info, progress);
+                    if (_statusText != null) _statusText.Text = "Loading speech model…";
+                    var addinDir = Path.GetDirectoryName(typeof(AgentChatPanel).Assembly.Location);
+                    var path = _voiceModelPath;
+                    await Task.Run(() =>
+                    {
+                        RevitMCPBridge.Voice.VoiceTranscriber.ConfigureLoader(addinDir);
+                        var t = new RevitMCPBridge.Voice.VoiceTranscriber();
+                        t.Load(path);
+                        _voiceTranscriber = t;
+                    });
+                    if (_statusText != null) _statusText.Text = prior ?? "Ready";
+                    if (firstDownload) TelemetryService.Track(_bimMonkeyApiKey, "voice_model_ready", metadata: new { model = info.Name });
+                }
+                _voiceRecorder = new RevitMCPBridge.Voice.VoiceRecorder();
+                _voiceRecorder.AutoStopped += () => Dispatcher.BeginInvoke(new Action(async () => { if (_voiceState == VoiceState.Recording) await StopVoiceAndTranscribeAsync(); }));
+                _voiceRecorder.Start();
+                _voiceRecordStart = DateTime.UtcNow;
+                _voiceState = VoiceState.Recording;
+                SetMic("■ Stop", true);
+                if (_statusText != null) _statusText.Text = "Listening… click Stop or press Esc";
+            }
+            catch (Exception ex)
+            {
+                Serilog.Log.Warning(ex, "[Voice] start failed");
+                _voiceState = VoiceState.Idle;
+                SetMic("🎤", false);
+                if (_statusText != null) _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
+                AddSystemMessage("Voice input could not start: " + ex.Message);
+                TelemetryService.Track(_bimMonkeyApiKey, "voice_error", metadata: new { stage = "start", error = ex.Message.Length > 160 ? ex.Message.Substring(0, 160) : ex.Message });
+            }
+        }
+
+        private void CancelVoice()
+        {
+            try { _voiceRecorder?.Stop(); } catch { }
+            _voiceRecorder = null;
+            _voiceState = VoiceState.Idle;
+            SetMic("🎤", false);
+            if (_statusText != null) _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
+        }
+
+        private async Task StopVoiceAndTranscribeAsync()
+        {
+            if (_voiceState != VoiceState.Recording) return;
+            _voiceState = VoiceState.Transcribing;
+            var recordMs = (long)(DateTime.UtcNow - _voiceRecordStart).TotalMilliseconds;
+            float[] samples;
+            try { samples = _voiceRecorder?.Stop() ?? Array.Empty<float>(); } catch { samples = Array.Empty<float>(); }
+            _voiceRecorder = null;
+            SetMic("…", true, enabled: false);
+            if (_statusText != null) _statusText.Text = "Transcribing…";
+            string text = "";
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                if (RevitMCPBridge.Voice.VoiceAudio.LooksLikeSpeech(samples))
+                {
+                    var t = _voiceTranscriber;
+                    text = await Task.Run(() => t.TranscribeAsync(samples));
+                }
+            }
+            catch (Exception ex)
+            {
+                Serilog.Log.Warning(ex, "[Voice] transcribe failed");
+                AddSystemMessage("Could not transcribe that: " + ex.Message);
+                TelemetryService.Track(_bimMonkeyApiKey, "voice_error", metadata: new { stage = "transcribe", error = ex.Message.Length > 160 ? ex.Message.Substring(0, 160) : ex.Message });
+            }
+            sw.Stop();
+            if (!string.IsNullOrEmpty(text))
+            {
+                // Insert at the caret, with a space if needed, and leave the caret after it so the user can keep typing.
+                var box = _inputTextBox;
+                var at = box.CaretIndex;
+                var before = box.Text.Substring(0, at);
+                var needsSpace = before.Length > 0 && !char.IsWhiteSpace(before[before.Length - 1]);
+                var insert = (needsSpace ? " " : "") + text;
+                box.Text = before + insert + box.Text.Substring(at);
+                box.CaretIndex = at + insert.Length;
+                box.Focus();
+            }
+            else if (samples.Length > 0 && _statusText != null)
+            {
+                AddSystemMessage("I didn't catch anything. Click the microphone and try again.");
+            }
+            // Telemetry: timings and length only; never the audio or the words.
+            TelemetryService.Track(_bimMonkeyApiKey, "voice_input",
+                durationMs: sw.ElapsedMilliseconds, success: !string.IsNullOrEmpty(text),
+                metadata: new { record_ms = recordMs, transcribe_ms = sw.ElapsedMilliseconds, chars = text.Length, speech = RevitMCPBridge.Voice.VoiceAudio.LooksLikeSpeech(samples) });
+            _voiceState = VoiceState.Idle;
+            SetMic("🎤", false);
+            if (_statusText != null) _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
         }
 
         private Button CreateButton(string text, bool isPrimary)

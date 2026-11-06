@@ -135,3 +135,15 @@ Available in `knowledge/` directory. Read specific files as tasks require:
 - `cd-standards.md` — sheet organization, numbering
 - `annotation-standards.md` — text styles, leaders
 - `error-recovery.md` — MCP errors, timeouts
+
+## Push-to-talk (src/Voice, since v0.4.20261105a)
+Mic button next to Snap in Banana Chat. Click = record (16 kHz mono via NAudio), click again or Esc = stop →
+Whisper (ggml base.en Q5_1, ~60 MB) transcribes ON THE WORKSTATION and the text lands in the input box; the
+user still presses Send. No audio or text leaves the machine; the only network call is the one-time model
+download (`GET /api/plugin/voice-model` → presigned S3 link + sha256, verified before load, cached in
+`%LOCALAPPDATA%\BIM Monkey\models`). Native libs ship in `<addin>\runtimes\win-x64` (build_plugin_zip.ps1 stages
+them; the installer's `recursesubdirs` copies them) and `VoiceTranscriber.ConfigureLoader` points Whisper.net
+there — without that it looks next to Revit.exe and fails. `VoiceTranscriber.RevitPrompt` is the vocabulary hint
+(it turned "topo solid" into "Toposolid"). Telemetry: `voice_input` (timings + char count only), `voice_error`,
+`voice_model_ready`. Tests: `tests/UpdateTests/VoiceTests.cs` (pure parts); end-to-end smoke = synthesize a WAV
+with System.Speech, run the three Voice classes outside Revit (done 2026-11-05: 7.3 s clip → 3.0 s on an i7-1355U).

@@ -26,6 +26,9 @@
     <Compile Include="..\..\src\AgentFramework\ProtectedSecret.cs" Link="AgentFramework\ProtectedSecret.cs" />
     <!-- Support agent (docs/support-agent.md §3.3): pure .NET, same linked-source approach -->
     <Compile Include="..\..\src\Support\*.cs" Link="Support\%(Filename)%(Extension)" />
+    <!-- Voice (push-to-talk): the pure parts; VoiceTranscriber/VoiceRecorder need the native runtime and a mic -->
+    <Compile Include="..\..\src\Voice\VoiceAudio.cs" Link="Voice\VoiceAudio.cs" />
+    <Compile Include="..\..\src\Voice\VoiceModelStore.cs" Link="Voice\VoiceModelStore.cs" />
   </ItemGroup>
 
   <ItemGroup>
