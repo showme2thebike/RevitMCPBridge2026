@@ -96,7 +96,10 @@ namespace RevitMCPBridge2026
             bool ok;
             try { ok = JObject.Parse(result)?["success"]?.Value<bool>() == true; }
             catch { ok = false; }
-            TrackScriptExecution(source, scriptName, hash, success: ok, denied: false, durationMs: sw.ElapsedMilliseconds, usedAssemblies: null);
+            // 2026-11-07: a third of ad hoc scripts failed at runtime (the strict probe passed them), and the
+            // telemetry carried only the hash, so nothing said why. Summary is one line, paths stripped, 160 chars.
+            var errorSummary = ok ? null : RevitMCPBridge2026.AgentFramework.TelemetryService.ScriptErrorSummary(result);
+            TrackScriptExecution(source, scriptName, hash, success: ok, denied: false, durationMs: sw.ElapsedMilliseconds, usedAssemblies: null, error: errorSummary);
             // Phase 3 corpus soak (§5.1/§11 test 3.3): shadow-compile against the
             // strict allowlist off-thread and report whether this script would
             // survive the strict profile. Fire-and-forget — zero latency impact.
@@ -184,7 +187,7 @@ namespace __StrictProbe__ {{ public static class __S__ {{ public static object E
             catch { return null; }
         }
 
-        private static void TrackScriptExecution(string source, string scriptName, string hash, bool? success, bool denied, long durationMs, System.Collections.Generic.List<string> usedAssemblies)
+        private static void TrackScriptExecution(string source, string scriptName, string hash, bool? success, bool denied, long durationMs, System.Collections.Generic.List<string> usedAssemblies, string error = null)
         {
             try
             {
@@ -193,7 +196,8 @@ namespace __StrictProbe__ {{ public static class __S__ {{ public static object E
                     "script_execution",
                     // Telemetry hash stays truncated (16) for log/CSV readability;
                     // used_assemblies feeds the Phase 3 strict-allowlist corpus soak.
-                    metadata: new { source, script_name = scriptName, script_hash = hash?.Substring(0, Math.Min(16, hash.Length)), denied = denied ? (bool?)true : null, used_assemblies = usedAssemblies },
+                    metadata: new { source, script_name = scriptName, script_hash = hash?.Substring(0, Math.Min(16, hash.Length)), denied = denied ? (bool?)true : null, used_assemblies = usedAssemblies,
+                                    error, error_kind = error == null ? null : RevitMCPBridge2026.AgentFramework.TelemetryService.ScriptErrorKind(error) },
                     toolName: "executeRevitScript",
                     durationMs: durationMs,
                     success: success);

@@ -954,6 +954,7 @@ namespace RevitMCPBridge2026.AgentFramework
                             {
                                 var toolMs = (long)(DateTime.UtcNow - toolStart).TotalMilliseconds;
                                 TelemetryService.Track(_bimMonkeyApiKey, "tool_call",
+                                    metadata: TelemetryService.ToolCallMetadata(block.Name, block.Input),
                                     toolName: block.Name, durationMs: toolMs, success: toolSuccess,
                                     revitVersion: _revitVersion, pluginVersion: _pluginVersion);
                             }
