@@ -15,6 +15,9 @@ namespace RevitMCPBridge2026.AgentFramework
         // Session GUID stamped on every event — set by AgentCore at session start
         // so all events from one chat session group without time-window guessing.
         public static string CurrentSessionId { get; set; }
+        // Run GUID: one per user message (AgentCore.RunAsync), cleared when the run's outcome is reported.
+        // Joins a run_outcome to the tool_calls, scripts and api_calls inside it (2026-11-07).
+        public static string CurrentRunId { get; set; }
 
         // Fallbacks so no event ships without version context (fixed the
         // null-plugin_version rows: call sites that omitted the params).
@@ -106,6 +109,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     pluginVersion,
                     metadata,
                     sessionId = CurrentSessionId,
+                    runId = CurrentRunId,
                     source = "banana-chat"
                 };
                 var json = JsonConvert.SerializeObject(body, new JsonSerializerSettings

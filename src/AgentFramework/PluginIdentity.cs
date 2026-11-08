@@ -34,6 +34,11 @@ namespace RevitMCPBridge.AgentFramework
             headers.Add(CapabilitiesHeader, Capabilities);
             headers.Remove(VersionHeader);
             headers.Add(VersionHeader, Version);
+            // Session/run ids so server-side model calls (analyze-view, proxy) land in the same run as the plugin's own events.
+            headers.Remove("X-BM-Session"); headers.Remove("X-BM-Run");
+            var sid = RevitMCPBridge2026.AgentFramework.TelemetryService.CurrentSessionId; var rid = RevitMCPBridge2026.AgentFramework.TelemetryService.CurrentRunId;
+            if (!string.IsNullOrEmpty(sid)) headers.Add("X-BM-Session", sid);
+            if (!string.IsNullOrEmpty(rid)) headers.Add("X-BM-Run", rid);
         }
 
         public static void Stamp(System.Net.WebHeaderCollection headers)
@@ -41,6 +46,9 @@ namespace RevitMCPBridge.AgentFramework
             if (headers == null) return;
             headers[CapabilitiesHeader] = Capabilities;
             headers[VersionHeader] = Version;
+            var sid = RevitMCPBridge2026.AgentFramework.TelemetryService.CurrentSessionId; var rid = RevitMCPBridge2026.AgentFramework.TelemetryService.CurrentRunId;
+            if (!string.IsNullOrEmpty(sid)) headers["X-BM-Session"] = sid;
+            if (!string.IsNullOrEmpty(rid)) headers["X-BM-Run"] = rid;
         }
     }
 }

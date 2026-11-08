@@ -427,7 +427,7 @@ namespace RevitMCPBridge2026.AgentFramework
         {
             try
             {
-                if (_runApiCalls == 0) return;
+                if (_runApiCalls == 0) { TelemetryService.CurrentRunId = null; return; }
                 TelemetryService.Track(_bimMonkeyApiKey, "run_outcome", metadata: new
                 {
                     outcome,
@@ -701,6 +701,7 @@ namespace RevitMCPBridge2026.AgentFramework
                         Role = item.Role,
                         Content = item.Content
                     });
+                TelemetryService.CurrentRunId = null; // later events (voice, updates) belong to no run
                 }
             }
 
@@ -753,6 +754,7 @@ namespace RevitMCPBridge2026.AgentFramework
             _runTrimmed = false;
             _runApiFailed = false;
             _runStartTime = DateTime.UtcNow;
+            TelemetryService.CurrentRunId = Guid.NewGuid().ToString("N");
 
             // Fire session_start once per AgentCore lifetime (first message sent)
             if (!_sessionStartSent)
