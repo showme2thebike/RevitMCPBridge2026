@@ -104,6 +104,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private string _updateBannerVersion;
         private bool _updateBannerStaged;
         private string _updateBannerDismissedVersion;
+        private string _updateBannerHiddenVersion;   // "Got it": banner hidden for this Revit session only; the staged update still installs on close
         private bool _updateBlocked;
         // --- end auto-update ---
         private bool _isOffline;
@@ -3120,7 +3121,8 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 {
                     var m = offer.Manifest;
                     var required = offer.Required;
-                    if (!required && _updateBannerDismissedVersion == m.Version) return;              // user said "Later"
+                    if (!required && _updateBannerDismissedVersion == m.Version) return;              // user said "Skip this version"
+                    if (!required && _updateBannerHiddenVersion == m.Version) return;                 // user said "Got it" this session
                     if (_updateBanner != null && _updateBannerVersion == m.Version && _updateBannerStaged == offer.AlreadyStaged && _updateBannerFailed == offer.AutoDownloadFailed) return;
                     HideUpdateBanner();
 
@@ -3183,12 +3185,25 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                         };
                         buttons.Children.Add(download);
                     }
-                    if (!string.IsNullOrEmpty(m.NotesUrl))
+                    if (!required)
                     {
+                        // 2026-11-09 (Barrett): the banner had no way to be put away. "Got it" hides it for the rest of
+                        // this Revit session; the download and the install-on-close are unaffected. Not persisted: if the
+                        // update is still pending at the next start, the banner returns, which is the right reminder.
+                        var gotIt = MakeUpdateButton("Got it", ChatTheme.Neutral, true);
+                        gotIt.Click += (s, e) =>
+                        {
+                            _updateBannerHiddenVersion = m.Version;
+                            HideUpdateBanner();
+                        };
+                        buttons.Children.Add(gotIt);
+                    }
+                    {
+                        var notesUrl = string.IsNullOrEmpty(m.NotesUrl) ? "https://bimmonkey.ai/release-notes.html" : m.NotesUrl;
                         var notes = MakeUpdateButton("What's new", ChatTheme.Neutral, false);
                         notes.Click += (s, e) =>
                         {
-                            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(m.NotesUrl) { UseShellExecute = true }); }
+                            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(notesUrl) { UseShellExecute = true }); }
                             catch { }
                         };
                         buttons.Children.Add(notes);
