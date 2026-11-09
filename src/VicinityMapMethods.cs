@@ -48,15 +48,27 @@ namespace RevitMCPBridge
                          "BIM Monkey");
 
         [MCPMethod("generateVicinityMapData", Category = "Detail",
-            Description = "Run generate_vicinity_map.py to fetch OSM street data for an address and produce vicinity_map.json. " +
-                          "Call createVicinityMapLines after this succeeds. Prefer this over runScript — args are passed correctly.")]
+            Description = "Run generate_vicinity_map.py to fetch OSM street data around a site and produce vicinity_map.json. " +
+                          "Pass 'address', or when OpenStreetMap does not know the address (rural sites, new lanes), pass 'lat' and 'lon' " +
+                          "from the map pin instead; the map is then centered exactly on the pin and no geocoding happens. " +
+                          "Call createVicinityMapLines after this succeeds, passing the same address (or 'lat, lon' string). Prefer this over runScript.")]
         public static string GenerateVicinityMapData(UIApplication uiApp, JObject parameters)
         {
             try
             {
                 var address = parameters["address"]?.ToString();
+                double? lat = parameters["lat"]?.Type == JTokenType.Float || parameters["lat"]?.Type == JTokenType.Integer ? parameters["lat"].Value<double>() : (double?)null;
+                double? lon = parameters["lon"]?.Type == JTokenType.Float || parameters["lon"]?.Type == JTokenType.Integer ? parameters["lon"].Value<double>() : (double?)null;
+                if (lat.HasValue != lon.HasValue)
+                    return ResponseBuilder.Error("pass both lat and lon, or neither").Build();
+                if (lat.HasValue && (lat < -90 || lat > 90 || lon < -180 || lon > 180))
+                    return ResponseBuilder.Error("lat must be -90..90 and lon -180..180").Build();
+                // With coordinates, the address is only a label; default it to "lat, lon" so the stale-JSON
+                // check in createVicinityMapLines has something stable to compare.
+                if (string.IsNullOrWhiteSpace(address) && lat.HasValue)
+                    address = string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:F6}, {1:F6}", lat.Value, lon.Value);
                 if (string.IsNullOrWhiteSpace(address))
-                    return ResponseBuilder.Error("address is required").Build();
+                    return ResponseBuilder.Error("address is required (or pass lat and lon)").Build();
 
                 var wrapperDir = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
@@ -71,11 +83,14 @@ namespace RevitMCPBridge
                 var distMeters  = parameters["distMeters"]?.Value<int>() ?? 0;
 
                 var distArg = distMeters > 0 ? $" --dist {distMeters}" : "";
+                var coordArg = lat.HasValue
+                    ? string.Format(System.Globalization.CultureInfo.InvariantCulture, " --lat {0:F7} --lon {1:F7}", lat.Value, lon.Value)
+                    : "";
 
                 var psi = new ProcessStartInfo
                 {
                     FileName               = "py.exe",
-                    Arguments              = $"-3 \"{scriptPath}\" \"{address}\" \"{pngFile}\"{distArg}",
+                    Arguments              = $"-3 \"{scriptPath}\" \"{address}\" \"{pngFile}\"{distArg}{coordArg}",
                     UseShellExecute        = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError  = true,
@@ -83,7 +98,7 @@ namespace RevitMCPBridge
                     WorkingDirectory       = OutputDir,
                 };
 
-                Log.Information("generateVicinityMapData: running script for address={Address}", address);
+                Log.Information("generateVicinityMapData: running script for address={Address} coords={Coords}", address, lat.HasValue ? "yes" : "no");
 
                 using (var proc = Process.Start(psi))
                 {
