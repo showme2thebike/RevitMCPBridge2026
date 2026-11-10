@@ -5359,15 +5359,13 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             if (lower.Contains("pipe")) return true;
             if (lower.Contains("unavailable")) return true;
 
-            // Permanent errors - don't retry
-            if (lower.Contains("not found")) return false;
-            if (lower.Contains("invalid")) return false;
-            if (lower.Contains("required")) return false;
-            if (lower.Contains("does not exist")) return false;
-            if (lower.Contains("permission")) return false;
-            if (lower.Contains("governance policy")) return false; // policy denials: belt-and-braces (primary check is errorCode POLICY_DENIED)
-
-            return true; // Default to retryable
+            // 2026-11-10: a method that RAN and answered success:false is deterministic — the same request fails the
+            // same way. The old default ("retryable") re-sent every compile error, missing transaction and failed
+            // lookup three times, 2 s apart (Barrett's session: 8 distinct compile errors × 3 = 24 identical failures,
+            // ~5 s and one script_execution row each). Transient faults surface as exceptions or empty responses
+            // above, not as a method-level error body, so method-level errors are permanent unless they match the
+            // transient words above.
+            return false;
         }
 
         /// <summary>
