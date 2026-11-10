@@ -72,6 +72,9 @@ namespace RevitMCPBridge
         
         public Result OnStartup(UIControlledApplication application)
         {
+            var startupSw = System.Diagnostics.Stopwatch.StartNew();
+            long revitUptimeMs = 0;
+            try { revitUptimeMs = (long)(DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds; } catch { }
             try
             {
                 // Register Banana Chat as a dockable pane — must happen before ribbon/tab creation
@@ -323,6 +326,9 @@ namespace RevitMCPBridge
                     Log.Warning(autoEx, "MCP Server auto-start failed (non-fatal — use Start Server button)");
                 }
 
+                RevitMCPBridge2026.AgentFramework.TelemetryService.AddinStartupMs = startupSw.ElapsedMilliseconds;
+                RevitMCPBridge2026.AgentFramework.TelemetryService.RevitUptimeAtAddinMs = revitUptimeMs;
+                Log.Information("[Startup] add-in OnStartup {Ms} ms; Revit up {Up} ms when it reached us", startupSw.ElapsedMilliseconds, revitUptimeMs);
                 return Result.Succeeded;
             }
             catch (Exception ex)

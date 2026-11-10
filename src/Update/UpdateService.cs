@@ -521,6 +521,28 @@ namespace RevitMCPBridge.Update
         /// </summary>
         public string TryLaunchPendingOnShutdown()
         {
+            // 2026-11-10: the decision is persisted and reported as `update_shutdown` at the next startup, because
+            // shutdown is too late for a network call and a missing record is itself the signal (Revit killed or crashed).
+            string result; string? version = null;
+            try { version = LoadState().Pending?.Version; result = TryLaunchPendingOnShutdownCore(); }
+            catch (Exception ex) { Log.Warning(ex, "[Update] shutdown launch failed"); result = "error"; }
+            if (result != "none") RecordShutdown(result, version);
+            return result;
+        }
+
+        private void RecordShutdown(string result, string? version)
+        {
+            try
+            {
+                var s = LoadState();
+                s.LastShutdown = new ShutdownRecord { Result = result, Version = version, AtUtc = _o.Now() };
+                SaveState(s);
+            }
+            catch (Exception ex) { Log.Warning(ex, "[Update] could not record the shutdown result"); }
+        }
+
+        private string TryLaunchPendingOnShutdownCore()
+        {
             var sw = Stopwatch.StartNew();
             try
             {
@@ -636,6 +658,18 @@ namespace RevitMCPBridge.Update
             try
             {
                 var state = LoadState();
+                var rec = state.LastShutdown;
+                if (rec != null)
+                {
+                    state.LastShutdown = null;
+                    SaveState(state);
+                    Telemetry("update_shutdown", new { result = rec.Result, version = rec.Version, atUtc = rec.AtUtc });
+                }
+                else if (state.Pending != null)
+                {
+                    // Staged in an earlier session, and that session never reached the shutdown hook.
+                    Telemetry("update_shutdown", new { result = "hook_not_run", version = state.Pending.Version });
+                }
                 var pending = state.Pending;
                 if (pending == null) return;
                 var installed = _o.Installed;

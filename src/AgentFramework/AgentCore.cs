@@ -766,6 +766,7 @@ namespace RevitMCPBridge2026.AgentFramework
                     try { await OnSessionStart(); } catch { /* keep cached routing */ }
                 }
                 TelemetryService.Track(_bimMonkeyApiKey, "session_start",
+                    new { addin_startup_ms = TelemetryService.AddinStartupMs, revit_uptime_at_addin_ms = TelemetryService.RevitUptimeAtAddinMs },
                     revitVersion: _revitVersion, pluginVersion: _pluginVersion);
             }
 

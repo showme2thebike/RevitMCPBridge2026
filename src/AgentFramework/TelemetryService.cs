@@ -18,6 +18,9 @@ namespace RevitMCPBridge2026.AgentFramework
         // Run GUID: one per user message (AgentCore.RunAsync), cleared when the run's outcome is reported.
         // Joins a run_outcome to the tool_calls, scripts and api_calls inside it (2026-11-07).
         public static string CurrentRunId { get; set; }
+        /// <summary>How long our OnStartup took, and how long Revit had been running when it reached us (2026-11-10).</summary>
+        public static long? AddinStartupMs { get; set; }
+        public static long? RevitUptimeAtAddinMs { get; set; }
 
         // Fallbacks so no event ships without version context (fixed the
         // null-plugin_version rows: call sites that omitted the params).

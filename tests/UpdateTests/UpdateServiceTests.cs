@@ -609,6 +609,58 @@ namespace RevitMCPBridge.UpdateTests
         }
 
         [Fact]
+        public void Shutdown_result_is_recorded_and_reported_as_update_shutdown_at_next_startup()
+        {
+            using var h = new Harness(installed: "v0.4.20261009a");
+            var svc = h.NewService();
+            var staged = Path.Combine(svc.UpdatesDirectory, "v0.4.20261103", "BIM Monkey Setup.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(staged)!);
+            File.WriteAllBytes(staged, new byte[] { 1, 2, 3 });
+            h.SaveState(new UpdateState
+            {
+                Pending = new PendingUpdate
+                {
+                    Version = "v0.4.20261103", Path = staged, Sha256 = new string('c', 64), ManifestVersion = 7,
+                    AllowedSignerThumbprints = new List<string> { ReleaseSigner.RealThumbprint }, SignerSubjectCN = ReleaseSigner.RealCn,
+                }
+            });
+
+            Assert.Equal("verify_failed", svc.TryLaunchPendingOnShutdown());
+            Assert.Equal("verify_failed", h.State().LastShutdown!.Result);
+            Assert.Equal("v0.4.20261103", h.State().LastShutdown!.Version);
+
+            lock (h.Telemetry) h.Telemetry.Clear();
+            h.NewService().ReconcileOnStartup();
+            var evt = Assert.Single(h.Telemetry, t => t.Event == "update_shutdown");
+            Assert.Equal("verify_failed", evt.Meta["result"]!.ToString());
+            Assert.Equal("v0.4.20261103", evt.Meta["version"]!.ToString());
+            Assert.Null(h.State().LastShutdown);
+        }
+
+        [Fact]
+        public void Startup_with_a_staged_update_and_no_shutdown_record_reports_hook_not_run()
+        {
+            using var h = new Harness(installed: "v0.4.20261009a");
+            var svc = h.NewService();
+            var staged = Path.Combine(svc.UpdatesDirectory, "v0.4.20261103", "BIM Monkey Setup.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(staged)!);
+            File.WriteAllBytes(staged, new byte[] { 1, 2, 3 });
+            h.SaveState(new UpdateState
+            {
+                Pending = new PendingUpdate
+                {
+                    Version = "v0.4.20261103", Path = staged, Sha256 = new string('c', 64), ManifestVersion = 7,
+                    AllowedSignerThumbprints = new List<string> { ReleaseSigner.RealThumbprint }, SignerSubjectCN = ReleaseSigner.RealCn,
+                }
+            });
+
+            svc.ReconcileOnStartup();
+            var evt = Assert.Single(h.Telemetry, t => t.Event == "update_shutdown");
+            Assert.Equal("hook_not_run", evt.Meta["result"]!.ToString());
+            Assert.NotNull(h.State().Pending); // still re-offered, nothing destroyed
+        }
+
+        [Fact]
         public void Shutdown_launch_with_nothing_pending_is_a_noop()
         {
             using var h = new Harness();

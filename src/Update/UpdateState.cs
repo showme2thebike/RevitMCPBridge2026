@@ -19,6 +19,17 @@ namespace RevitMCPBridge.Update
     }
 
     /// <summary>
+    /// What TryLaunchPendingOnShutdown decided the last time Revit closed. Written at shutdown (no network there),
+    /// reported as the `update_shutdown` telemetry event at the next startup, then cleared (2026-11-10).
+    /// </summary>
+    public sealed class ShutdownRecord
+    {
+        [JsonProperty("result")] public string Result { get; set; } = "";
+        [JsonProperty("version")] public string? Version { get; set; }
+        [JsonProperty("atUtc")] public DateTimeOffset AtUtc { get; set; }
+    }
+
+    /// <summary>
     /// %LOCALAPPDATA%\BIM Monkey\update-state.json — the only persisted updater state
     /// (docs/plugin-auto-update.md §3.4). Written atomically (temp file + move).
     /// </summary>
@@ -31,6 +42,7 @@ namespace RevitMCPBridge.Update
         [JsonProperty("lastOfferedVersion")] public string? LastOfferedVersion { get; set; }
         [JsonProperty("skippedVersion")] public string? SkippedVersion { get; set; }
         [JsonProperty("pending")] public PendingUpdate? Pending { get; set; }
+        [JsonProperty("lastShutdown")] public ShutdownRecord? LastShutdown { get; set; }
 
         public static string DefaultDirectory =>
             System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BIM Monkey");
