@@ -19,6 +19,7 @@
   <ItemGroup>
     <Compile Include="..\..\src\Update\*.cs" Link="Update\%(Filename)%(Extension)" />
     <Compile Include="..\..\src\AgentFramework\TelemetryService.cs" Link="AgentFramework\TelemetryService.cs" />
+    <Compile Include="..\..\src\AgentFramework\ScriptGuards.cs" Link="AgentFramework\ScriptGuards.cs" />
     <Compile Include="..\..\src\AgentFramework\ApiRetry.cs" Link="AgentFramework\ApiRetry.cs" />
     <!-- Knowledge-from-API + request identity (plugin exposure audit, Nov 2026): pure .NET -->
     <Compile Include="..\..\src\AgentFramework\PluginIdentity.cs" Link="AgentFramework\PluginIdentity.cs" />

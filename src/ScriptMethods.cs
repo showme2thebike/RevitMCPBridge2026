@@ -90,6 +90,16 @@ namespace RevitMCPBridge2026
                 return ResponseBuilder.Error(denial, "POLICY_DENIED").Build();
             }
 
+            // Pre-compile guard (2026-11-11): threading constructs never work in this host and the runtime's own
+            // message ("Could not load file or assembly") does not say what to change. Fail before compiling with a
+            // message the model can act on; counted as a failed execution of kind "threading".
+            var threading = RevitMCPBridge2026.AgentFramework.ScriptGuards.ThreadingUse(code);
+            if (threading != null)
+            {
+                TrackScriptExecution(source, scriptName, hash, success: false, denied: false, durationMs: 0, usedAssemblies: null, error: "threading: " + threading);
+                return ResponseBuilder.Error(RevitMCPBridge2026.AgentFramework.ScriptGuards.ThreadingMessage(threading), "SCRIPT_THREADING").Build();
+            }
+
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var result = ExecuteOnEngine(uiApp, code, usingsArr, out var usedAssemblies);
             sw.Stop();

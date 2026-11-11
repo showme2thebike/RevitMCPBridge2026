@@ -77,6 +77,7 @@ namespace RevitMCPBridge2026.AgentFramework
             var s = summary;
             bool Has(string pattern) => System.Text.RegularExpressions.Regex.IsMatch(s, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             if (Has(@"POLICY_DENIED")) return "policy";
+            if (Has(@"^threading:|Could not load file or assembly|System\.Threading\.Tasks\.Parallel")) return "threading";
             if (Has(@"Compilation failed|\bCS\d{4}\b")) return "compile";
             if (Has(@"transaction|regenerat|modif(y|ied)[^.]*outside")) return "transaction";
             if (Has(@"NullReference|Object reference not set|\bnull\b")) return "null";
