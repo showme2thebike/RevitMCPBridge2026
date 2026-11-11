@@ -56,6 +56,18 @@ namespace RevitMCPBridge.Update
         /// </summary>
         public bool AutoDownload { get; set; } = true;
         public TimeSpan CheckTimeout { get; set; } = TimeSpan.FromSeconds(10);
+        /// <summary>
+        /// 2026-11-11: a background check on a timer, independent of the chat pane. The pane-open check only fires
+        /// when the Banana Chat button is clicked, so a pane left open all day never re-checked and the close
+        /// installed a build that had been superseded hours earlier (Barrett, 1109 instead of 1110b).
+        /// </summary>
+        public TimeSpan PeriodicCheckInterval { get; set; } = TimeSpan.FromMinutes(61);
+        /// <summary>
+        /// Last-chance check at Revit shutdown: ask the server once more and, if something newer than the staged
+        /// installer exists, download it within this budget so the close installs the newest build available.
+        /// Zero disables it. Past the budget the staged build installs as before.
+        /// </summary>
+        public TimeSpan ShutdownCheckBudget { get; set; } = TimeSpan.FromSeconds(10);
 #if UPDATE_TESTS
         /// <summary>Test-only: lets DownloadAsync accept http://127.0.0.1 (HttpListener has no TLS).</summary>
         public bool AllowLoopbackHttp { get; set; }
@@ -93,6 +105,8 @@ namespace RevitMCPBridge.Update
         private bool _disabledLogged;
         private DateTimeOffset? _lastCheckAttemptUtc;
         private int _downloading;
+        private Timer? _periodicTimer;
+        private string? _lastShutdownCheck; // outcome of the last-chance check, persisted with the shutdown record
         /// <summary>The background download started by the last offer (null if none); tests await it.</summary>
         public Task? AutoDownloadTask { get; private set; }
         private static Mutex? _launchMutex; // held until process exit on purpose
@@ -192,7 +206,7 @@ namespace RevitMCPBridge.Update
                         if (_startupCheckDone) return;
                         _startupCheckDone = true;
                     }
-                    else
+                    else if (reason != "shutdown") // the last-chance check always runs; the throttle is for pane opens and the timer
                     {
                         var state0 = LoadState();
                         var last = Max(_lastCheckAttemptUtc, state0.LastCheckUtc);
@@ -325,19 +339,21 @@ namespace RevitMCPBridge.Update
 
             Log.Information("[Update] offering {Version} (manifest {MV}, required={Required}, staged={Staged})",
                 manifest.Version, manifest.ManifestVersion, required, staged);
-            RaiseOffer(new UpdateOfferedEventArgs(manifest, required, downloadUrl, staged));
+            var quiet = reason == "shutdown"; // Revit is closing: no banner, just stage the newer build
+            if (!quiet) RaiseOffer(new UpdateOfferedEventArgs(manifest, required, downloadUrl, staged));
 
             if (_o.AutoDownload && !staged && !string.IsNullOrEmpty(downloadUrl))
-                AutoDownloadTask = AutoDownloadAsync(manifest, required, downloadUrl!);
+                AutoDownloadTask = AutoDownloadAsync(manifest, required, downloadUrl!, quiet);
         }
 
         // Background download after an offer. Success re-raises the offer as staged so the banner turns into
         // "installs when you close Revit"; failure re-raises with AutoDownloadFailed so the banner shows a retry.
-        private async Task AutoDownloadAsync(ReleaseManifest manifest, bool required, string downloadUrl)
+        private async Task AutoDownloadAsync(ReleaseManifest manifest, bool required, string downloadUrl, bool quiet = false)
         {
             try
             {
                 var ok = await DownloadAsync(manifest, downloadUrl).ConfigureAwait(false);
+                if (quiet) return;
                 var again = new UpdateOfferedEventArgs(manifest, required, downloadUrl, ok) { AutoDownloadFailed = !ok };
                 RaiseOffer(again);
             }
@@ -472,6 +488,8 @@ namespace RevitMCPBridge.Update
                 }
 
                 var state = LoadState();
+                // A newer build supersedes whatever was staged: the old installer is dead weight (and must never launch).
+                if (state.Pending != null && !string.Equals(state.Pending.Path, final, StringComparison.OrdinalIgnoreCase)) TryDelete(state.Pending.Path);
                 state.Pending = new PendingUpdate
                 {
                     Version = manifest.Version,
@@ -524,7 +542,7 @@ namespace RevitMCPBridge.Update
             // 2026-11-10: the decision is persisted and reported as `update_shutdown` at the next startup, because
             // shutdown is too late for a network call and a missing record is itself the signal (Revit killed or crashed).
             string result; string? version = null;
-            try { version = LoadState().Pending?.Version; result = TryLaunchPendingOnShutdownCore(); }
+            try { RunShutdownCheck(); version = LoadState().Pending?.Version; result = TryLaunchPendingOnShutdownCore(); }
             catch (Exception ex) { Log.Warning(ex, "[Update] shutdown launch failed"); result = "error"; }
             if (result != "none") RecordShutdown(result, version);
             return result;
@@ -535,10 +553,67 @@ namespace RevitMCPBridge.Update
             try
             {
                 var s = LoadState();
-                s.LastShutdown = new ShutdownRecord { Result = result, Version = version, AtUtc = _o.Now() };
+                s.LastShutdown = new ShutdownRecord { Result = result, Version = version, AtUtc = _o.Now(), Check = _lastShutdownCheck };
                 SaveState(s);
             }
             catch (Exception ex) { Log.Warning(ex, "[Update] could not record the shutdown result"); }
+        }
+
+        /// <summary>
+        /// Hourly background check that does not depend on the chat pane being reopened. Idempotent.
+        /// </summary>
+        public void StartPeriodicChecks()
+        {
+            if (_periodicTimer != null || !Enabled) return;
+            var period = _o.PeriodicCheckInterval;
+            if (period <= TimeSpan.Zero) return;
+            _periodicTimer = new Timer(_ => { _ = CheckAsync("timer"); }, null, period, period);
+            Log.Information("[Update] periodic check every {Minutes} min", period.TotalMinutes);
+        }
+
+        public void StopPeriodicChecks()
+        {
+            try { _periodicTimer?.Dispose(); } catch { }
+            _periodicTimer = null;
+        }
+
+        /// <summary>
+        /// Last-chance check before the staged installer launches: one more server ask, and a bounded download of
+        /// anything newer, so "close Revit" installs the newest build available at that moment rather than whatever
+        /// happened to be staged earlier in the session. Returns the outcome (also persisted with the shutdown record):
+        /// disabled | nothing_newer | downloaded_newer | check_timeout | download_timeout | error.
+        /// </summary>
+        public string RunShutdownCheck()
+        {
+            string outcome;
+            var budget = _o.ShutdownCheckBudget;
+            if (!Enabled || _o.Installed == null || budget <= TimeSpan.Zero) { outcome = "disabled"; }
+            else
+            {
+                var sw = Stopwatch.StartNew();
+                try
+                {
+                    AutoDownloadTask = null;
+                    var before = LoadState().Pending?.Version;
+                    var check = Task.Run(() => CheckAsync("shutdown"));
+                    if (!check.Wait(budget)) outcome = "check_timeout";
+                    else
+                    {
+                        var dl = AutoDownloadTask;
+                        if (dl == null) outcome = "nothing_newer";
+                        else
+                        {
+                            var remaining = budget - sw.Elapsed;
+                            if (remaining > TimeSpan.Zero && dl.Wait(remaining) && LoadState().Pending?.Version != before) outcome = "downloaded_newer";
+                            else outcome = "download_timeout";
+                        }
+                    }
+                }
+                catch (Exception ex) { Log.Warning(ex, "[Update] shutdown check failed"); outcome = "error"; }
+                Log.Information("[Update] shutdown check: {Outcome} in {Ms} ms", outcome, sw.ElapsedMilliseconds);
+            }
+            _lastShutdownCheck = outcome;
+            return outcome;
         }
 
         private string TryLaunchPendingOnShutdownCore()
@@ -663,7 +738,7 @@ namespace RevitMCPBridge.Update
                 {
                     state.LastShutdown = null;
                     SaveState(state);
-                    Telemetry("update_shutdown", new { result = rec.Result, version = rec.Version, atUtc = rec.AtUtc });
+                    Telemetry("update_shutdown", new { result = rec.Result, version = rec.Version, atUtc = rec.AtUtc, check = rec.Check });
                 }
                 else if (state.Pending != null)
                 {

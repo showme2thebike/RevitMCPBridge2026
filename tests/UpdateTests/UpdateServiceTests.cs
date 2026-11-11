@@ -661,6 +661,80 @@ namespace RevitMCPBridge.UpdateTests
         }
 
         [Fact]
+        public void Shutdown_check_replaces_a_stale_staged_build_with_the_newest_release()
+        {
+            using var h = new Harness(installed: "v0.4.20261009a");
+            h.Options.AutoDownload = true;
+            h.Options.ShutdownCheckBudget = TimeSpan.FromSeconds(30);
+            var svc = h.NewService();
+            // An older build was staged earlier in the session (day 1 of the week).
+            var stale = Path.Combine(svc.UpdatesDirectory, "v0.4.20261103", "BIM Monkey Setup.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(stale)!);
+            File.WriteAllBytes(stale, new byte[] { 1, 2, 3 });
+            h.SaveState(new UpdateState
+            {
+                LastAcceptedManifestVersion = 7,
+                Pending = new PendingUpdate
+                {
+                    Version = "v0.4.20261103", Path = stale, Sha256 = new string('c', 64), ManifestVersion = 7,
+                    AllowedSignerThumbprints = new List<string> { ReleaseSigner.RealThumbprint }, SignerSubjectCN = ReleaseSigner.RealCn,
+                }
+            });
+            // The server now has day 7.
+            var bytes = File.ReadAllBytes(ReleaseSigner.RealInstaller);
+            using var server = new LocalServer(r => Write(r, bytes));
+            var newer = ReleaseSigner.DefaultManifest(h.Now, "v0.4.20261109", 9, bytes.Length, Sha(bytes));
+            h.Http.Body = _ => h.ServerResponse(newer, downloadUrl: server.Url);
+            var offers = 0; svc.UpdateOffered += (s, e) => offers++;
+
+            Assert.Equal("downloaded_newer", svc.RunShutdownCheck());
+            Assert.Equal("v0.4.20261109", h.State().Pending?.Version);
+            Assert.False(File.Exists(stale), "the superseded installer is deleted");
+            Assert.Equal(0, offers); // no banner while Revit is closing
+            Assert.Contains(h.Telemetry, t => t.Event == "update_offered" && t.Meta["reason"]!.ToString() == "shutdown");
+        }
+
+        [Fact]
+        public void Shutdown_check_that_runs_out_of_time_leaves_the_staged_build_in_place()
+        {
+            using var h = new Harness(installed: "v0.4.20261009a");
+            h.Options.AutoDownload = true;
+            h.Options.ShutdownCheckBudget = TimeSpan.FromMilliseconds(1);
+            h.Http.Body = _ => { Thread.Sleep(300); return h.ServerResponse(ReleaseSigner.DefaultManifest(h.Now, "v0.4.20261109", 9, 3, new string('d', 64))); };
+            var svc = h.NewService();
+            h.SaveState(new UpdateState { Pending = new PendingUpdate { Version = "v0.4.20261103", Path = Path.Combine(h.Dir, "x.exe"), Sha256 = new string('c', 64), ManifestVersion = 7, AllowedSignerThumbprints = new List<string>(), SignerSubjectCN = "x" } });
+
+            Assert.Equal("check_timeout", svc.RunShutdownCheck());
+            Assert.Equal("v0.4.20261103", h.State().Pending?.Version);
+        }
+
+        [Fact]
+        public void Shutdown_check_with_nothing_newer_reports_so()
+        {
+            using var h = new Harness(installed: "v0.4.20261009a");
+            h.Http.Body = _ => h.ServerResponse(ReleaseSigner.DefaultManifest(h.Now, "v0.4.20261103", 7, 3, new string('c', 64)), available: false);
+            Assert.Equal("nothing_newer", h.NewService().RunShutdownCheck());
+        }
+
+        [Fact]
+        public async Task Periodic_timer_checks_the_server_without_the_pane_being_reopened()
+        {
+            using var h = new Harness(installed: "v0.4.20261009a");
+            h.Options.PeriodicCheckInterval = TimeSpan.FromMilliseconds(60);
+            h.Options.PanelCheckInterval = TimeSpan.Zero; // the harness clock is frozen, so any positive throttle would never expire
+            h.Http.Body = _ => h.ServerResponse(ReleaseSigner.DefaultManifest(h.Now, "v0.4.20261103", 7, 3, new string('c', 64)), available: false);
+            var svc = h.NewService();
+            svc.StartPeriodicChecks();
+            try
+            {
+                var deadline = DateTime.UtcNow.AddSeconds(5);
+                while (h.Http.Calls < 2 && DateTime.UtcNow < deadline) await Task.Delay(20);
+                Assert.True(h.Http.Calls >= 2, $"timer checks: {h.Http.Calls}");
+            }
+            finally { svc.StopPeriodicChecks(); }
+        }
+
+        [Fact]
         public void Shutdown_launch_with_nothing_pending_is_a_noop()
         {
             using var h = new Harness();

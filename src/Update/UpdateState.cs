@@ -27,6 +27,8 @@ namespace RevitMCPBridge.Update
         [JsonProperty("result")] public string Result { get; set; } = "";
         [JsonProperty("version")] public string? Version { get; set; }
         [JsonProperty("atUtc")] public DateTimeOffset AtUtc { get; set; }
+        /// <summary>Outcome of the last-chance server check that ran just before the launch decision.</summary>
+        [JsonProperty("check")] public string? Check { get; set; }
     }
 
     /// <summary>

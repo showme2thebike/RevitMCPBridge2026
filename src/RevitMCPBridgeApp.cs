@@ -302,6 +302,7 @@ namespace RevitMCPBridge
                 {
                     RevitMCPBridge.Update.UpdateService.Instance.ReconcileOnStartup();
                     _ = System.Threading.Tasks.Task.Run(() => RevitMCPBridge.Update.UpdateService.Instance.CheckAsync("startup"));
+                    RevitMCPBridge.Update.UpdateService.Instance.StartPeriodicChecks();
                 }
                 catch (Exception updEx)
                 {
@@ -2434,6 +2435,7 @@ namespace RevitMCPBridge
                 // --- auto-update: the last Revit out launches the re-verified, staged installer (§3.4, R4/R6) ---
                 try
                 {
+                    RevitMCPBridge.Update.UpdateService.Instance.StopPeriodicChecks();
                     var updateLaunch = RevitMCPBridge.Update.UpdateService.Instance.TryLaunchPendingOnShutdown();
                     Log.Information("[Update] shutdown hook: {Result}", updateLaunch);
                 }
