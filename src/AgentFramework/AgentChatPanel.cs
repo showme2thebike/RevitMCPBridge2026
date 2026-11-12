@@ -5317,6 +5317,23 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                                     return response;
                                 }
 
+                                // 2026-11-12: a server-side TIMEOUT cancels only the QUEUED action; a script already running
+                                // on the Revit thread finishes anyway. Re-sending a write after it ran Barrett's long scripts
+                                // twice (see RetryPolicy). Writes are never re-sent after a timeout; reads still are.
+                                var errorCode = parsed["errorCode"]?.ToString();
+                                if (RetryPolicy.IsServerTimeout(errorCode, error) && IsWriteMethod(methodName))
+                                {
+                                    var timeoutSec = (parsed["timeoutMs"]?.ToObject<int?>() ?? MCPTimeoutFor(methodName)) / 1000;
+                                    TelemetryService.Track(_bimMonkeyApiKey, "write_timeout", toolName: methodName,
+                                        metadata: new { source = "server", attempt, timeout_s = timeoutSec, error_code = errorCode });
+                                    return JsonConvert.SerializeObject(new
+                                    {
+                                        success = false,
+                                        timedOut = true,
+                                        error = RetryPolicy.WriteTimedOutMessage(methodName, timeoutSec)
+                                    });
+                                }
+
                                 // Don't retry method-level errors (they'll fail again)
                                 if (!IsRetryableError(error))
                                 {
@@ -5364,6 +5381,9 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                     lastError = timeoutEx.Message;
                     TelemetryService.Track(_bimMonkeyApiKey, "pipe_reconnect",
                         toolName: methodName, metadata: new { reason = "read_timeout", attempt, write = IsWriteMethod(methodName) });
+                    if (IsWriteMethod(methodName))
+                        TelemetryService.Track(_bimMonkeyApiKey, "write_timeout", toolName: methodName,
+                            metadata: new { source = "panel", attempt, timeout_s = MCPTimeoutFor(methodName) / 1000 });
                     // A write that timed out is still queued in Revit and usually
                     // completes. Re-sending it would run it twice (duplicate outlets,
                     // sheets, views). Hand the model the facts instead of retrying.
