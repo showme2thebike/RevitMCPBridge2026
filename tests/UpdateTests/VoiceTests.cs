@@ -66,6 +66,16 @@ namespace RevitMCPBridge.UpdateTests
         }
 
         [Fact]
+        public void A_waveInOpen_failure_is_explained_as_a_Windows_permission_problem()
+        {
+            var t = VoiceAudio.FriendlyStartError("MemoryAllocationError calling waveInOpen", "Headset Mic");
+            Assert.StartsWith("Windows would not open the microphone (Headset Mic) for Revit.", t);
+            Assert.Contains("Let desktop apps access your microphone", t);
+            Assert.Contains("MemoryAllocationError calling waveInOpen", t);
+            Assert.Equal("Voice input could not start: boom", VoiceAudio.FriendlyStartError("boom", null));
+        }
+
+        [Fact]
         public void Default_microphone_is_matched_by_truncated_waveIn_name()
         {
             // waveIn cuts names at 31 chars; the endpoint friendly name is the full string.

@@ -10,6 +10,28 @@ namespace RevitMCPBridge.Voice
     /// </summary>
     public static class VoiceAudio
     {
+        /// <summary>
+        /// Plain-language text for a microphone start failure. 2026-11-12: Bill (firm 66) got NAudio's
+        /// "MemoryAllocationError calling waveInOpen" four times on two days and asked support; it is not memory —
+        /// Windows refused the device (microphone privacy setting, or another program holding it exclusively).
+        /// </summary>
+        public static string FriendlyStartError(string message, string device)
+        {
+            var m = message ?? "";
+            var dev = string.IsNullOrWhiteSpace(device) ? "the microphone" : $"the microphone ({device})";
+            if (m.IndexOf("waveInOpen", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                m.IndexOf("MemoryAllocation", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                m.IndexOf("BadDeviceId", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                m.IndexOf("AlreadyAllocated", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return $"Windows would not open {dev} for Revit. Check Settings → Privacy & security → Microphone: turn on " +
+                       "\"Microphone access\" and \"Let desktop apps access your microphone\", then press the microphone again. " +
+                       "If those are already on, another program (a meeting app, a recorder, a browser call) is holding the " +
+                       $"microphone — close it and try again. (Windows said: {m})";
+            }
+            return "Voice input could not start: " + m;
+        }
+
         public const int SampleRate = 16000;
         /// <summary>Longest clip we transcribe. A spoken prompt is 5–30 s; anything longer is a forgotten mic.</summary>
         public static readonly TimeSpan MaxClip = TimeSpan.FromSeconds(60);

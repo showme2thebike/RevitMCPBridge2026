@@ -1590,7 +1590,7 @@ namespace RevitMCPBridge2026.AgentFramework
                 _voiceState = VoiceState.Idle;
                 SetMic("🎤", false);
                 if (_statusText != null) _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
-                AddSystemMessage("Voice input could not start: " + ex.Message);
+                AddSystemMessage(RevitMCPBridge.Voice.VoiceAudio.FriendlyStartError(ex.Message, _voiceRecorder?.DeviceName));
                 TelemetryService.Track(_bimMonkeyApiKey, "voice_error", metadata: new { stage = "start", error = ex.Message.Length > 160 ? ex.Message.Substring(0, 160) : ex.Message });
             }
         }
