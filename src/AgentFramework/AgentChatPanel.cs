@@ -5128,6 +5128,20 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
         private const int InitialRetryDelayMs = 500;
         private const int MCPTimeoutMs = 30000;
         private const int MCPWriteTimeoutMs = 15000; // lock wait + connect + write; a blocked write never recovers on its own
+        /// <summary>After this long with no answer from Revit, tell the user Revit is busy with them (dialog, active command).</summary>
+        private const int RevitBusyNoticeMs = 10000;
+        private void ShowRevitBusyNotice(string methodName)
+        {
+            try
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try { UpdateProgress("Waiting for Revit — close any open dialog or finish the current command, and this continues on its own…"); }
+                    catch { }
+                }));
+            }
+            catch { }
+        }
         // Scripts, plans and batch/import operations can legitimately run for minutes
         // while Revit regenerates; 30 s made them "time out" with the change already
         // applied, and the retry re-sent the write (9/30/2026, Barrett).
@@ -5230,7 +5244,21 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                     var readTask    = Task.Run(() => readerCapture?.ReadLine());
                     var timeoutMs   = MCPTimeoutFor(methodName);
                     var timeoutTask = Task.Delay(timeoutMs);
-                    var winner      = await Task.WhenAny(readTask, timeoutTask);
+                    // 2026-11-11 (Barrett, "BC has been painfully slow today"): six requests sat 6-20 minutes before Revit
+                    // ran them (the script itself took 1-2 s), 81 minutes in one day. Revit services our external event only
+                    // when it is idle at the top level; an open dialog, sketch mode, the family editor or a long regen holds
+                    // the request. We cannot shorten that, but we can stop it being silent: after RevitBusyNoticeMs say so
+                    // in the progress line, and record the wait so it is a number in the weekly review.
+                    var waitSw      = System.Diagnostics.Stopwatch.StartNew();
+                    var noticeTask  = Task.Delay(RevitBusyNoticeMs);
+                    var winner      = await Task.WhenAny(readTask, timeoutTask, noticeTask);
+                    if (winner == noticeTask)
+                    {
+                        ShowRevitBusyNotice(methodName);
+                        winner = await Task.WhenAny(readTask, timeoutTask);
+                        TelemetryService.Track(_bimMonkeyApiKey, "revit_wait", toolName: methodName, durationMs: waitSw.ElapsedMilliseconds,
+                            metadata: new { method = methodName, outcome = winner == readTask ? "answered" : "timeout", notice_after_ms = RevitBusyNoticeMs });
+                    }
                     if (winner == timeoutTask)
                     {
                         ForceClosePipe();

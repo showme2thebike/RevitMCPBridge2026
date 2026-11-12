@@ -67,7 +67,7 @@ namespace RevitMCPBridge2026.AgentFramework
         // runs once the soft budget is passed, cut deep (to HistoryCharTrimTo) so the next trim
         // is far away, and only trim mid-run as an emergency at the hard ceiling.
         private const int HistoryCharBudget  = 400000;  // ~110K tokens — hard ceiling, mid-run emergency trim
-        private const int HistorySoftBudget  = 300000;  // ~80K tokens — between-run trim threshold
+        private const int HistorySoftBudget  = 200000;  // ~55K tokens — between-run trim threshold (was 300K; 2026-11-11: histories reached 400-670K chars in long sessions, every call carrying it)
         private const int HistoryCharTrimTo  = 120000;  // ~33K tokens — target after trimming
 
         private static string CapToolResult(string result)
