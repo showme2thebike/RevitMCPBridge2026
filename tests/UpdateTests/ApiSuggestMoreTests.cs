@@ -83,6 +83,13 @@ namespace RevitMCPBridge.UpdateTests
         }
 
         [Fact]
+        public void A_type_that_exists_in_an_unimported_namespace_is_named_with_its_namespace()
+        {
+            var s = ApiSuggest.Suggest("error CS0246: The type or namespace name 'Stopwatch' could not be found", Universe);
+            Assert.Equal("Stopwatch exists in System.Diagnostics — add 'using System.Diagnostics;' or write System.Diagnostics.Stopwatch", s);
+        }
+
+        [Fact]
         public void Describe_lists_properties_methods_and_enum_values()
         {
             var sw = ApiSuggest.Describe("Stopwatch", Universe);

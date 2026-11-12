@@ -63,6 +63,10 @@ namespace RevitMCPBridge2026.AgentFramework
             if (n.Success)
             {
                 var name = BareName(n.Groups[1].Value);
+                // The exact type exists in a namespace the script did not import (Stairs lives in
+                // Autodesk.Revit.DB.Architecture, 2026-11-12): say so instead of listing cousins.
+                var exact = universe.Where(t => string.Equals(TypeBare(t), name, StringComparison.Ordinal) && t.Namespace != null).Select(t => t.Namespace).Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
+                if (exact.Count > 0) return $"{name} exists in {string.Join(" and ", exact)} — add 'using {exact[0]};' or write {exact[0]}.{name}";
                 var names = universe.Select(TypeBare).Distinct(StringComparer.Ordinal).ToList();
                 var best = Rank(name, names, max);
                 if (best.Count == 0) return null;
