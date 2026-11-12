@@ -27,7 +27,18 @@ namespace RevitMCPBridge2026.AgentFramework
             foreach (var d in diagnostics ?? Array.Empty<string>())
             {
                 var s = Suggest(d, universe, max);
-                outList.Add(s == null ? d : $"{d} → Did you mean: {s}");
+                if (s == null)
+                {
+                    // nothing close: hand over the type's real surface instead of nothing (item 7c)
+                    var m = NoMember.Match(d);
+                    var list = m.Success ? MemberList(m.Groups[1].Value, universe, int.MaxValue) : null;
+                    if (list == null || list.Count == 0) { outList.Add(d); continue; }
+                    var tn = BareName(m.Groups[1].Value);
+                    var tail = list.Count > MemberListCap ? $", … {list.Count - MemberListCap} more (call describeApi(\"{tn}\") for all)" : "";
+                    outList.Add($"{d} → No close match. Members of {tn}: {string.Join(", ", list.Take(MemberListCap))}{tail}");
+                    continue;
+                }
+                outList.Add($"{d} → Did you mean: {s}");
             }
             return outList;
         }
@@ -130,6 +141,100 @@ namespace RevitMCPBridge2026.AgentFramework
                 (prev, cur) = (cur, prev);
             }
             return prev[b.Length];
+        }
+
+        // ------------------------------------------------------------------ auto-correct (2026-11-12, item 7b)
+
+        public readonly struct Correction
+        {
+            public Correction(string type, string wrong, string right) { Type = type; Wrong = wrong; Right = right; }
+            public string Type { get; } public string Wrong { get; } public string Right { get; }
+            public override string ToString() => $"{Wrong}→{Right}";
+        }
+
+        /// <summary>
+        /// A correction the engine may apply WITHOUT asking the model: the member exists under a different case, or there
+        /// is exactly one real member within two edits and nothing else close. Anything looser stays a suggestion, because
+        /// substituting GetWidth for GetLayerWidth would silently change what the script does.
+        /// </summary>
+        public static Correction? AutoCorrect(string diagnostic, IReadOnlyList<Type> universe)
+        {
+            var m = NoMember.Match(diagnostic ?? "");
+            if (!m.Success || universe == null) return null;
+            var typeName = BareName(m.Groups[1].Value); var wrong = m.Groups[2].Value;
+            var types = universe.Where(t => string.Equals(TypeBare(t), typeName, StringComparison.Ordinal)).ToList();
+            if (types.Count == 0) return null;
+            var members = types.SelectMany(MemberNames).Distinct(StringComparer.Ordinal).ToList();
+            if (members.Contains(wrong, StringComparer.Ordinal)) return null; // exists as written: the error is elsewhere (overload, extension, access)
+            var ci = members.Where(x => string.Equals(x, wrong, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (ci.Count == 1) return new Correction(typeName, wrong, ci[0]);
+            if (wrong.Length < 5) return null;
+            var close = members.Where(x => Levenshtein(x.ToLowerInvariant(), wrong.ToLowerInvariant()) <= 2).ToList();
+            return close.Count == 1 ? new Correction(typeName, wrong, close[0]) : null;
+        }
+
+        public static List<Correction> AutoCorrections(IEnumerable<string> diagnostics, IReadOnlyList<Type> universe)
+        {
+            var list = new List<Correction>();
+            foreach (var d in diagnostics ?? Array.Empty<string>())
+            {
+                var c = AutoCorrect(d, universe);
+                if (c != null && !list.Any(x => x.Wrong == c.Value.Wrong)) list.Add(c.Value);
+            }
+            return list;
+        }
+
+        /// <summary>Replace each wrong member token (word boundary, immediately after a '.') with the right one.</summary>
+        public static string ApplyCorrections(string code, IEnumerable<Correction> corrections)
+        {
+            var s = code ?? "";
+            foreach (var c in corrections) s = Regex.Replace(s, @"(?<=\.)" + Regex.Escape(c.Wrong) + @"\b", c.Right);
+            return s;
+        }
+
+        // ------------------------------------------------------------------ describe / member lists (item 7a, 7c)
+
+        /// <summary>All public member names of a type, sorted; null when the type is not in the universe.</summary>
+        public const int MemberListCap = 40;
+        public static List<string>? MemberList(string typeName, IReadOnlyList<Type> universe, int cap = MemberListCap)
+        {
+            var bare = BareName(typeName ?? "");
+            var types = universe.Where(t => string.Equals(TypeBare(t), bare, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (types.Count == 0) return null;
+            return types.SelectMany(MemberNames).Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).Take(cap).ToList();
+        }
+
+        /// <summary>
+        /// What the describeApi tool returns: the type's real surface — properties with their types, methods with their
+        /// parameter types, enum values — so the model checks instead of guessing. Unknown type → closest real type names.
+        /// </summary>
+        public static string Describe(string typeName, IReadOnlyList<Type> universe, int cap = 80)
+        {
+            var bare = BareName(typeName ?? "");
+            if (string.IsNullOrWhiteSpace(bare)) return "typeName is required";
+            var types = universe.Where(t => string.Equals(TypeBare(t), bare, StringComparison.Ordinal)).ToList();
+            if (types.Count == 0) types = universe.Where(t => string.Equals(TypeBare(t), bare, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (types.Count == 0)
+            {
+                var close = Rank(bare, universe.Select(TypeBare).Distinct(StringComparer.Ordinal), 8);
+                return close.Count == 0 ? $"No type named {bare} in the loaded Revit API." : $"No type named {bare}. Closest real types: {string.Join(", ", close.Select(c => { var t = universe.FirstOrDefault(x => TypeBare(x) == c); return t == null ? c : t.Namespace + "." + c; }))}.";
+            }
+            var t0 = types[0];
+            var lines = new List<string> { $"{t0.Namespace}.{TypeBare(t0)}" + (t0.BaseType != null && t0.BaseType != typeof(object) ? $" : {TypeBare(t0.BaseType)}" : "") + (t0.IsEnum ? " (enum)" : "") };
+            if (t0.IsEnum)
+            {
+                var names = Enum.GetNames(t0);
+                lines.Add($"values ({names.Length}): " + string.Join(", ", names.Take(cap)) + (names.Length > cap ? $", … {names.Length - cap} more" : ""));
+                return string.Join("\n", lines);
+            }
+            var flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy;
+            PropertyInfo[] props; MethodInfo[] methods;
+            try { props = t0.GetProperties(flags); methods = t0.GetMethods(flags); } catch { return lines[0]; }
+            var propLines = props.Select(p => $"{p.Name}: {TypeBare(p.PropertyType)}{(p.CanWrite ? "" : " (read-only)")}").Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
+            var methLines = methods.Where(mi => !mi.IsSpecialName).Select(mi => $"{mi.Name}({string.Join(", ", mi.GetParameters().Select(p => TypeBare(p.ParameterType) + " " + p.Name))}): {TypeBare(mi.ReturnType)}{(mi.IsStatic ? " [static]" : "")}").Distinct().OrderBy(x => x, StringComparer.Ordinal).ToList();
+            lines.Add($"properties ({propLines.Count}): " + string.Join("; ", propLines.Take(cap)) + (propLines.Count > cap ? $"; … {propLines.Count - cap} more" : ""));
+            lines.Add($"methods ({methLines.Count}): " + string.Join("; ", methLines.Take(cap)) + (methLines.Count > cap ? $"; … {methLines.Count - cap} more" : ""));
+            return string.Join("\n", lines);
         }
 
         // ------------------------------------------------------------------ production universe

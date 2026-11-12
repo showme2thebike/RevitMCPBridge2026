@@ -266,38 +266,60 @@ namespace __RevitScriptHost__
                     .Where(r => r != null)
                     .ToList();
 
-                var tree = CSharpSyntaxTree.ParseText(source);
-                var compilation = CSharpCompilation.Create(
-                    "__script_" + Guid.NewGuid().ToString("N"),
-                    new[] { tree },
-                    refs,
-                    new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary,
-                        optimizationLevel: OptimizationLevel.Release)
-                );
-
-                using var ms = new MemoryStream();
-                var emit = compilation.Emit(ms);
-
-                // NOTE: GetUsedAssemblyReferences over-reports in the Revit
-                // process (~200 assemblies for a one-liner) — corpus data comes
-                // from StrictProbe shadow compilation instead (§5.1).
-
-                if (!emit.Success)
+                // Compile; on a near-exact member miss (wrong case, or one real member within two edits and nothing else
+                // close) correct the code and compile ONCE more without a model round trip (2026-11-12, item 7b). Anything
+                // looser is reported with 'Did you mean' (item 7a) and the type's member list when nothing is close (7c).
+                byte[] assemblyBytes = null; string correctedNote = null; var attemptCode = code;
+                for (int pass = 0; pass < 2 && assemblyBytes == null; pass++)
                 {
+                    var attemptSource = pass == 0 ? source : source.Replace(code, attemptCode);
+                    var tree = CSharpSyntaxTree.ParseText(attemptSource);
+                    var compilation = CSharpCompilation.Create(
+                        "__script_" + Guid.NewGuid().ToString("N"),
+                        new[] { tree },
+                        refs,
+                        new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary,
+                            optimizationLevel: OptimizationLevel.Release)
+                    );
+
+                    using var ms = new MemoryStream();
+                    var emit = compilation.Emit(ms);
+
+                    // NOTE: GetUsedAssemblyReferences over-reports in the Revit
+                    // process (~200 assemblies for a one-liner) — corpus data comes
+                    // from StrictProbe shadow compilation instead (§5.1).
+
+                    if (emit.Success) { assemblyBytes = ms.ToArray(); break; }
+
                     var errors = emit.Diagnostics
                         .Where(d => d.Severity == DiagnosticSeverity.Error)
                         .Select(d => d.ToString())
                         .ToList();
-                    // 2026-11-12: "does not contain a definition" / "could not be found" get the real members or types
-                    // appended by reflection, so the rewrite is a one-word fix instead of another guess (ApiSuggest).
-                    try { errors = RevitMCPBridge2026.AgentFramework.ApiSuggest.Enrich(errors, RevitMCPBridge2026.AgentFramework.ApiSuggest.RevitTypes()); } catch { }
-                    return ResponseBuilder.Error("Compilation failed")
+                    var universe = RevitMCPBridge2026.AgentFramework.ApiSuggest.RevitTypes();
+                    if (pass == 0)
+                    {
+                        List<RevitMCPBridge2026.AgentFramework.ApiSuggest.Correction> fixes = null;
+                        try { fixes = RevitMCPBridge2026.AgentFramework.ApiSuggest.AutoCorrections(errors, universe); } catch { }
+                        if (fixes != null && fixes.Count > 0)
+                        {
+                            var fixedCode = RevitMCPBridge2026.AgentFramework.ApiSuggest.ApplyCorrections(attemptCode, fixes);
+                            if (fixedCode != attemptCode)
+                            {
+                                attemptCode = fixedCode;
+                                correctedNote = string.Join(", ", fixes.Select(f => f.ToString()));
+                                continue;
+                            }
+                        }
+                    }
+                    try { errors = RevitMCPBridge2026.AgentFramework.ApiSuggest.Enrich(errors, universe); } catch { }
+                    var err = ResponseBuilder.Error("Compilation failed")
                         .With("diagnostics", errors)
-                        .With("hint", "Fix the named member or type and resend; do not retry the same code. Where a diagnostic ends with 'Did you mean', those are real members of that type.")
-                        .Build();
+                        .With("hint", "Fix the named member or type and resend; do not retry the same code. Where a diagnostic ends with 'Did you mean' or 'Members of', those are real members of that type. Call describeApi(typeName) when unsure.");
+                    if (correctedNote != null) err = err.With("corrected_attempted", correctedNote);
+                    return err.Build();
                 }
 
-                var asm = Assembly.Load(ms.ToArray());
+                var asm = Assembly.Load(assemblyBytes);
                 var type = asm.GetType("__RevitScriptHost__.__Script__");
                 var method = type.GetMethod("Execute", BindingFlags.Public | BindingFlags.Static);
                 var result = method.Invoke(null, new object[] { uiApp, doc });
@@ -310,7 +332,9 @@ namespace __RevitScriptHost__
                 else
                     resultJson = JsonConvert.SerializeObject(result, Formatting.Indented);
 
-                return ResponseBuilder.Success().With("result", resultJson).Build();
+                var ok = ResponseBuilder.Success().With("result", resultJson);
+                if (correctedNote != null) ok = ok.With("corrected", correctedNote + " — the script ran with this member name corrected; use the corrected name from now on.");
+                return ok.Build();
             }
             catch (TargetInvocationException tie)
             {

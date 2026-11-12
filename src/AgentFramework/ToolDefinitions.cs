@@ -388,6 +388,22 @@ Common methods: createWall, placeDoor, placeWindow, createRoom, tagRoom, createS
                         required = new[] { "methodName" }
                     }
                 },
+                // 2026-11-12: the model writes Revit API code from memory and invents member names in the corners.
+                // Looking the type up costs two seconds; a wrong guess costs a compile failure and a full rewrite.
+                new ToolDefinition
+                {
+                    Name = "describeApi",
+                    Description = "Return the REAL public members of a Revit API type from the running Revit: properties with their types, methods with parameter types, enum values. Call this BEFORE writing a script that uses any member you are not certain exists (stairs, curve loops, compound structures, filters, parameters on BuiltInParameter, anything you have not used before in this session). If the type name is wrong it returns the closest real type names. Cheap; never guess a member name instead.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            typeName = new { type = "string", description = "Revit API type name, e.g. StairsRun, CurveLoop, CompoundStructure, BuiltInParameter, ViewPlan" }
+                        },
+                        required = new[] { "typeName" }
+                    }
+                },
                 // Knowledge base tools - load architectural knowledge on demand
                 new ToolDefinition
                 {

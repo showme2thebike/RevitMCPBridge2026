@@ -5485,6 +5485,9 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                         case "writeFile":
                             return HandleWriteFile(parameters);
 
+                        case "describeApi":
+                            return HandleDescribeApi(parameters);
+
                         case "listDirectory":
                             return HandleListDirectory(parameters);
 
@@ -5547,6 +5550,19 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             {
                 return ResponseBuilder.FromException(ex).Build();
             }
+        }
+
+        // 2026-11-12: real Revit API surface by reflection, so the model checks a member instead of guessing it.
+        private string HandleDescribeApi(JObject parameters)
+        {
+            try
+            {
+                var typeName = parameters?["typeName"]?.ToString();
+                if (string.IsNullOrWhiteSpace(typeName)) return JsonConvert.SerializeObject(new { success = false, error = "typeName is required" });
+                var text = RevitMCPBridge2026.AgentFramework.ApiSuggest.Describe(typeName, RevitMCPBridge2026.AgentFramework.ApiSuggest.RevitTypes());
+                return JsonConvert.SerializeObject(new { success = true, typeName, description = text });
+            }
+            catch (Exception ex) { return JsonConvert.SerializeObject(new { success = false, error = ex.Message }); }
         }
 
         private string HandleWriteFile(JObject parameters)
