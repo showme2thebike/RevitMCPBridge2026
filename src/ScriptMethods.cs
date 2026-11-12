@@ -288,8 +288,12 @@ namespace __RevitScriptHost__
                         .Where(d => d.Severity == DiagnosticSeverity.Error)
                         .Select(d => d.ToString())
                         .ToList();
+                    // 2026-11-12: "does not contain a definition" / "could not be found" get the real members or types
+                    // appended by reflection, so the rewrite is a one-word fix instead of another guess (ApiSuggest).
+                    try { errors = RevitMCPBridge2026.AgentFramework.ApiSuggest.Enrich(errors, RevitMCPBridge2026.AgentFramework.ApiSuggest.RevitTypes()); } catch { }
                     return ResponseBuilder.Error("Compilation failed")
                         .With("diagnostics", errors)
+                        .With("hint", "Fix the named member or type and resend; do not retry the same code. Where a diagnostic ends with 'Did you mean', those are real members of that type.")
                         .Build();
                 }
 

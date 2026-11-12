@@ -5130,6 +5130,25 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
         private const int MCPWriteTimeoutMs = 15000; // lock wait + connect + write; a blocked write never recovers on its own
         /// <summary>After this long with no answer from Revit, tell the user Revit is busy with them (dialog, active command).</summary>
         private const int RevitBusyNoticeMs = 10000;
+        // In-flight request (2026-11-12): set once a request has been written to Revit, cleared when Revit answers anything.
+        // A read timeout leaves it set, because Revit is still running that request (scripts of 17-45 min, Barrett 11/11).
+        // A later request that cannot get through then says "Revit is still running the previous script" and returns at
+        // once, instead of retrying the write for 46 s and reporting a connection error the model cannot act on.
+        private static string _inFlightId, _inFlightMethod;
+        private static DateTime _inFlightSince;
+        private static readonly TimeSpan InFlightStaleAfter = TimeSpan.FromMinutes(30);
+        private void ShowRevitStillRunningNotice(string method, int mins)
+        {
+            try
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try { UpdateProgress($"Revit is still running the previous script ({mins} min so far). Nothing else can run until it finishes…"); }
+                    catch { }
+                }));
+            }
+            catch { }
+        }
         private void ShowRevitBusyNotice(string methodName)
         {
             try
@@ -5189,6 +5208,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 ["params"] = parameters ?? new JObject()
             };
             var requestJson = request.ToString(Formatting.None);
+            var myId = Guid.NewGuid().ToString("N");
 
             for (int attempt = 1; attempt <= MaxRetryAttempts; attempt++)
             {
@@ -5236,6 +5256,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                         throw new MCPConnectionException("Write to Revit timed out", null);
                     }
                     var readerCapture = await writeTask;
+                    _inFlightId = myId; _inFlightMethod = methodName; _inFlightSince = DateTime.UtcNow;
 
                     // READ outside the lock with a real timeout via Task.WhenAny.
                     // ReadLine() is blocking — Task.Run puts it on a thread pool thread.
@@ -5265,6 +5286,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                         throw new MCPTimeoutException($"Method '{methodName}' timed out after {timeoutMs}ms");
                     }
                     var response = await readTask;
+                    if (!string.IsNullOrEmpty(response)) _inFlightId = null; // Revit answered: it is free again
 
                     if (string.IsNullOrEmpty(response))
                     {
@@ -5317,6 +5339,18 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 catch (MCPConnectionException connEx)
                 {
                     lastError = connEx.Message;
+                    if (_inFlightId != null && _inFlightId != myId && DateTime.UtcNow - _inFlightSince < InFlightStaleAfter)
+                    {
+                        var mins = Math.Max(1, (int)Math.Round((DateTime.UtcNow - _inFlightSince).TotalMinutes));
+                        ShowRevitStillRunningNotice(_inFlightMethod, mins);
+                        TelemetryService.Track(_bimMonkeyApiKey, "revit_busy", toolName: methodName, metadata: new { in_flight = _inFlightMethod, since_min = mins, attempt });
+                        return JsonConvert.SerializeObject(new
+                        {
+                            success = false,
+                            busy = true,
+                            error = $"Revit is still running the previous request ({_inFlightMethod}, started about {mins} min ago) and cannot take another until it finishes. Wait for it to finish; do not resend that request and do not retry this one yet. If it has been running for many minutes, the script is doing far too much work in one pass — plan a smaller script for after it completes."
+                        });
+                    }
                     TelemetryService.Track(_bimMonkeyApiKey, "pipe_reconnect",
                         toolName: methodName, metadata: new { reason = "write_failed", attempt });
                     if (attempt < MaxRetryAttempts)
