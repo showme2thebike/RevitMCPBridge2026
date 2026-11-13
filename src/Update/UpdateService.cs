@@ -26,6 +26,8 @@ namespace RevitMCPBridge.Update
         public bool AlreadyStaged { get; internal set; }
         /// <summary>True when the automatic background download ran and failed verification; the UI offers a manual retry.</summary>
         public bool AutoDownloadFailed { get; internal set; }
+        /// <summary>True when the last Revit close skipped the install because another Revit.exe was still running (2026-11-13).</summary>
+        public bool DeferredAtLastClose { get; internal set; }
 
         public UpdateOfferedEventArgs(ReleaseManifest manifest, bool required, string? downloadUrl, bool alreadyStaged)
         {
@@ -374,8 +376,12 @@ namespace RevitMCPBridge.Update
             catch (Exception ex) { Log.Warning(ex, "[Update] skip failed"); }
         }
 
+        /// <summary>Set by ReconcileOnStartup when the previous close wrote a 'deferred' record; shown on the staged banner.</summary>
+        public bool LastCloseDeferredInstall { get; private set; }
+
         private void RaiseOffer(UpdateOfferedEventArgs args)
         {
+            if (args.AlreadyStaged && LastCloseDeferredInstall) args.DeferredAtLastClose = true;
             CurrentOffer = args;
             try { UpdateOffered?.Invoke(this, args); }
             catch (Exception ex) { Log.Warning(ex, "[Update] UpdateOffered handler threw"); }
@@ -739,6 +745,9 @@ namespace RevitMCPBridge.Update
                     state.LastShutdown = null;
                     SaveState(state);
                     Telemetry("update_shutdown", new { result = rec.Result, version = rec.Version, atUtc = rec.AtUtc, check = rec.Check });
+                    // Barrett 2026-11-12: closed with a second Revit open -> 'deferred' -> the banner kept promising
+                    // "installs when you close Revit". Remember it so the banner can say what actually has to happen.
+                    LastCloseDeferredInstall = string.Equals(rec.Result, "deferred", StringComparison.Ordinal);
                 }
                 else if (state.Pending != null)
                 {

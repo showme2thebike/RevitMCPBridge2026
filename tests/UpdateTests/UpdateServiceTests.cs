@@ -638,6 +638,34 @@ namespace RevitMCPBridge.UpdateTests
         }
 
         [Fact]
+        public void A_deferred_close_marks_the_next_staged_offer_so_the_banner_can_explain_it()
+        {
+            using var h = new Harness(installed: "v0.4.20261009a");
+            var svc = h.NewService();
+            var staged = Path.Combine(svc.UpdatesDirectory, "v0.4.20261103", "BIM Monkey Setup.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(staged)!);
+            File.WriteAllBytes(staged, new byte[] { 1, 2, 3 });
+            h.SaveState(new UpdateState
+            {
+                Pending = new PendingUpdate
+                {
+                    Version = "v0.4.20261103", Path = staged, Sha256 = new string('c', 64), ManifestVersion = 7,
+                    AllowedSignerThumbprints = new List<string> { ReleaseSigner.RealThumbprint }, SignerSubjectCN = ReleaseSigner.RealCn,
+                },
+                LastShutdown = new ShutdownRecord { Result = "deferred", Version = "v0.4.20261103", AtUtc = DateTimeOffset.UtcNow, Check = "nothing_newer" },
+            });
+            UpdateOfferedEventArgs? offered = null;
+            svc.UpdateOffered += (_, a) => offered = a;
+            svc.ReconcileOnStartup();
+            Assert.True(svc.LastCloseDeferredInstall);
+            var evt = Assert.Single(h.Telemetry, t => t.Event == "update_shutdown");
+            Assert.Equal("deferred", evt.Meta["result"]!.ToString());
+            Assert.NotNull(offered);
+            Assert.True(offered!.AlreadyStaged);
+            Assert.True(offered.DeferredAtLastClose);
+        }
+
+        [Fact]
         public void Startup_with_a_staged_update_and_no_shutdown_record_reports_hook_not_run()
         {
             using var h = new Harness(installed: "v0.4.20261009a");

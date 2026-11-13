@@ -3141,7 +3141,9 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                     var msg = new TextBlock
                     {
                         Text = offer.AlreadyStaged
-                            ? $"Update {m.Version} downloaded and verified. It installs when you close Revit."
+                            ? (offer.DeferredAtLastClose
+                                ? $"Update {m.Version} is downloaded and verified, but it was not installed at your last close because another Revit window was still open. It installs when the last Revit window closes."
+                                : $"Update {m.Version} downloaded and verified. It installs when you close Revit.")
                             : offer.AutoDownloadFailed
                                 ? $"Update {m.Version} could not be downloaded and verified. Try again, or it will retry on the next check."
                                 : required
