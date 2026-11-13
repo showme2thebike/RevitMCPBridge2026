@@ -2404,6 +2404,10 @@ namespace RevitMCPBridge
                 // Unsubscribe from events
                 application.DialogBoxShowing -= OnDialogBoxShowing;
 
+                // 2026-11-13: say the hook began before anything that can hang (observer flushes, pipe stop), so a
+                // missing shutdown record at the next startup means Revit never reached OnShutdown at all.
+                try { RevitMCPBridge.Update.UpdateService.Instance.MarkShutdownBegun(); } catch { }
+
                 // Shutdown ChangeTracker
                 try
                 {

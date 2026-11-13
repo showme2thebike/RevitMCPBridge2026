@@ -638,6 +638,36 @@ namespace RevitMCPBridge.UpdateTests
         }
 
         [Fact]
+        public void MarkShutdownBegun_leaves_a_hook_started_record_that_the_real_decision_overwrites()
+        {
+            using var h = new Harness(installed: "v0.4.20261009a");
+            var svc = h.NewService();
+            svc.MarkShutdownBegun();
+            Assert.Null(h.State().LastShutdown); // nothing staged: nothing to report
+            var staged = Path.Combine(svc.UpdatesDirectory, "v0.4.20261103", "BIM Monkey Setup.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(staged)!);
+            File.WriteAllBytes(staged, new byte[] { 1, 2, 3 });
+            h.SaveState(new UpdateState
+            {
+                Pending = new PendingUpdate
+                {
+                    Version = "v0.4.20261103", Path = staged, Sha256 = new string('c', 64), ManifestVersion = 7,
+                    AllowedSignerThumbprints = new List<string> { ReleaseSigner.RealThumbprint }, SignerSubjectCN = ReleaseSigner.RealCn,
+                }
+            });
+            svc.MarkShutdownBegun();
+            Assert.Equal("hook_started", h.State().LastShutdown!.Result);
+            Assert.Equal("v0.4.20261103", h.State().LastShutdown!.Version);
+            Assert.Equal("verify_failed", svc.TryLaunchPendingOnShutdown());
+            Assert.Equal("verify_failed", h.State().LastShutdown!.Result); // the decision replaces the marker
+            lock (h.Telemetry) h.Telemetry.Clear();
+            h.SaveState(new UpdateState { Pending = h.State().Pending, LastShutdown = new ShutdownRecord { Result = "hook_started", Version = "v0.4.20261103", AtUtc = DateTimeOffset.UtcNow } });
+            h.NewService().ReconcileOnStartup();
+            var evt = Assert.Single(h.Telemetry, t => t.Event == "update_shutdown");
+            Assert.Equal("hook_started", evt.Meta["result"]!.ToString());
+        }
+
+        [Fact]
         public void A_deferred_close_marks_the_next_staged_offer_so_the_banner_can_explain_it()
         {
             using var h = new Harness(installed: "v0.4.20261009a");

@@ -543,6 +543,18 @@ namespace RevitMCPBridge.Update
         /// other Revit.exe is alive (R6), takes the launch mutex and starts the silent installer. Returns a short
         /// status word: none | stale | missing | verify_failed | deferred | busy | launched | error. Never throws.
         /// </summary>
+        /// <summary>
+        /// First thing in OnShutdown (2026-11-13). Writes a 'hook_started' record so the next startup can tell three
+        /// cases apart: no record = Revit died before OnShutdown (crash, Task Manager, hibernate); 'hook_started' =
+        /// OnShutdown began but never reached the install decision (something before it hung or threw); any other
+        /// word = the decision. Barrett 2026-11-12: a 7.5-hour session ended with no record at all.
+        /// </summary>
+        public void MarkShutdownBegun()
+        {
+            try { var v = LoadState().Pending?.Version; if (v != null) RecordShutdown("hook_started", v); }
+            catch (Exception ex) { Log.Warning(ex, "[Update] could not mark shutdown begun"); }
+        }
+
         public string TryLaunchPendingOnShutdown()
         {
             // 2026-11-10: the decision is persisted and reported as `update_shutdown` at the next startup, because
