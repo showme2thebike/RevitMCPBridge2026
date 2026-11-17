@@ -20,6 +20,9 @@ namespace RevitMCPBridge.Voice
         public event Action<double> Level;
         /// <summary>Fired once when the clip reaches MaxClip and recording stops on its own.</summary>
         public event Action AutoStopped;
+        /// <summary>Fired once when VoiceAudio.WarnBefore remains before the clip hits MaxClip.</summary>
+        public event Action<TimeSpan> NearLimit;
+        private bool _warned;
 
         public bool IsRecording { get; private set; }
         public static bool HasMicrophone => WaveInEvent.DeviceCount > 0;
@@ -60,7 +63,7 @@ namespace RevitMCPBridge.Voice
             lock (_gate)
             {
                 if (IsRecording) return;
-                _chunks.Clear(); _samples = 0; Peak = 0; MaxWindowRms = 0;
+                _chunks.Clear(); _samples = 0; Peak = 0; MaxWindowRms = 0; _warned = false;
                 var dev = PickDevice();
                 DeviceName = dev.Name;
                 _wave = new WaveInEvent { DeviceNumber = dev.Index, WaveFormat = new WaveFormat(VoiceAudio.SampleRate, 16, 1), BufferMilliseconds = 100 };
@@ -73,13 +76,16 @@ namespace RevitMCPBridge.Voice
         private void OnData(object sender, WaveInEventArgs e)
         {
             var f = VoiceAudio.Pcm16ToFloat(e.Buffer, e.BytesRecorded);
-            bool full;
+            bool full, warn;
             lock (_gate)
             {
                 if (!IsRecording) return;
                 _chunks.Add(f); _samples += f.Length;
                 full = _samples >= VoiceAudio.MaxSamples;
+                warn = !_warned && !full && _samples >= VoiceAudio.WarnSamples;
+                if (warn) _warned = true;
             }
+            if (warn) { try { NearLimit?.Invoke(VoiceAudio.MaxClip - TimeSpan.FromSeconds((double)_samples / VoiceAudio.SampleRate)); } catch { } }
             var rms = VoiceAudio.Rms(f); // one 100 ms buffer = one window
             var peak = VoiceAudio.Peak(f);
             lock (_gate) { if (rms > MaxWindowRms) MaxWindowRms = rms; if (peak > Peak) Peak = peak; }

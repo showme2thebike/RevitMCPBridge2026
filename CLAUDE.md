@@ -88,6 +88,16 @@ BIM_MONKEY_API_KEY=bm_...   # firm-specific key in CLAUDE.md in Documents\BimMon
 - All document modifications must be in Transaction blocks
 - Restart Revit after deploying new DLL
 
+## Pipe transport (src/Transport/PipeRpc.cs, since v0.4.20261117a)
+Pure .NET, linked into tests/UpdateTests and exercised with REAL named pipes (tests/UpdateTests/PipeRpcTests.cs).
+Rules, each one a 11/16 post-mortem item: (1) the chat panel opens ONE connection per request and never writes to a
+pipe with a response pending; (2) every pipe is PipeOptions.Asynchronous so cancellation/Dispose actually aborts
+I/O; (3) client connect and response waits are bounded separately; (4) the server bounds its response write (30 s)
+and drops a client that stopped reading; (5) MCPServer.Stop() disposes the standby AND every live connection.
+`ping` is answered on the server thread and carries `revitExecuting` + `queueDepth`; the panel uses that to verify
+its in-flight write guard before refusing a request as busy. Do not reintroduce a shared client stream or a lock
+around pipe I/O; add a PipeRpcTests case for any new failure shape first.
+
 ## Named Pipe Keepalive
 The pipe can drop silently after ~15-20 sequential writes during heavy generation runs.
 Call `bim_monkey_ping()` every 10-15 MCP operations (e.g. inside `createSheet` / `placeViewOnSheet` loops) to keep the connection alive. The `ping` method returns immediately with no Revit API side effects — it is safe to call at any frequency.

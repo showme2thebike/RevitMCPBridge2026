@@ -79,11 +79,20 @@ namespace RevitMCPBridge2026.AgentFramework
         /// <summary>Reflection names carry a generic arity suffix (List`1); scripts and diagnostics do not.</summary>
         static string TypeBare(Type t) { var n = t.Name; var i = n.IndexOf('`'); return i >= 0 ? n.Substring(0, i) : n; }
 
+        // 2026-11-16: the compiler names primitives by their C# keyword ('double' does not contain a definition for
+        // 'toString'), while the universe holds System.Double. Without this map the case-fix never fired on primitives.
+        static readonly Dictionary<string, string> KeywordAliases = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["bool"] = "Boolean", ["byte"] = "Byte", ["sbyte"] = "SByte", ["char"] = "Char", ["decimal"] = "Decimal",
+            ["double"] = "Double", ["float"] = "Single", ["int"] = "Int32", ["uint"] = "UInt32", ["long"] = "Int64",
+            ["ulong"] = "UInt64", ["short"] = "Int16", ["ushort"] = "UInt16", ["object"] = "Object", ["string"] = "String",
+        };
+
         static string BareName(string s)
         {
             var i = s.LastIndexOf('.'); if (i >= 0) s = s.Substring(i + 1);
             var g = s.IndexOf('<'); if (g >= 0) s = s.Substring(0, g);
-            return s;
+            return KeywordAliases.TryGetValue(s, out var clr) ? clr : s;
         }
 
         static IEnumerable<string> MemberNames(Type t)

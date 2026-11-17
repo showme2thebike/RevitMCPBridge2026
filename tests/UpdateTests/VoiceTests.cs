@@ -36,7 +36,10 @@ namespace RevitMCPBridge.UpdateTests
             Assert.Empty(VoiceAudio.Join(new List<float[]>()));
             var big = new float[VoiceAudio.MaxSamples + 5000];
             Assert.Equal(VoiceAudio.MaxSamples, VoiceAudio.Join(new[] { big }).Length);
-            Assert.Equal(60.0, VoiceAudio.Duration(new float[VoiceAudio.MaxSamples]).TotalSeconds, 3);
+            Assert.Equal(VoiceAudio.MaxClip.TotalSeconds, VoiceAudio.Duration(new float[VoiceAudio.MaxSamples]).TotalSeconds, 3);
+            Assert.Equal(120.0, VoiceAudio.MaxClip.TotalSeconds, 3);                 // 2026-11-16: 60 s cut a dictation off
+            Assert.True(VoiceAudio.WarnSamples < VoiceAudio.MaxSamples && VoiceAudio.WarnSamples > VoiceAudio.MaxSamples / 2);
+            Assert.Contains("2-minute limit", VoiceAudio.AutoStopMessage);
         }
 
         [Fact]

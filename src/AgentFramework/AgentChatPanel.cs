@@ -75,6 +75,7 @@ namespace RevitMCPBridge2026.AgentFramework
         private RevitMCPBridge.Voice.VoiceTranscriber _voiceTranscriber;
         private string _voiceModelPath;
         private DateTime _voiceRecordStart;
+        private DateTime? _voiceLimitAt;   // set by VoiceRecorder.NearLimit; read by the level-bar tick
         // First-party model names the firm's Private AI cloud can serve
         // (normalized, from inference-config). null = direct Anthropic — all
         // picker models available. Used to badge unavailable models honestly.
@@ -162,11 +163,19 @@ namespace RevitMCPBridge2026.AgentFramework
             { "claude-haiku-4-5-20251001", "Haiku 4.5 — Fast & inexpensive ($1/$5 per 1M tokens)" },
         };
 
-        // Persistent MCP connection
-        private NamedPipeClientStream _mcpPipe;
-        private StreamReader _mcpReader;
-        private StreamWriter _mcpWriter;
-        private readonly object _pipeLock = new object();
+        // Pipe transport (2026-11-16): one connection per request, see Transport/PipeRpc.cs. No shared stream, no lock.
+        private static readonly TimeSpan MCPConnectTimeout = TimeSpan.FromSeconds(5);
+        private static readonly TimeSpan MCPProbeTimeout = TimeSpan.FromSeconds(3);
+        private static string PipeName =>
+#if REVIT2024
+            "RevitMCPBridge2024";
+#elif REVIT2025
+            "RevitMCPBridge2025";
+#elif REVIT2027
+            "RevitMCPBridge2027";
+#else
+            "RevitMCPBridge2026";
+#endif
 
         // Feedback tracking - what was the last action for thumbs up/down
         private string _lastUserMessage;
@@ -1571,12 +1580,17 @@ namespace RevitMCPBridge2026.AgentFramework
                     if (firstDownload) TelemetryService.Track(_bimMonkeyApiKey, "voice_model_ready", metadata: new { model = info.Name });
                 }
                 _voiceRecorder = new RevitMCPBridge.Voice.VoiceRecorder();
-                _voiceRecorder.AutoStopped += () => Dispatcher.BeginInvoke(new Action(async () => { if (_voiceState == VoiceState.Recording) await StopVoiceAndTranscribeAsync(); }));
+                _voiceRecorder.AutoStopped += () => Dispatcher.BeginInvoke(new Action(async () => { if (_voiceState == VoiceState.Recording) await StopVoiceAndTranscribeAsync(autoStopped: true); }));
+                // The level bar rewrites the status line every 100 ms, so the countdown is folded into it rather than written once.
+                _voiceLimitAt = null;
+                _voiceRecorder.NearLimit += left => { _voiceLimitAt = DateTime.UtcNow + left; };
                 // Live level bar: the one thing that tells the user whether the mic is hearing them at all.
                 _voiceRecorder.Level += lvl => Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    if (_voiceState == VoiceState.Recording && _statusText != null)
-                        _statusText.Text = $"Listening {RevitMCPBridge.Voice.VoiceAudio.LevelBar(lvl)}  click Stop or press Esc";
+                    if (_voiceState != VoiceState.Recording || _statusText == null) return;
+                    var limitAt = _voiceLimitAt;
+                    var tail = limitAt.HasValue ? $"  {Math.Max(0, (int)Math.Ceiling((limitAt.Value - DateTime.UtcNow).TotalSeconds))} s left before the clip stops" : "  click Stop or press Esc";
+                    _statusText.Text = $"Listening {RevitMCPBridge.Voice.VoiceAudio.LevelBar(lvl)}{tail}";
                 }));
                 _voiceRecorder.Start();
                 _voiceRecordStart = DateTime.UtcNow;
@@ -1604,7 +1618,7 @@ namespace RevitMCPBridge2026.AgentFramework
             if (_statusText != null) _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
         }
 
-        private async Task StopVoiceAndTranscribeAsync()
+        private async Task StopVoiceAndTranscribeAsync(bool autoStopped = false)
         {
             if (_voiceState != VoiceState.Recording) return;
             _voiceState = VoiceState.Transcribing;
@@ -1659,6 +1673,7 @@ namespace RevitMCPBridge2026.AgentFramework
             TelemetryService.Track(_bimMonkeyApiKey, "voice_input",
                 durationMs: sw.ElapsedMilliseconds, success: !string.IsNullOrEmpty(text),
                 metadata: new { record_ms = recordMs, transcribe_ms = sw.ElapsedMilliseconds, chars = text.Length, speech, peak = Math.Round(peak, 4), max_rms = Math.Round(maxRms, 4), device });
+            if (autoStopped) AddSystemMessage(RevitMCPBridge.Voice.VoiceAudio.AutoStopMessage);
             _voiceState = VoiceState.Idle;
             SetMic("🎤", false);
             if (_statusText != null) _statusText.Text = $"Connected ({GetModelDisplayName(_selectedModel)})";
@@ -4226,63 +4241,11 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             return regularCost + cacheReadCost + cacheWriteCost;
         }
 
-        private void EnsureMCPConnection()
-        {
-            // Must be called under _pipeLock
-            if (_mcpPipe == null || !_mcpPipe.IsConnected)
-            {
-                try { _mcpWriter?.Dispose(); } catch { }
-                try { _mcpReader?.Dispose(); } catch { }
-                try { _mcpPipe?.Dispose();   } catch { }
-
-#if REVIT2024
-                _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2024", PipeDirection.InOut);
-#elif REVIT2025
-                _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2025", PipeDirection.InOut);
-#elif REVIT2026
-                _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2026", PipeDirection.InOut);
-#elif REVIT2027
-                _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2027", PipeDirection.InOut);
-#else
-                _mcpPipe = new NamedPipeClientStream(".", "RevitMCPBridge2026", PipeDirection.InOut);
-#endif
-                _mcpPipe.Connect(5000);
-                _mcpWriter = new StreamWriter(_mcpPipe) { AutoFlush = true };
-                _mcpReader = new StreamReader(_mcpPipe);
-            }
-        }
-
-        /// <summary>
-        /// Force-close pipe streams WITHOUT acquiring _pipeLock.
-        /// If a thread is blocked in ReadLine() inside lock(_pipeLock), disposing the
-        /// streams here causes ReadLine() to throw IOException and release the lock.
-        /// </summary>
-        private void ForceClosePipe()
-        {
-            var pipe   = _mcpPipe;
-            var writer = _mcpWriter;
-            var reader = _mcpReader;
-            _mcpPipe   = null;
-            _mcpWriter = null;
-            _mcpReader = null;
-            try { writer?.Dispose(); } catch { }
-            try { reader?.Dispose(); } catch { }
-            try { pipe?.Dispose();   } catch { }
-        }
-
         private void DisconnectMCP()
         {
             _proactiveTimer?.Stop();
             SavePreferences();
-
-            // Force-close WITHOUT the lock — if a thread is stuck in ReadLine() inside
-            // lock(_pipeLock), this causes it to throw IOException and release the lock.
-            // Acquiring the lock directly here would deadlock in that scenario.
-            ForceClosePipe();
-
-            // Wait for any thread blocked in the lock to exit
-            lock (_pipeLock) { }
-
+            // Nothing to close on the pipe side: every request owns and disposes its own connection.
             try { _playwright?.Dispose(); _playwright = null; } catch { }
             _playwrightAuthed = false;
         }
@@ -5129,7 +5092,6 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
         private const int MaxRetryAttempts = 3;
         private const int InitialRetryDelayMs = 500;
         private const int MCPTimeoutMs = 30000;
-        private const int MCPWriteTimeoutMs = 15000; // lock wait + connect + write; a blocked write never recovers on its own
         /// <summary>After this long with no answer from Revit, tell the user Revit is busy with them (dialog, active command).</summary>
         private const int RevitBusyNoticeMs = 10000;
         // In-flight request (2026-11-12): set once a request has been written to Revit, cleared when Revit answers anything.
@@ -5185,7 +5147,8 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
         {
             "executeRevitScript", "runSavedScript", "executePlan", "executeBatch", "verifyBatch",
             "importSvgToDetail", "loadFamily", "loadAutodeskFamily", "generateVicinityMap",
-            "analyzeRedlines", "createSheet", "placeViewOnSheet", "synthesize", "getLevels"
+            "analyzeRedlines", "createSheet", "placeViewOnSheet", "synthesize", "getLevels",
+            "captureViewport", "captureViewportToBase64", "analyzeView"
         };
         private static readonly string[] ReadOnlyPrefixes =
         {
@@ -5198,8 +5161,79 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
         private static bool IsWriteMethod(string methodName)
             => !ReadOnlyPrefixes.Any(p => methodName.StartsWith(p, StringComparison.OrdinalIgnoreCase));
 
+        // ── In-flight write guard ───────────────────────────────────────────────────────────────────────────────
+        // Only WRITES are tracked. Set when a write is handed to Revit, cleared when Revit answers anything (requests run
+        // in order on Revit's thread, so a later answer proves the earlier write finished). Kept set when the panel or
+        // the server stopped waiting for a write, because the script is usually still running (17-45 min scripts,
+        // 11/11) and re-sending it would run it twice (11/12). Before the guard refuses a request it asks the server —
+        // not Revit — whether Revit's thread is actually busy (ping carries revitExecuting + queueDepth), so a guard
+        // left behind by a capture that never answered clears itself on the next call instead of after 30 minutes.
+        private static readonly object _inFlightGate = new object();
+        private static void SetInFlight(string id, string method) { lock (_inFlightGate) { _inFlightId = id; _inFlightMethod = method; _inFlightSince = DateTime.UtcNow; } }
+        private static void ClearInFlight() { lock (_inFlightGate) { _inFlightId = null; _inFlightMethod = null; } }
+        private static bool TryGetInFlight(out string method, out int mins)
+        {
+            lock (_inFlightGate)
+            {
+                method = _inFlightMethod; mins = 0;
+                if (_inFlightId == null) return false;
+                var age = DateTime.UtcNow - _inFlightSince;
+                if (age >= InFlightStaleAfter) { _inFlightId = null; _inFlightMethod = null; return false; }
+                mins = Math.Max(1, (int)Math.Round(age.TotalMinutes));
+                return true;
+            }
+        }
+
+        private enum RevitProbe { Idle, Busy, Unreachable }
+
         /// <summary>
-        /// Execute MCP method with automatic retry and enhanced error handling
+        /// Server-side answer (no Revit thread involved). Idle = queue empty and nothing executing; Busy = Revit is
+        /// running or holding a request; Unreachable = the server itself did not answer (not listening, or an older
+        /// build whose ping has no fields — treated as unknown, so the guard is dropped rather than trusted).
+        /// </summary>
+        private async Task<RevitProbe> ProbeRevitAsync()
+        {
+            var r = await RevitMCPBridge.Transport.PipeRpcClient.RequestAsync(PipeName, "{\"method\":\"ping\",\"params\":{}}", MCPConnectTimeout, MCPProbeTimeout);
+            if (r.Outcome != RevitMCPBridge.Transport.PipeRpcOutcome.Ok || string.IsNullOrEmpty(r.Response)) return RevitProbe.Unreachable;
+            try
+            {
+                var j = JObject.Parse(r.Response);
+                var executing = j["revitExecuting"]?.ToObject<bool?>();
+                var depth = j["queueDepth"]?.ToObject<int?>();
+                if (executing == null || depth == null) return RevitProbe.Unreachable;
+                return executing == false && depth == 0 ? RevitProbe.Idle : RevitProbe.Busy;
+            }
+            catch { return RevitProbe.Unreachable; }
+        }
+
+        /// <summary>
+        /// Methods the server answers on its own thread without touching Revit's queue. Their answers prove nothing
+        /// about an earlier write, so they never clear the in-flight guard.
+        /// </summary>
+        private static readonly HashSet<string> ServerInlineMethods = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ping", "getVersion", "getConfiguration", "reloadConfiguration", "getInstructions", "listMethods", "listAllMethods",
+            "getMethodInfo", "getProjectInfo", "getModelInfo", "getOpenDocuments"
+        };
+
+        private static string BusyResponse(string busyMethod, int mins) => JsonConvert.SerializeObject(new
+        {
+            success = false,
+            busy = true,
+            error = $"Revit is still running the previous request ({busyMethod}, started about {mins} min ago) and cannot take another until it finishes. Wait for it to finish; do not resend that request and do not retry this one yet. If it has been running for many minutes, the script is doing far too much work in one pass — plan a smaller script for after it completes."
+        });
+
+        private static string WriteNoResendResponse(string methodName, int timeoutSec) => JsonConvert.SerializeObject(new
+        {
+            success = false,
+            timedOut = true,
+            error = RetryPolicy.WriteTimedOutMessage(methodName, timeoutSec)
+        });
+
+        /// <summary>
+        /// Execute an MCP method over the pipe with bounded waits and the no-resend rule for writes.
+        /// 2026-11-16: rewritten on Transport/PipeRpc.cs after the Snap-capture deadlock. One connection per request,
+        /// so a request that Revit is slow to answer can never block the next one, and nothing here holds a lock.
         /// </summary>
         private async Task<string> ExecuteMCPWithRetryAsync(string methodName, JObject parameters)
         {
@@ -5211,209 +5245,120 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             };
             var requestJson = request.ToString(Formatting.None);
             var myId = Guid.NewGuid().ToString("N");
+            var isWrite = IsWriteMethod(methodName);
+            var timeoutMs = MCPTimeoutFor(methodName);
 
             for (int attempt = 1; attempt <= MaxRetryAttempts; attempt++)
             {
-                try
+                // 1. Busy guard, verified against the server before it is believed.
+                if (TryGetInFlight(out var busyMethod, out var busyMins))
                 {
-                    // WRITE under lock on a thread pool thread — Connect(5000) and WriteLine
-                    // are blocking; running on STA/UI thread causes "Not Responding".
-                    // 10/9/2026 (Barrett, 1006d): a write into a half-dead pipe — the server
-                    // had restarted on a document open and the old server end stopped
-                    // reading — blocked here forever. Nothing timed out, nothing was logged,
-                    // and every later call waited on _pipeLock behind it until Revit was
-                    // restarted. Bound both the lock wait and the connect+write; on either
-                    // timeout dispose the pipe (which unblocks the stuck write) and retry
-                    // with a fresh connection.
-                    var writeTask = Task.Run(() =>
-                    {
-                        if (!System.Threading.Monitor.TryEnter(_pipeLock, MCPWriteTimeoutMs))
-                            throw new MCPConnectionException("Pipe is busy with a stuck request", null);
-                        try
-                        {
-                            try
-                            {
-                                EnsureMCPConnection();
-                                _mcpWriter.WriteLine(requestJson);
-                                return _mcpReader;
-                            }
-                            catch (IOException ioEx)
-                            {
-                                ForceClosePipe();
-                                throw new MCPConnectionException("Write failed", ioEx);
-                            }
-                            catch (TimeoutException tEx) // Connect(5000) when no server is listening
-                            {
-                                ForceClosePipe();
-                                throw new MCPConnectionException("Revit's BIM Monkey server is not listening", tEx);
-                            }
-                        }
-                        finally { System.Threading.Monitor.Exit(_pipeLock); }
-                    });
-                    if (await Task.WhenAny(writeTask, Task.Delay(MCPWriteTimeoutMs)) != writeTask)
-                    {
-                        ForceClosePipe(); // faults the blocked WriteLine so the lock is released
-                        TelemetryService.Track(_bimMonkeyApiKey, "quality_failure",
-                            toolName: methodName, metadata: new { reason = "write_timeout", attempt });
-                        throw new MCPConnectionException("Write to Revit timed out", null);
-                    }
-                    var readerCapture = await writeTask;
-                    _inFlightId = myId; _inFlightMethod = methodName; _inFlightSince = DateTime.UtcNow;
-
-                    // READ outside the lock with a real timeout via Task.WhenAny.
-                    // ReadLine() is blocking — Task.Run puts it on a thread pool thread.
-                    // On timeout, ForceClosePipe() disposes the stream causing ReadLine()
-                    // to throw IOException so the orphaned task completes (exception ignored).
-                    var readTask    = Task.Run(() => readerCapture?.ReadLine());
-                    var timeoutMs   = MCPTimeoutFor(methodName);
-                    var timeoutTask = Task.Delay(timeoutMs);
-                    // 2026-11-11 (Barrett, "BC has been painfully slow today"): six requests sat 6-20 minutes before Revit
-                    // ran them (the script itself took 1-2 s), 81 minutes in one day. Revit services our external event only
-                    // when it is idle at the top level; an open dialog, sketch mode, the family editor or a long regen holds
-                    // the request. We cannot shorten that, but we can stop it being silent: after RevitBusyNoticeMs say so
-                    // in the progress line, and record the wait so it is a number in the weekly review.
-                    var waitSw      = System.Diagnostics.Stopwatch.StartNew();
-                    var noticeTask  = Task.Delay(RevitBusyNoticeMs);
-                    var winner      = await Task.WhenAny(readTask, timeoutTask, noticeTask);
-                    if (winner == noticeTask)
-                    {
-                        ShowRevitBusyNotice(methodName);
-                        winner = await Task.WhenAny(readTask, timeoutTask);
-                        TelemetryService.Track(_bimMonkeyApiKey, "revit_wait", toolName: methodName, durationMs: waitSw.ElapsedMilliseconds,
-                            metadata: new { method = methodName, outcome = winner == readTask ? "answered" : "timeout", notice_after_ms = RevitBusyNoticeMs });
-                    }
-                    if (winner == timeoutTask)
-                    {
-                        ForceClosePipe();
-                        throw new MCPTimeoutException($"Method '{methodName}' timed out after {timeoutMs}ms");
-                    }
-                    var response = await readTask;
-                    if (!string.IsNullOrEmpty(response)) _inFlightId = null; // Revit answered: it is free again
-
-                    if (string.IsNullOrEmpty(response))
-                    {
-                        // Empty response - likely connection issue
-                        DisconnectMCP();
-                        lastError = "Empty response from MCP server";
-
-                        if (attempt < MaxRetryAttempts)
-                        {
-                            await Task.Delay(InitialRetryDelayMs * attempt);
-                            continue;
-                        }
-                    }
+                    var probe = await ProbeRevitAsync();
+                    if (probe != RevitProbe.Busy) ClearInFlight(); // Idle: it finished. Unreachable: let the request itself report why.
                     else
                     {
-                        // Got a response - check if it's an error response
+                        ShowRevitStillRunningNotice(busyMethod, busyMins);
+                        TelemetryService.Track(_bimMonkeyApiKey, "revit_busy", toolName: methodName, metadata: new { in_flight = busyMethod, since_min = busyMins, attempt });
+                        return BusyResponse(busyMethod, busyMins);
+                    }
+                }
+
+                // 2. Send on a fresh connection. The transport returns within connect + response timeout, always.
+                if (isWrite) SetInFlight(myId, methodName);
+                var waitSw = System.Diagnostics.Stopwatch.StartNew();
+                var reqTask = RevitMCPBridge.Transport.PipeRpcClient.RequestAsync(PipeName, requestJson, MCPConnectTimeout, TimeSpan.FromMilliseconds(timeoutMs));
+                // 2026-11-11 ("BC has been painfully slow today"): Revit services our external event only when it is idle at the
+                // top level; a dialog, sketch mode or a long regen holds the request. Say so after RevitBusyNoticeMs and record
+                // the wait so it is a number in the weekly review.
+                if (await Task.WhenAny(reqTask, Task.Delay(RevitBusyNoticeMs)) != reqTask)
+                {
+                    ShowRevitBusyNotice(methodName);
+                    var waited = await reqTask;
+                    TelemetryService.Track(_bimMonkeyApiKey, "revit_wait", toolName: methodName, durationMs: waitSw.ElapsedMilliseconds,
+                        metadata: new { method = methodName, outcome = waited.Outcome == RevitMCPBridge.Transport.PipeRpcOutcome.Ok ? "answered" : "timeout", notice_after_ms = RevitBusyNoticeMs });
+                }
+                var r = await reqTask;
+
+                switch (r.Outcome)
+                {
+                    case RevitMCPBridge.Transport.PipeRpcOutcome.Ok:
+                    {
+                        if (!ServerInlineMethods.Contains(methodName)) ClearInFlight(); // Revit answered: whatever ran before this is finished.
+                        var response = r.Response;
+                        if (string.IsNullOrEmpty(response))
+                        {
+                            lastError = "Empty response from MCP server";
+                            if (attempt < MaxRetryAttempts) { await Task.Delay(InitialRetryDelayMs * attempt); continue; }
+                            break;
+                        }
                         try
                         {
                             var parsed = JObject.Parse(response);
                             if (parsed["success"]?.ToObject<bool>() == false)
                             {
                                 var error = parsed["error"]?.ToString() ?? "Unknown error";
-
-                                // Governance denials are policy decisions, never transient —
-                                // exactly one attempt, no retry (§11 polish item).
-                                if (parsed["errorCode"]?.ToString() == "POLICY_DENIED")
-                                {
-                                    return response;
-                                }
-
-                                // 2026-11-12: a server-side TIMEOUT cancels only the QUEUED action; a script already running
-                                // on the Revit thread finishes anyway. Re-sending a write after it ran Barrett's long scripts
-                                // twice (see RetryPolicy). Writes are never re-sent after a timeout; reads still are.
+                                // Governance denials are policy decisions, never transient — exactly one attempt, no retry.
+                                if (parsed["errorCode"]?.ToString() == "POLICY_DENIED") return response;
+                                // 2026-11-12: a server-side TIMEOUT cancels only the QUEUED action; a script already running on the
+                                // Revit thread finishes anyway. Writes are never re-sent after a timeout; reads still are.
                                 var errorCode = parsed["errorCode"]?.ToString();
-                                if (RetryPolicy.IsServerTimeout(errorCode, error) && IsWriteMethod(methodName))
+                                if (RetryPolicy.IsServerTimeout(errorCode, error) && isWrite)
                                 {
-                                    var timeoutSec = (parsed["timeoutMs"]?.ToObject<int?>() ?? MCPTimeoutFor(methodName)) / 1000;
+                                    SetInFlight(myId, methodName); // it may still be running: guard the next write
+                                    var timeoutSec = (parsed["timeoutMs"]?.ToObject<int?>() ?? timeoutMs) / 1000;
                                     TelemetryService.Track(_bimMonkeyApiKey, "write_timeout", toolName: methodName,
                                         metadata: new { source = "server", attempt, timeout_s = timeoutSec, error_code = errorCode });
-                                    return JsonConvert.SerializeObject(new
-                                    {
-                                        success = false,
-                                        timedOut = true,
-                                        error = RetryPolicy.WriteTimedOutMessage(methodName, timeoutSec)
-                                    });
+                                    return WriteNoResendResponse(methodName, timeoutSec);
                                 }
-
-                                // Don't retry method-level errors (they'll fail again)
-                                if (!IsRetryableError(error))
-                                {
-                                    return response; // Return the error response as-is
-                                }
-
+                                if (!IsRetryableError(error)) return response; // deterministic: it will fail the same way again
                                 lastError = error;
-                                if (attempt < MaxRetryAttempts)
-                                {
-                                    await Task.Delay(InitialRetryDelayMs * attempt);
-                                    continue;
-                                }
+                                if (attempt < MaxRetryAttempts) { await Task.Delay(InitialRetryDelayMs * attempt); continue; }
                             }
                         }
-                        catch { } // Not valid JSON, return as-is
-
+                        catch { } // not JSON: hand it back as-is
                         return response;
                     }
-                }
-                catch (MCPConnectionException connEx)
-                {
-                    lastError = connEx.Message;
-                    if (_inFlightId != null && _inFlightId != myId && DateTime.UtcNow - _inFlightSince < InFlightStaleAfter)
+                    case RevitMCPBridge.Transport.PipeRpcOutcome.Timeout:
                     {
-                        var mins = Math.Max(1, (int)Math.Round((DateTime.UtcNow - _inFlightSince).TotalMinutes));
-                        ShowRevitStillRunningNotice(_inFlightMethod, mins);
-                        TelemetryService.Track(_bimMonkeyApiKey, "revit_busy", toolName: methodName, metadata: new { in_flight = _inFlightMethod, since_min = mins, attempt });
-                        return JsonConvert.SerializeObject(new
+                        TelemetryService.Track(_bimMonkeyApiKey, "pipe_reconnect", toolName: methodName, metadata: new { reason = "read_timeout", attempt, write = isWrite });
+                        if (isWrite)
                         {
-                            success = false,
-                            busy = true,
-                            error = $"Revit is still running the previous request ({_inFlightMethod}, started about {mins} min ago) and cannot take another until it finishes. Wait for it to finish; do not resend that request and do not retry this one yet. If it has been running for many minutes, the script is doing far too much work in one pass — plan a smaller script for after it completes."
-                        });
+                            // Still queued or running in Revit; re-sending would run it twice. The guard stays set.
+                            TelemetryService.Track(_bimMonkeyApiKey, "write_timeout", toolName: methodName, metadata: new { source = "panel", attempt, timeout_s = timeoutMs / 1000 });
+                            return WriteNoResendResponse(methodName, timeoutMs / 1000);
+                        }
+                        lastError = $"'{methodName}' did not answer within {timeoutMs / 1000} s";
+                        if (attempt < MaxRetryAttempts) { await Task.Delay(InitialRetryDelayMs * attempt * 2); continue; }
+                        break;
                     }
-                    TelemetryService.Track(_bimMonkeyApiKey, "pipe_reconnect",
-                        toolName: methodName, metadata: new { reason = "write_failed", attempt });
-                    if (attempt < MaxRetryAttempts)
+                    case RevitMCPBridge.Transport.PipeRpcOutcome.ConnectFailed:
                     {
-                        await Task.Delay(InitialRetryDelayMs * attempt);
-                        continue;
+                        if (isWrite) ClearInFlight(); // it never reached Revit
+                        TelemetryService.Track(_bimMonkeyApiKey, "pipe_reconnect", toolName: methodName, metadata: new { reason = "connect_failed", attempt, write = isWrite });
+                        lastError = "Revit's BIM Monkey server is not listening (restart it from the BIM Monkey ribbon, or reopen the document)";
+                        if (attempt < MaxRetryAttempts) { await Task.Delay(InitialRetryDelayMs * attempt); continue; }
+                        break;
                     }
-                }
-                catch (MCPTimeoutException timeoutEx)
-                {
-                    lastError = timeoutEx.Message;
-                    TelemetryService.Track(_bimMonkeyApiKey, "pipe_reconnect",
-                        toolName: methodName, metadata: new { reason = "read_timeout", attempt, write = IsWriteMethod(methodName) });
-                    if (IsWriteMethod(methodName))
-                        TelemetryService.Track(_bimMonkeyApiKey, "write_timeout", toolName: methodName,
-                            metadata: new { source = "panel", attempt, timeout_s = MCPTimeoutFor(methodName) / 1000 });
-                    // A write that timed out is still queued in Revit and usually
-                    // completes. Re-sending it would run it twice (duplicate outlets,
-                    // sheets, views). Hand the model the facts instead of retrying.
-                    if (IsWriteMethod(methodName))
+                    case RevitMCPBridge.Transport.PipeRpcOutcome.WriteFailed:
+                    case RevitMCPBridge.Transport.PipeRpcOutcome.Closed:
                     {
-                        return JsonConvert.SerializeObject(new
+                        TelemetryService.Track(_bimMonkeyApiKey, "pipe_reconnect", toolName: methodName, metadata: new { reason = r.Outcome == RevitMCPBridge.Transport.PipeRpcOutcome.WriteFailed ? "write_failed" : "closed", attempt, write = isWrite, delivered = r.Delivered });
+                        if (isWrite && r.Delivered)
                         {
-                            success = false,
-                            timedOut = true,
-                            error = $"'{methodName}' did not answer within {MCPTimeoutFor(methodName) / 1000} s. Revit may still be running it and the change may already be applied. Do NOT send the same call again; first read the model (for example query the elements or sheets you expected) and only re-run if the change is genuinely missing."
-                        });
+                            // The server dropped the connection after taking the request (a restart on document open, or it gave
+                            // up writing the answer). The action may have run: same rule as a timeout.
+                            return WriteNoResendResponse(methodName, timeoutMs / 1000);
+                        }
+                        if (isWrite) ClearInFlight();
+                        lastError = r.Error?.Message ?? "Connection to Revit closed";
+                        if (attempt < MaxRetryAttempts) { await Task.Delay(InitialRetryDelayMs * attempt); continue; }
+                        break;
                     }
-                    // Reads are safe to retry; Revit was probably busy.
-                    if (attempt < MaxRetryAttempts)
-                    {
-                        await Task.Delay(InitialRetryDelayMs * attempt * 2);
-                        continue;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    DisconnectMCP();
-                    lastError = ex.Message;
-                    if (attempt < MaxRetryAttempts)
-                    {
-                        await Task.Delay(InitialRetryDelayMs * attempt);
-                        continue;
-                    }
+                    case RevitMCPBridge.Transport.PipeRpcOutcome.Cancelled:
+                        if (isWrite) ClearInFlight();
+                        lastError = "Request cancelled";
+                        attempt = MaxRetryAttempts;
+                        break;
                 }
             }
 
@@ -5428,9 +5373,6 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             });
         }
 
-        /// <summary>
-        /// Check if an error is retryable (transient) vs permanent
-        /// </summary>
         private bool IsRetryableError(string error)
         {
             if (string.IsNullOrEmpty(error)) return true;
@@ -5478,16 +5420,6 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             return "If the problem persists, try restarting the MCP server from the Revit ribbon.";
         }
 
-        // Custom exception types for better error handling
-        private class MCPConnectionException : Exception
-        {
-            public MCPConnectionException(string message, Exception inner = null) : base(message, inner) { }
-        }
-
-        private class MCPTimeoutException : Exception
-        {
-            public MCPTimeoutException(string message) : base(message) { }
-        }
 
         /// <summary>
         /// Handle file operation tools locally (no MCP needed)

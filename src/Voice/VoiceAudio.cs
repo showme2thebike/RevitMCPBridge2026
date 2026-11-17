@@ -34,7 +34,15 @@ namespace RevitMCPBridge.Voice
 
         public const int SampleRate = 16000;
         /// <summary>Longest clip we transcribe. A spoken prompt is 5–30 s; anything longer is a forgotten mic.</summary>
-        public static readonly TimeSpan MaxClip = TimeSpan.FromSeconds(60);
+        // 2026-11-16: 60 s cut Barrett off mid-dictation with no warning (a 942-char request). Two minutes covers a full
+        // spoken brief; the panel warns at WarnBefore remaining and says what happened when the cap stops the clip.
+        public static readonly TimeSpan MaxClip = TimeSpan.FromSeconds(120);
+        /// <summary>How long before MaxClip the recorder raises <c>VoiceRecorder.NearLimit</c>.</summary>
+        public static readonly TimeSpan WarnBefore = TimeSpan.FromSeconds(15);
+        /// <summary>Sample count at which NearLimit fires.</summary>
+        public static int WarnSamples => (int)((MaxClip - WarnBefore).TotalSeconds * SampleRate);
+        /// <summary>Message shown when the clip hit MaxClip and stopped on its own.</summary>
+        public static string AutoStopMessage => $"Stopped at the {(int)MaxClip.TotalMinutes}-minute limit. What you said so far is in the box; click the microphone to add more.";
         /// <summary>Below this a click or a breath is all the mic caught; do not bother the model.</summary>
         public static readonly TimeSpan MinClip = TimeSpan.FromMilliseconds(400);
 

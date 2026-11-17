@@ -9,7 +9,7 @@ namespace RevitMCPBridge.UpdateTests
 {
     public class ApiSuggestMoreTests
     {
-        static readonly IReadOnlyList<Type> Universe = new[] { typeof(string), typeof(Stopwatch), typeof(DayOfWeek), typeof(List<int>), typeof(TimeSpan) };
+        static readonly IReadOnlyList<Type> Universe = new[] { typeof(string), typeof(Stopwatch), typeof(DayOfWeek), typeof(List<int>), typeof(TimeSpan), typeof(double), typeof(int) };
 
         [Fact]
         public void Wrong_case_is_auto_corrected()
@@ -18,6 +18,21 @@ namespace RevitMCPBridge.UpdateTests
             Assert.NotNull(c);
             Assert.Equal("ElapsedMilliseconds", c!.Value.Right);
             Assert.Equal("Stopwatch", c.Value.Type);
+        }
+
+        [Fact]
+        public void Primitives_named_by_their_csharp_keyword_are_auto_corrected()
+        {
+            // 2026-11-16 (Barrett): "'double' does not contain a definition for 'toString'" went uncorrected because the
+            // universe holds System.Double, not the keyword.
+            var c = ApiSuggest.AutoCorrect("error CS1061: 'double' does not contain a definition for 'toString'", Universe);
+            Assert.NotNull(c);
+            Assert.Equal("ToString", c!.Value.Right);
+            Assert.Equal("Double", c.Value.Type);
+            var i = ApiSuggest.AutoCorrect("error CS1061: 'int' does not contain a definition for 'tostring'", Universe);
+            Assert.Equal("ToString", i!.Value.Right);
+            Assert.Contains("ToString", ApiSuggest.MemberList("double", Universe, int.MaxValue)!);
+            Assert.StartsWith("System.Double", ApiSuggest.Describe("double", Universe));
         }
 
         [Fact]

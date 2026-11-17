@@ -18,8 +18,6 @@ namespace RevitMCPBridge
 {
     public partial class MCPServer
     {
-        private CancellationTokenSource _cancellationTokenSource;
-        private Task _serverTask;
         private bool _isRunning;
 #if REVIT2024
         private readonly string _pipeName = "RevitMCPBridge2024";
@@ -46,7 +44,6 @@ namespace RevitMCPBridge
         private static long _failedRequests = 0;
         private static long _totalResponseTimeMs = 0;
         private static long _peakResponseTimeMs = 0;
-        private static int _currentConnections = 0;
         private static readonly object _statsLock = new object();
 
         public static long TotalRequestCount => _totalRequests;
@@ -54,7 +51,7 @@ namespace RevitMCPBridge
         public static long FailedRequestCount => _failedRequests;
         public static double AverageResponseTimeMs => _totalRequests > 0 ? (double)_totalResponseTimeMs / _totalRequests : 0;
         public static long PeakResponseTimeMs => _peakResponseTimeMs;
-        public static int CurrentConnectionCount => _currentConnections;
+        public static int CurrentConnectionCount => _rpcForStats?.ActiveConnections ?? 0;
 
         private static void RecordRequest(bool success, long responseTimeMs)
         {
@@ -473,6 +470,14 @@ namespace RevitMCPBridge
             }
         }
         
+        /// <summary>
+        /// 2026-11-16: the pipe transport (accept loop, per-connection read/process/write, bounded writes, Stop that
+        /// tears down live connections) lives in Transport/PipeRpc.cs so it can be unit-tested with real pipes and
+        /// no Revit. This class only supplies the ACL'd pipe factory, the subscription gate and ProcessMessage.
+        /// </summary>
+        private RevitMCPBridge.Transport.PipeRpcServer _rpc;
+        private static RevitMCPBridge.Transport.PipeRpcServer _rpcForStats;
+
         public void Start()
         {
             if (_isRunning)
@@ -483,8 +488,20 @@ namespace RevitMCPBridge
 
             try
             {
-                _cancellationTokenSource = new CancellationTokenSource();
-                _serverTask = RunServer(_cancellationTokenSource.Token);
+                _rpc = new RevitMCPBridge.Transport.PipeRpcServer(
+                    _pipeName,
+                    process: ProcessMessage,
+                    gate: GateLine,
+                    createPipe: CreateServerPipe,
+                    writeTimeout: TimeSpan.FromSeconds(30),
+                    maxRequestBytes: MaxRequestSizeBytes,
+                    rejectTooLarge: n => Helpers.ResponseBuilder.Error($"Request too large: {n} bytes exceeds {MaxRequestSizeBytes} byte limit", "REQUEST_TOO_LARGE").Build(),
+                    errorLine: ex => Helpers.ResponseBuilder.Error(ex.Message, "PROCESSING_ERROR").Build(),
+                    log: (m, ex) => { if (ex != null) Log.Warning(ex, "[pipe] {Message}", m); else Log.Information("[pipe] {Message}", m); });
+                _rpc.MessageReceived += line => MessageReceived?.Invoke(this, line);
+                _rpc.ErrorOccurred += msg => ErrorOccurred?.Invoke(this, msg);
+                _rpc.Start();
+                _rpcForStats = _rpc;
                 _isRunning = true;
                 Log.Information($"MCP Server started on pipe: {_pipeName}");
             }
@@ -494,7 +511,11 @@ namespace RevitMCPBridge
                 throw;
             }
         }
-        
+
+        /// <summary>
+        /// Stops listening and drops every live connection. A handler wedged inside a Revit call does not keep the
+        /// old server alive: its pipe is disposed, so its pending write faults and it exits on its own.
+        /// </summary>
         public void Stop()
         {
             if (!_isRunning)
@@ -505,8 +526,7 @@ namespace RevitMCPBridge
 
             try
             {
-                _cancellationTokenSource?.Cancel();
-                _serverTask?.Wait(5000);
+                _rpc?.Stop();
                 _isRunning = false;
                 Log.Information("MCP Server stopped");
             }
@@ -516,16 +536,27 @@ namespace RevitMCPBridge
             }
             finally
             {
-                _cancellationTokenSource?.Dispose();
+                if (ReferenceEquals(_rpcForStats, _rpc)) _rpcForStats = null;
+                _rpc = null;
             }
         }
-        
+
+        /// <summary>Subscription gate: everything but ping is refused while the session token is invalid.</summary>
+        private static string GateLine(string message)
+        {
+            string method = null;
+            try { method = JObject.Parse(message)["method"]?.ToString(); } catch { }
+            if (method != "ping" && !RevitMCPBridge.AgentFramework.SessionTokenManager.IsValid)
+                return Helpers.ResponseBuilder.Error("Active BIM Monkey subscription required. Visit bimmonkey.ai to subscribe.", "SUBSCRIPTION_REQUIRED").Build();
+            return null;
+        }
+
         /// <summary>
-        /// Creates a server instance restricted to the user running Revit. The pipe used to be
-        /// created with no ACL at all, so any local process as any user could connect and drive
-        /// every MCP method — including executeRevitScript — inside a subscriber's Revit. The
-        /// wrapper, Claude Desktop and the plugin's own chat all run as this user, so nothing
-        /// legitimate is excluded.
+        /// Creates a listening instance restricted to the user running Revit. The pipe used to be created with no
+        /// ACL at all, so any local process as any user could connect and drive every MCP method — including
+        /// executeRevitScript — inside a subscriber's Revit. PipeOptions.Asynchronous is required: it makes every
+        /// read and write real overlapped I/O that cancellation and Dispose() abort (synchronous pipe I/O cannot be
+        /// interrupted, which is how the 11/16 deadlock survived Stop()).
         /// </summary>
         private NamedPipeServerStream CreateServerPipe()
         {
@@ -537,56 +568,8 @@ namespace RevitMCPBridge
                     System.Security.AccessControl.AccessControlType.Allow));
             }
             return NamedPipeServerStreamAcl.Create(
-                _pipeName, PipeDirection.InOut, 254, PipeTransmissionMode.Byte, PipeOptions.None,
+                _pipeName, PipeDirection.InOut, 254, PipeTransmissionMode.Byte, PipeOptions.Asynchronous,
                 0, 0, security);
-        }
-
-        private async Task RunServer(CancellationToken cancellationToken)
-        {
-            // Pre-create the first server instance before entering the loop so it's
-            // immediately ready when the first client connects.
-            NamedPipeServerStream standbyPipe = CreateServerPipe();
-            // WaitForConnectionAsync(token) actually cancels when the token fires.
-            // Task.Run(() => WaitForConnection(), token) does NOT — the token only
-            // prevents task scheduling if already cancelled, leaving a zombie pipe
-            // that accepts the next client but HandleClient exits immediately (cancelled).
-            Task standbyWait = standbyPipe.WaitForConnectionAsync(cancellationToken);
-
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                try
-                {
-                    // Wait for the pre-created instance to receive a connection
-                    await standbyWait;
-                    Log.Information("Client connected to MCP Server");
-
-                    var clientPipe = standbyPipe;
-
-                    // Immediately pre-create the NEXT server instance so it's ready
-                    // before the current client finishes — eliminates the reconnect gap
-                    // that causes "semaphore timeout" on the next connection attempt.
-                    standbyPipe = CreateServerPipe();
-                    standbyWait = standbyPipe.WaitForConnectionAsync(cancellationToken);
-
-                    _ = Task.Run(async () => await HandleClient(clientPipe, cancellationToken), cancellationToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    Log.Information("Server operation cancelled");
-                    standbyPipe?.Dispose();
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "Server error");
-                    ErrorOccurred?.Invoke(this, ex.Message);
-                    // Recreate standby pipe after error
-                    standbyPipe?.Dispose();
-                    await Task.Delay(1000, cancellationToken);
-                    standbyPipe = CreateServerPipe();
-                    standbyWait = standbyPipe.WaitForConnectionAsync(cancellationToken);
-                }
-            }
         }
 
         /// <summary>
@@ -594,126 +577,7 @@ namespace RevitMCPBridge
         /// </summary>
         private const int MaxRequestSizeBytes = 1_048_576;
 
-        private async Task HandleClient(NamedPipeServerStream pipeServer, CancellationToken cancellationToken)
-        {
-            Interlocked.Increment(ref _currentConnections);
-            Log.Information("Client connected. Active connections: {Count}", _currentConnections);
 
-            try
-            {
-                using (pipeServer)
-                using (var reader = new StreamReader(pipeServer))
-                using (var writer = new StreamWriter(pipeServer) { AutoFlush = true })
-                {
-                    while (pipeServer.IsConnected && !cancellationToken.IsCancellationRequested)
-                    {
-                        try
-                        {
-                            // Use synchronous ReadLine to avoid async deadlock
-                            var message = reader.ReadLine();
-
-                            // Null means client disconnected cleanly
-                            if (message == null)
-                            {
-                                Log.Debug("Client sent null (disconnected)");
-                                break;
-                            }
-
-                            // Skip empty keepalive messages
-                            if (string.IsNullOrWhiteSpace(message))
-                                continue;
-
-                            // Reject oversized requests
-                            if (message.Length > MaxRequestSizeBytes)
-                            {
-                                Log.Warning("Rejecting oversized request: {Size} bytes (max {Max})",
-                                    message.Length, MaxRequestSizeBytes);
-                                var rejectResponse = Helpers.ResponseBuilder.Error(
-                                    $"Request too large: {message.Length} bytes exceeds {MaxRequestSizeBytes} byte limit",
-                                    "REQUEST_TOO_LARGE").Build();
-                                await writer.WriteLineAsync(rejectResponse);
-                                continue;
-                            }
-
-                            // Subscription gate — hard blocks non-ping calls when token is invalid.
-                            string _gateMethod = null;
-                            try { _gateMethod = JObject.Parse(message)["method"]?.ToString(); } catch { }
-                            if (_gateMethod != "ping" && !RevitMCPBridge.AgentFramework.SessionTokenManager.IsValid)
-                            {
-                                var gateResponse = RevitMCPBridge.Helpers.ResponseBuilder
-                                    .Error("Active BIM Monkey subscription required. Visit bimmonkey.ai to subscribe.", "SUBSCRIPTION_REQUIRED")
-                                    .Build();
-                                await writer.WriteLineAsync(gateResponse);
-                                continue;
-                            }
-
-                            Log.Debug("Received message ({Size} bytes)", message.Length);
-                            MessageReceived?.Invoke(this, message);
-
-                            var response = await ProcessMessage(message);
-
-                            // Check pipe is still connected before writing
-                            if (!pipeServer.IsConnected)
-                            {
-                                Log.Warning("Client disconnected before response could be sent for message");
-                                break;
-                            }
-
-                            writer.WriteLine(response);
-                            Log.Debug("Sent response ({Size} bytes)", response?.Length ?? 0);
-                        }
-                        catch (System.IO.IOException ioEx)
-                        {
-                            // Broken pipe - client disconnected unexpectedly
-                            Log.Warning("Broken pipe detected: {Message}. Client likely disconnected.", ioEx.Message);
-                            break;
-                        }
-                        catch (ObjectDisposedException)
-                        {
-                            // Pipe was disposed (server shutting down or client gone)
-                            Log.Debug("Pipe disposed, ending client handler");
-                            break;
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Error(ex, "Error processing message: {ExType}", ex.GetType().Name);
-
-                            // Try to send error response, but don't crash if pipe is broken
-                            try
-                            {
-                                if (pipeServer.IsConnected)
-                                {
-                                    var errorResponse = Helpers.ResponseBuilder.Error(
-                                        ex.Message, "PROCESSING_ERROR").Build();
-                                    await writer.WriteLineAsync(errorResponse);
-                                }
-                            }
-                            catch (System.IO.IOException)
-                            {
-                                Log.Warning("Could not send error response - pipe broken");
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                Log.Information("Client disconnected cleanly");
-            }
-            catch (System.IO.IOException ioEx)
-            {
-                Log.Warning("Client connection lost: {Message}", ioEx.Message);
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "Unexpected error in client handler: {ExType}", ex.GetType().Name);
-            }
-            finally
-            {
-                Interlocked.Decrement(ref _currentConnections);
-                Log.Information("Client handler exited. Active connections: {Count}", _currentConnections);
-            }
-        }
-        
         private async Task<string> ProcessMessage(string message)
         {
             try
@@ -727,14 +591,21 @@ namespace RevitMCPBridge
                 switch (method)
                 {
                     case "ping":
+                    {
+                        // Answered on the server thread, never on Revit's: the panel uses these two fields to tell
+                        // whether a write it stopped waiting for is still running before it refuses the next one.
+                        var rh = RevitMCPBridgeApp.GetRequestHandler();
                         return JsonConvert.SerializeObject(new
                         {
                             success = true,
                             result = "pong",
                             timestamp = DateTime.Now,
                             assemblyVersion = "2.0.0",
-                            testMessage = "v2.0.0_PRODUCTION"
+                            testMessage = "v2.0.0_PRODUCTION",
+                            revitExecuting = MCPRequestHandler.IsExecuting,
+                            queueDepth = rh?.QueueDepth ?? 0
                         });
+                    }
 
                     case "getVersion":
                         var assembly = System.Reflection.Assembly.GetExecutingAssembly();
