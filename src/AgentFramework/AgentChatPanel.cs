@@ -1356,6 +1356,18 @@ namespace RevitMCPBridge2026.AgentFramework
                     System.IO.File.WriteAllText(bp.Path, bp.Markdown);
                     parts.Add(bp);
                 }
+                // 2026-11-17: the generator now says when a document is not a program (site plan, survey, detail
+                // sheet...) instead of writing a part that cannot be built. Barrett 11/16: a site-context PDF came back as
+                // "Insufficient Information to Build" and was loaded and run anyway. Offer the useful thing instead.
+                var classification = json["classification"] as JObject;
+                if (parts.Count == 0 && classification != null)
+                {
+                    var kind = classification["kind"]?.ToString() ?? "other";
+                    var reason = classification["reason"]?.ToString() ?? "This document does not describe a building to build.";
+                    TelemetryService.Track(_bimMonkeyApiKey, "brief_classified", metadata: new { source_ext = ext, kind });
+                    OfferNonProgramDocument(documentPath, fileName, kind, reason);
+                    return;
+                }
                 if (parts.Count == 0) throw new Exception("the brief had no parts");
 
                 _briefParts = parts;
@@ -1382,6 +1394,46 @@ namespace RevitMCPBridge2026.AgentFramework
                 HideProgress();
                 SetProcessing(false);
             }
+        }
+
+        /// <summary>
+        /// Magic Wand was pointed at something that is not a program. Say what it is, and prefill the one request that
+        /// makes sense for that kind of document (nothing is sent until the user presses Send).
+        /// </summary>
+        private void OfferNonProgramDocument(string documentPath, string fileName, string kind, string reason)
+        {
+            string prompt;
+            switch (kind)
+            {
+                case "site_context":
+                case "survey":
+                    prompt = $"The file {documentPath} is site context around the building in the current Revit session (building outlines, sidewalks, curbs and gutters, street centerlines, property lines). " +
+                             "Read its vector geometry, anchor it on the existing building outline, report the scale and rotation you derived, then bring it into the active site plan view as native detail lines on the firm's site line styles. " +
+                             "Keep curves as arcs. Do not model walls or floors from it.";
+                    break;
+                case "drawing_set":
+                case "detail":
+                    prompt = $"The file {documentPath} is a drawing set, not a program. Read it and tell me which sheets, details or notes you can bring into this model, then wait for me to pick.";
+                    break;
+                case "schedule":
+                    prompt = $"The file {documentPath} is a schedule. Read it and tell me which Revit types or parameters it maps to in this model, then wait for me to pick.";
+                    break;
+                case "photo":
+                    prompt = $"The attached photo {fileName} is reference, not a program. Describe what you see that matters for this model and ask me what to do with it.";
+                    break;
+                default:
+                    prompt = "";
+                    break;
+            }
+            var what = kind == "unreadable"
+                ? "Magic Wand could not read that document well enough to write a brief."
+                : $"Magic Wand did not write a brief: {reason}";
+            var how = "A build brief needs a program: rooms or spaces with sizes, levels, a footprint, a sketch of the building, or written notes describing it. " +
+                      "Point Magic Wand at that and it writes the phased brief.";
+            AddAssistantMessage(prompt.Length > 0
+                ? $"{what}\n\n{how}\n\nI have put the request that fits this document in the box below. Edit it if you like, then press Send."
+                : $"{what}\n\n{how}");
+            if (prompt.Length > 0 && _inputTextBox != null) { _inputTextBox.Text = prompt; _inputTextBox.Focus(); _inputTextBox.CaretIndex = _inputTextBox.Text.Length; }
         }
 
         /// <summary>Attach part i (0-based) as a text document and prefill the send box.</summary>
@@ -3202,6 +3254,37 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                         };
                         buttons.Children.Add(download);
                     }
+                    if (offer.AlreadyStaged)
+                    {
+                        // 2026-11-17 (Barrett): 4 of his last 7 closes never reached the shutdown hook, so a downloaded build
+                        // sat for days. This starts the installer now (it waits up to ten minutes for Revit to exit) and then
+                        // asks Revit to exit through its own command, which is the one path that always runs the hook.
+                        var now = MakeUpdateButton("Restart Revit now", required ? red : ChatTheme.Neutral, true);
+                        now.Click += (s, e) =>
+                        {
+                            now.IsEnabled = false;
+                            string r;
+                            try { r = RevitMCPBridge.Update.UpdateService.Instance.TryLaunchPendingNow(); } catch { r = "error"; }
+                            switch (r)
+                            {
+                                case "launched":
+                                    progress.Text = "Installing as soon as Revit closes. Save when Revit asks.";
+                                    if (!RequestRevitExit()) progress.Text = "The installer is waiting. Close Revit now (File, Exit) and it installs.";
+                                    break;
+                                case "deferred":
+                                    progress.Text = "Close the other Revit window first, then click again.";
+                                    now.IsEnabled = true;
+                                    break;
+                                case "busy":
+                                    progress.Text = "The installer is already running. Close Revit and it installs.";
+                                    break;
+                                default:
+                                    progress.Text = "Could not start the installer; it will try again when Revit closes.";
+                                    break;
+                            }
+                        };
+                        buttons.Children.Add(now);
+                    }
                     if (!required)
                     {
                         // 2026-11-09 (Barrett): the banner had no way to be put away. "Got it" hides it for the rest of
@@ -3258,6 +3341,22 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 }
                 catch (Exception ex) { Serilog.Log.Warning(ex, "[Update] banner failed"); }
             }));
+        }
+
+        /// <summary>Asks Revit to exit through its own Exit command (save prompts included). False if that could not be posted.</summary>
+        private bool RequestRevitExit()
+        {
+            try
+            {
+                var app = _uiApp ?? RevitMCPBridgeApp.GetUIApplication();
+                if (app == null) return false;
+                var id = RevitCommandId.LookupPostableCommandId(PostableCommand.ExitRevit);
+                if (id == null || !app.CanPostCommand(id)) return false;
+                app.PostCommand(id);
+                TelemetryService.Track(_bimMonkeyApiKey, "update_restart_requested", metadata: new { via = "banner" });
+                return true;
+            }
+            catch (Exception ex) { Serilog.Log.Warning(ex, "[Update] could not post ExitRevit"); return false; }
         }
 
         private void HideUpdateBanner()

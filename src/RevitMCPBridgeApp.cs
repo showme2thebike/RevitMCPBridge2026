@@ -110,6 +110,22 @@ namespace RevitMCPBridge
                     Log.Warning(themeEx, "Theme sync unavailable — Banana Chat stays dark (non-fatal)");
                 }
 
+                // 2026-11-17: launch the staged installer as soon as Revit says it is closing, before the observer
+                // flushes and the pipe stop in OnShutdown; if Revit dies between here and OnShutdown the install still
+                // happens (the installer waits for Revit.exe to exit). Idempotent: OnShutdown then reports "launched".
+                try
+                {
+                    application.ApplicationClosing += (sender, args) =>
+                    {
+                        try
+                        {
+                            var r = RevitMCPBridge.Update.UpdateService.Instance.TryLaunchPendingOnShutdown();
+                            Log.Information("[Update] ApplicationClosing hook: {Result}", r);
+                        }
+                        catch (Exception ex) { Log.Warning(ex, "[Update] ApplicationClosing hook failed (non-fatal)"); }
+                    };
+                }
+                catch (Exception acEx) { Log.Warning(acEx, "ApplicationClosing hook unavailable (non-fatal)"); }
                 // Store UI application reference and initialize ChangeTracker
                 application.ControlledApplication.ApplicationInitialized += (sender, args) =>
                 {

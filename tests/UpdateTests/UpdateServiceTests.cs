@@ -92,6 +92,7 @@ namespace RevitMCPBridge.UpdateTests
 
         public Harness(string installed = "v0.4.20261009a")
         {
+            UpdateService.ResetProcessLaunchMarkerForTests(); // the launch marker is per process; each test is its own
             Options = new UpdateServiceOptions
             {
                 ApiBase = "https://unit.test",
@@ -665,6 +666,79 @@ namespace RevitMCPBridge.UpdateTests
             h.NewService().ReconcileOnStartup();
             var evt = Assert.Single(h.Telemetry, t => t.Event == "update_shutdown");
             Assert.Equal("hook_started", evt.Meta["result"]!.ToString());
+        }
+
+        [Fact]
+        public async Task Launch_now_starts_the_installer_with_a_long_wait_and_the_shutdown_hook_does_not_launch_again()
+        {
+            // 2026-11-17 (Barrett): closes that never reach OnShutdown left 1117a staged for days. The banner can now
+            // launch the installer first (it waits for Revit to exit) and then ask Revit to exit.
+            using var h = new Harness(installed: "v0.4.20261009a");
+            var launches = new List<(string Path, string Args)>();
+            h.Options.LaunchInstaller = (path, args) => launches.Add((path, args));
+            h.Options.OtherRevitCount = () => 0;
+            var bytes = File.ReadAllBytes(ReleaseSigner.RealInstaller);
+            var manifest = h.Manifest(bytes.Length, Sha(bytes));
+            using var server = new LocalServer(r => Write(r, bytes));
+            var svc = h.NewService();
+            Assert.True(await svc.DownloadAsync(manifest, server.Url));
+            var staged = h.State().Pending!.Path;
+
+            Assert.Equal("launched", svc.TryLaunchPendingNow());
+            var launch = Assert.Single(launches);
+            Assert.Equal(staged, launch.Path);
+            Assert.Contains("/UPDATE=1", launch.Args);
+            Assert.Contains($"/WAIT={UpdateService.LaunchNowWaitSeconds}", launch.Args);
+            Assert.True(svc.LaunchedThisProcess);
+            Assert.Equal("launched_now", h.State().LastShutdown!.Result);
+            Assert.Equal(manifest.Version, h.State().LastShutdown!.Version);
+            var evt = Assert.Single(h.Telemetry, t => t.Event == "update_launched");
+            Assert.Equal("now", evt.Meta["reason"]!.ToString());
+            Assert.NotNull(h.State().Pending); // stays staged until the next start proves it applied
+
+            // Revit now exits through its own command and OnShutdown runs: the hooks must not launch a second installer
+            // or overwrite the record.
+            svc.MarkShutdownBegun();
+            Assert.Equal("launched_now", h.State().LastShutdown!.Result);
+            Assert.Equal("launched", svc.TryLaunchPendingOnShutdown());
+            Assert.Single(launches);
+            Assert.Equal("launched_now", h.State().LastShutdown!.Result);
+
+            // Next start on the new version: reconcile reports the close and the applied update.
+            lock (h.Telemetry) h.Telemetry.Clear();
+            UpdateService.ResetProcessLaunchMarkerForTests();
+            h.Options.Installed = PluginVersion.Parse(manifest.Version);
+            h.NewService().ReconcileOnStartup();
+            Assert.Equal("launched_now", Assert.Single(h.Telemetry, t => t.Event == "update_shutdown").Meta["result"]!.ToString());
+            Assert.Single(h.Telemetry, t => t.Event == "update_applied");
+            Assert.Null(h.State().Pending);
+        }
+
+        [Fact]
+        public async Task Launch_now_is_deferred_while_another_Revit_is_open_and_launches_nothing()
+        {
+            using var h = new Harness(installed: "v0.4.20261009a");
+            var launches = 0;
+            h.Options.LaunchInstaller = (path, args) => launches++;
+            h.Options.OtherRevitCount = () => 1;
+            var bytes = File.ReadAllBytes(ReleaseSigner.RealInstaller);
+            var manifest = h.Manifest(bytes.Length, Sha(bytes));
+            using var server = new LocalServer(r => Write(r, bytes));
+            var svc = h.NewService();
+            Assert.True(await svc.DownloadAsync(manifest, server.Url));
+            Assert.Equal("deferred", svc.TryLaunchPendingNow());
+            Assert.Equal(0, launches);
+            Assert.False(svc.LaunchedThisProcess);
+            Assert.Null(h.State().LastShutdown); // not a close: nothing to report at the next start
+            Assert.NotNull(h.State().Pending);
+        }
+
+        [Fact]
+        public void Launch_now_with_nothing_staged_is_none()
+        {
+            using var h = new Harness();
+            h.Options.LaunchInstaller = (p, a) => throw new InvalidOperationException("must not launch");
+            Assert.Equal("none", h.NewService().TryLaunchPendingNow());
         }
 
         [Fact]

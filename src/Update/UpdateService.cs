@@ -70,6 +70,10 @@ namespace RevitMCPBridge.Update
         /// Zero disables it. Past the budget the staged build installs as before.
         /// </summary>
         public TimeSpan ShutdownCheckBudget { get; set; } = TimeSpan.FromSeconds(10);
+        /// <summary>Starts the installer process (path, args). Tests capture it; the default is Process.Start.</summary>
+        public Action<string, string>? LaunchInstaller { get; set; }
+        /// <summary>Number of OTHER Revit.exe processes. Tests override it; the default enumerates processes.</summary>
+        public Func<int>? OtherRevitCount { get; set; }
 #if UPDATE_TESTS
         /// <summary>Test-only: lets DownloadAsync accept http://127.0.0.1 (HttpListener has no TLS).</summary>
         public bool AllowLoopbackHttp { get; set; }
@@ -112,6 +116,18 @@ namespace RevitMCPBridge.Update
         /// <summary>The background download started by the last offer (null if none); tests await it.</summary>
         public Task? AutoDownloadTask { get; private set; }
         private static Mutex? _launchMutex; // held until process exit on purpose
+        /// <summary>
+        /// Version launched from THIS process (by the banner's "Restart Revit now" or an earlier hook). Once set, the
+        /// shutdown hooks report "launched" without launching again and without overwriting the shutdown record.
+        /// 2026-11-17: Barrett's evening closes never reach OnShutdown (4 of 7 closes: crash at exit, Task Manager or
+        /// OS shutdown), so a staged build can sit for days; the banner can now launch the installer first (it waits
+        /// for Revit to exit) and then ask Revit to exit through its own command, which is the one path that always
+        /// runs OnShutdown.
+        /// </summary>
+        private static string? _launchedThisProcess;
+        public bool LaunchedThisProcess => _launchedThisProcess != null;
+        /// <summary>Tests only: each test is its own "process".</summary>
+        internal static void ResetProcessLaunchMarkerForTests() { _launchedThisProcess = null; try { _launchMutex?.Dispose(); } catch { } _launchMutex = null; }
 
         public event EventHandler<UpdateOfferedEventArgs>? UpdateOffered;
 
@@ -551,16 +567,18 @@ namespace RevitMCPBridge.Update
         /// </summary>
         public void MarkShutdownBegun()
         {
+            if (_launchedThisProcess != null) return; // the record already says launched_now; keep it
             try { var v = LoadState().Pending?.Version; if (v != null) RecordShutdown("hook_started", v); }
             catch (Exception ex) { Log.Warning(ex, "[Update] could not mark shutdown begun"); }
         }
 
         public string TryLaunchPendingOnShutdown()
         {
+            if (_launchedThisProcess != null) return "launched"; // already started by the banner or an earlier hook
             // 2026-11-10: the decision is persisted and reported as `update_shutdown` at the next startup, because
             // shutdown is too late for a network call and a missing record is itself the signal (Revit killed or crashed).
             string result; string? version = null;
-            try { RunShutdownCheck(); version = LoadState().Pending?.Version; result = TryLaunchPendingOnShutdownCore(); }
+            try { RunShutdownCheck(); version = LoadState().Pending?.Version; result = TryLaunchPendingOnShutdownCore(ShutdownWaitSeconds, "shutdown"); }
             catch (Exception ex) { Log.Warning(ex, "[Update] shutdown launch failed"); result = "error"; }
             if (result != "none") RecordShutdown(result, version);
             return result;
@@ -634,7 +652,30 @@ namespace RevitMCPBridge.Update
             return outcome;
         }
 
-        private string TryLaunchPendingOnShutdownCore()
+        private const int ShutdownWaitSeconds = 120;
+        /// <summary>
+        /// How long the installer waits for Revit to exit when launched from the banner. The user still has to answer
+        /// Revit's own save prompts; if they cancel the exit the installer gives up quietly after this and the staged
+        /// build is offered again at the next start.
+        /// </summary>
+        public const int LaunchNowWaitSeconds = 600;
+
+        /// <summary>
+        /// Launch the staged installer NOW, while Revit is still running: it waits up to LaunchNowWaitSeconds for Revit
+        /// to exit, then installs. The caller then asks Revit to exit. Same verification and same status words as the
+        /// shutdown path; "deferred" when another Revit window is open (the installer could not proceed anyway).
+        /// </summary>
+        public string TryLaunchPendingNow()
+        {
+            if (_launchedThisProcess != null) return "launched";
+            string result; string? version = null;
+            try { version = LoadState().Pending?.Version; result = TryLaunchPendingOnShutdownCore(LaunchNowWaitSeconds, "now"); }
+            catch (Exception ex) { Log.Warning(ex, "[Update] launch-now failed"); result = "error"; }
+            if (result == "launched") RecordShutdown("launched_now", version);
+            return result;
+        }
+
+        private string TryLaunchPendingOnShutdownCore(int waitSeconds, string reason)
         {
             var sw = Stopwatch.StartNew();
             try
@@ -680,7 +721,7 @@ namespace RevitMCPBridge.Update
                 }
 
                 // R6: the last Revit out launches; others leave pending in place.
-                var others = CountOtherRevitProcesses();
+                var others = _o.OtherRevitCount != null ? _o.OtherRevitCount() : CountOtherRevitProcesses();
                 if (others > 0)
                 {
                     Log.Information("[Update] {Count} other Revit process(es) running — deferring install of {Version}", others, pending.Version);
@@ -690,15 +731,20 @@ namespace RevitMCPBridge.Update
                 if (!TryAcquireLaunchMutex()) return "busy";
 
                 var logPath = Path.Combine(UpdatesDirectory, $"install-{SafeName(pending.Version)}.log");
-                var args = $"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /UPDATE=1 /WAIT=120 /LOG=\"{logPath}\"";
-                var psi = new ProcessStartInfo(pending.Path, args)
+                var args = $"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /UPDATE=1 /WAIT={waitSeconds} /LOG=\"{logPath}\"";
+                if (_o.LaunchInstaller != null) _o.LaunchInstaller(pending.Path, args);
+                else
                 {
-                    UseShellExecute = false,
-                    WorkingDirectory = Path.GetDirectoryName(pending.Path) ?? UpdatesDirectory,
-                };
-                using (Process.Start(psi)) { }
-                Log.Information("[Update] launched installer {Version} ({Ms} ms): {Path} {Args}", pending.Version, sw.ElapsedMilliseconds, pending.Path, args);
-                Telemetry("update_launched", new { version = pending.Version, manifestVersion = pending.ManifestVersion });
+                    var psi = new ProcessStartInfo(pending.Path, args)
+                    {
+                        UseShellExecute = false,
+                        WorkingDirectory = Path.GetDirectoryName(pending.Path) ?? UpdatesDirectory,
+                    };
+                    using (Process.Start(psi)) { }
+                }
+                _launchedThisProcess = pending.Version;
+                Log.Information("[Update] launched installer {Version} ({Ms} ms, {Reason}): {Path} {Args}", pending.Version, sw.ElapsedMilliseconds, reason, pending.Path, args);
+                Telemetry("update_launched", new { version = pending.Version, manifestVersion = pending.ManifestVersion, reason, wait_s = waitSeconds });
                 return "launched";
             }
             catch (Exception ex)
