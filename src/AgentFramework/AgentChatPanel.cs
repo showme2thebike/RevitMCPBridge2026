@@ -3209,7 +3209,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                     {
                         Text = offer.AlreadyStaged
                             ? (offer.DeferredAtLastClose
-                                ? $"Update {m.Version} is downloaded and verified, but it was not installed at your last close because another Revit window was still open. It installs when the last Revit window closes."
+                                ? $"Update {m.Version} is downloaded and verified, but it was not installed at your last close because another Revit window was still open. Click Restart Revit now to install it this time, or close every Revit window and it installs on the last one."
                                 : $"Update {m.Version} downloaded and verified. It installs when you close Revit.")
                             : offer.AutoDownloadFailed
                                 ? $"Update {m.Version} could not be downloaded and verified. Try again, or it will retry on the next check."
@@ -3272,7 +3272,13 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                                     if (!RequestRevitExit()) progress.Text = "The installer is waiting. Close Revit now (File, Exit) and it installs.";
                                     break;
                                 case "deferred":
-                                    progress.Text = "Close the other Revit window first, then click again.";
+                                    {
+                                        var who = RevitMCPBridge.Update.UpdateService.Instance.LastDeferBlockers;
+                                        var title = (who ?? "").Split('\'').Skip(1).FirstOrDefault();
+                                        progress.Text = string.IsNullOrWhiteSpace(title)
+                                            ? "Close the other Revit window first, then click again."
+                                            : $"Close the other Revit window first (\"{title}\"), then click again.";
+                                    }
                                     now.IsEnabled = true;
                                     break;
                                 case "busy":

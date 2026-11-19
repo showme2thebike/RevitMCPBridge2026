@@ -72,12 +72,44 @@ namespace RevitMCPBridge.Update
         public TimeSpan ShutdownCheckBudget { get; set; } = TimeSpan.FromSeconds(10);
         /// <summary>Starts the installer process (path, args). Tests capture it; the default is Process.Start.</summary>
         public Action<string, string>? LaunchInstaller { get; set; }
-        /// <summary>Number of OTHER Revit.exe processes. Tests override it; the default enumerates processes.</summary>
+        /// <summary>Number of OTHER Revit.exe processes that block the install. Tests override it; takes precedence over <see cref="OtherRevitProcesses"/>.</summary>
         public Func<int>? OtherRevitCount { get; set; }
+        /// <summary>
+        /// The OTHER Revit.exe processes with enough detail to decide which ones block (2026-11-19). Tests override it;
+        /// the default enumerates processes. Only processes with a main window count (<see cref="RevitProcessInfo.IsBlocking"/>).
+        /// </summary>
+        public Func<IReadOnlyList<RevitProcessInfo>>? OtherRevitProcesses { get; set; }
 #if UPDATE_TESTS
         /// <summary>Test-only: lets DownloadAsync accept http://127.0.0.1 (HttpListener has no TLS).</summary>
         public bool AllowLoopbackHttp { get; set; }
 #endif
+    }
+
+    /// <summary>
+    /// One other Revit.exe seen at the install decision (2026-11-19). Barrett's closes on 11/17–11/18 all came back
+    /// 'deferred' although he had no second project open; a Revit.exe that is still unloading, or one left behind by a
+    /// crash, has no main window and must not hold the update hostage.
+    /// </summary>
+    public sealed class RevitProcessInfo
+    {
+        public int Pid { get; set; }
+        /// <summary>Main window title ("Project.rvt - Floor Plan: Level 1 - Autodesk Revit 2026"), empty when there is none.</summary>
+        public string Title { get; set; } = "";
+        public bool HasMainWindow { get; set; }
+        public bool Responding { get; set; } = true;
+        public DateTimeOffset? StartedUtc { get; set; }
+
+        /// <summary>A Revit the user can see blocks the install; a window-less process (shutting down, crashed, zombie) does not.</summary>
+        public bool IsBlocking => HasMainWindow;
+
+        public string Describe()
+        {
+            var title = Title.Length > 80 ? Title.Substring(0, 80) + "…" : Title;
+            var started = StartedUtc.HasValue ? StartedUtc.Value.ToString("yyyy-MM-ddTHH:mm:ssZ") : "?";
+            return $"pid={Pid} window='{title}' started={started} responding={(Responding ? "yes" : "no")}";
+        }
+
+        public static string DescribeAll(IEnumerable<RevitProcessInfo> procs) => string.Join(" | ", procs.Select(p => p.Describe()));
     }
 
     /// <summary>
@@ -589,7 +621,11 @@ namespace RevitMCPBridge.Update
             try
             {
                 var s = LoadState();
-                s.LastShutdown = new ShutdownRecord { Result = result, Version = version, AtUtc = _o.Now(), Check = _lastShutdownCheck };
+                s.LastShutdown = new ShutdownRecord
+                {
+                    Result = result, Version = version, AtUtc = _o.Now(), Check = _lastShutdownCheck,
+                    Blockers = result == "deferred" ? LastDeferBlockers : null,
+                };
                 SaveState(s);
             }
             catch (Exception ex) { Log.Warning(ex, "[Update] could not record the shutdown result"); }
@@ -720,12 +756,32 @@ namespace RevitMCPBridge.Update
                     return "verify_failed";
                 }
 
-                // R6: the last Revit out launches; others leave pending in place.
-                var others = _o.OtherRevitCount != null ? _o.OtherRevitCount() : CountOtherRevitProcesses();
-                if (others > 0)
+                // R6: the last Revit out launches; others leave pending in place. 2026-11-19: only a Revit with a main
+                // window counts, and the blockers are recorded so the next startup can report WHAT deferred the install.
+                LastDeferBlockers = null;
+                if (_o.OtherRevitCount != null)
                 {
-                    Log.Information("[Update] {Count} other Revit process(es) running — deferring install of {Version}", others, pending.Version);
-                    return "deferred";
+                    var others = _o.OtherRevitCount();
+                    if (others > 0)
+                    {
+                        LastDeferBlockers = $"{others} other Revit process(es)";
+                        Log.Information("[Update] {Count} other Revit process(es) running — deferring install of {Version}", others, pending.Version);
+                        return "deferred";
+                    }
+                }
+                else
+                {
+                    var procs = _o.OtherRevitProcesses != null ? _o.OtherRevitProcesses() : ListOtherRevitProcesses();
+                    var blocking = procs.Where(p => p.IsBlocking).ToList();
+                    var ignored = procs.Count - blocking.Count;
+                    if (ignored > 0)
+                        Log.Information("[Update] ignoring {Count} window-less Revit process(es) at the install decision: {Procs}", ignored, RevitProcessInfo.DescribeAll(procs.Where(p => !p.IsBlocking)));
+                    if (blocking.Count > 0)
+                    {
+                        LastDeferBlockers = RevitProcessInfo.DescribeAll(blocking);
+                        Log.Information("[Update] {Count} other Revit window(s) open — deferring install of {Version}: {Procs}", blocking.Count, pending.Version, LastDeferBlockers);
+                        return "deferred";
+                    }
                 }
 
                 if (!TryAcquireLaunchMutex()) return "busy";
@@ -754,12 +810,29 @@ namespace RevitMCPBridge.Update
             }
         }
 
-        private static int CountOtherRevitProcesses()
+        /// <summary>What blocked the most recent install decision ('deferred'), for the shutdown record and the banner.</summary>
+        public string? LastDeferBlockers { get; private set; }
+
+        private static IReadOnlyList<RevitProcessInfo> ListOtherRevitProcesses()
         {
             int me = Process.GetCurrentProcess().Id;
             var procs = Process.GetProcessesByName("Revit");
-            try { return procs.Count(p => p.Id != me); }
+            var list = new List<RevitProcessInfo>();
+            try
+            {
+                foreach (var p in procs)
+                {
+                    if (p.Id == me) continue;
+                    var info = new RevitProcessInfo { Pid = p.Id };
+                    try { info.HasMainWindow = p.MainWindowHandle != IntPtr.Zero; } catch { }
+                    try { info.Title = p.MainWindowTitle ?? ""; } catch { }
+                    try { info.Responding = p.Responding; } catch { }
+                    try { info.StartedUtc = new DateTimeOffset(p.StartTime.ToUniversalTime()); } catch { } // access denied across sessions
+                    list.Add(info);
+                }
+            }
             finally { foreach (var p in procs) p.Dispose(); }
+            return list;
         }
 
         private static bool TryAcquireLaunchMutex()
@@ -802,7 +875,7 @@ namespace RevitMCPBridge.Update
                 {
                     state.LastShutdown = null;
                     SaveState(state);
-                    Telemetry("update_shutdown", new { result = rec.Result, version = rec.Version, atUtc = rec.AtUtc, check = rec.Check });
+                    Telemetry("update_shutdown", new { result = rec.Result, version = rec.Version, atUtc = rec.AtUtc, check = rec.Check, blockers = rec.Blockers });
                     // Barrett 2026-11-12: closed with a second Revit open -> 'deferred' -> the banner kept promising
                     // "installs when you close Revit". Remember it so the banner can say what actually has to happen.
                     LastCloseDeferredInstall = string.Equals(rec.Result, "deferred", StringComparison.Ordinal);

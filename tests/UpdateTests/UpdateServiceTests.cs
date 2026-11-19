@@ -734,6 +734,58 @@ namespace RevitMCPBridge.UpdateTests
         }
 
         [Fact]
+        public async Task A_window_less_Revit_process_does_not_defer_the_install()
+        {
+            // Barrett 2026-11-19: three closes in a row deferred with no second project open; a Revit.exe that is
+            // still unloading or was left behind by a crash has no main window and must not hold the update.
+            using var h = new Harness(installed: "v0.4.20261009a");
+            var launches = new List<(string Path, string Args)>();
+            h.Options.LaunchInstaller = (path, args) => launches.Add((path, args));
+            h.Options.OtherRevitProcesses = () => new[] { new RevitProcessInfo { Pid = 4242, HasMainWindow = false, Responding = false, Title = "" } };
+            var bytes = File.ReadAllBytes(ReleaseSigner.RealInstaller);
+            var manifest = h.Manifest(bytes.Length, Sha(bytes));
+            using var server = new LocalServer(r => Write(r, bytes));
+            var svc = h.NewService();
+            Assert.True(await svc.DownloadAsync(manifest, server.Url));
+            Assert.Equal("launched", svc.TryLaunchPendingNow());
+            Assert.Single(launches);
+            Assert.Null(svc.LastDeferBlockers);
+        }
+
+        [Fact]
+        public async Task A_deferred_close_records_which_Revit_blocked_it_and_the_next_start_reports_it()
+        {
+            using var h = new Harness(installed: "v0.4.20261009a");
+            var launches = 0;
+            h.Options.LaunchInstaller = (path, args) => launches++;
+            h.Options.OtherRevitProcesses = () => new[]
+            {
+                new RevitProcessInfo { Pid = 1001, HasMainWindow = true, Responding = true, Title = "Tower.rvt - Floor Plan: Level 1 - Autodesk Revit 2026", StartedUtc = new DateTimeOffset(2026, 11, 19, 8, 0, 0, TimeSpan.Zero) },
+                new RevitProcessInfo { Pid = 1002, HasMainWindow = false, Responding = false, Title = "" },
+            };
+            var bytes = File.ReadAllBytes(ReleaseSigner.RealInstaller);
+            var manifest = h.Manifest(bytes.Length, Sha(bytes));
+            using var server = new LocalServer(r => Write(r, bytes));
+            var svc = h.NewService();
+            Assert.True(await svc.DownloadAsync(manifest, server.Url));
+
+            Assert.Equal("deferred", svc.TryLaunchPendingOnShutdown());
+            Assert.Equal(0, launches);
+            var rec = h.State().LastShutdown!;
+            Assert.Equal("deferred", rec.Result);
+            Assert.Contains("pid=1001", rec.Blockers);
+            Assert.Contains("Tower.rvt", rec.Blockers);
+            Assert.DoesNotContain("pid=1002", rec.Blockers); // the window-less one is not a blocker
+            Assert.Equal(rec.Blockers, svc.LastDeferBlockers);
+
+            lock (h.Telemetry) h.Telemetry.Clear();
+            h.NewService().ReconcileOnStartup();
+            var evt = Assert.Single(h.Telemetry, t => t.Event == "update_shutdown");
+            Assert.Equal("deferred", evt.Meta["result"]!.ToString());
+            Assert.Contains("Tower.rvt", evt.Meta["blockers"]!.ToString());
+        }
+
+        [Fact]
         public void Launch_now_with_nothing_staged_is_none()
         {
             using var h = new Harness();

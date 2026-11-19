@@ -29,6 +29,12 @@ namespace RevitMCPBridge.Update
         [JsonProperty("atUtc")] public DateTimeOffset AtUtc { get; set; }
         /// <summary>Outcome of the last-chance server check that ran just before the launch decision.</summary>
         [JsonProperty("check")] public string? Check { get; set; }
+        /// <summary>
+        /// For a 'deferred' result (2026-11-19): the other Revit.exe process(es) that blocked the install, one per
+        /// "pid=… window='…' started=… responding=…" entry separated by " | ". Barrett closed Revit three times in a
+        /// row and every close deferred; without this nobody can tell a second project from a stray background Revit.
+        /// </summary>
+        [JsonProperty("blockers")] public string? Blockers { get; set; }
     }
 
     /// <summary>
