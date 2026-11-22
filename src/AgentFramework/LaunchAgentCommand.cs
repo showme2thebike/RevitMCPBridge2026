@@ -17,6 +17,7 @@ namespace RevitMCPBridge2026.AgentFramework
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
+            RibbonTelemetry.Click("AIAssistant");
             try
             {
                 var uiApp = commandData.Application;

@@ -5,6 +5,7 @@ using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using Serilog;
+using RevitMCPBridge2026.AgentFramework;
 
 namespace RevitMCPBridge.Commands
 {
@@ -14,6 +15,7 @@ namespace RevitMCPBridge.Commands
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
+            RibbonTelemetry.Click("MCPServerStatus");
             try
             {
                 var server = RevitMCPBridgeApp.GetServer();

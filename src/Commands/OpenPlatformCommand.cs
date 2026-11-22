@@ -3,6 +3,7 @@ using System.Diagnostics;
 using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
+using RevitMCPBridge2026.AgentFramework;
 
 namespace RevitMCPBridge.Commands
 {
@@ -12,6 +13,7 @@ namespace RevitMCPBridge.Commands
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
+            RibbonTelemetry.Click("BimMonkeyPlatform");
             try
             {
                 Process.Start(new ProcessStartInfo("https://app.bimmonkey.ai") { UseShellExecute = true });

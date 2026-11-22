@@ -16,6 +16,7 @@ namespace RevitMCPBridge.Commands
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
+            RibbonTelemetry.Click("Parcel");
             try
             {
                 var uiApp = commandData.Application;

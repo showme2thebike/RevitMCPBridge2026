@@ -11,6 +11,7 @@ namespace RevitMCPBridge2026.AgentFramework
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
+            RibbonTelemetry.Click("VicinityMap");
             try
             {
                 var uiApp = commandData.Application;

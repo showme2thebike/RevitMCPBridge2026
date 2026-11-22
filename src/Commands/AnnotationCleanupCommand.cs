@@ -9,6 +9,7 @@ using Autodesk.Revit.DB;
 using Autodesk.Revit.UI;
 using WpfColor = System.Windows.Media.Color;
 using WpfGrid  = System.Windows.Controls.Grid;
+using RevitMCPBridge2026.AgentFramework;
 
 namespace RevitMCPBridge.Commands
 {
@@ -27,6 +28,7 @@ namespace RevitMCPBridge.Commands
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
+            RibbonTelemetry.Click("AnnotationCleanup");
             Log("=== Execute START ===");
             try
             {

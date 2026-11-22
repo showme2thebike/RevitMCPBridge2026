@@ -21,6 +21,7 @@ namespace RevitMCPBridge.Commands
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
+            RibbonTelemetry.Click("MagicWand");
             try
             {
                 var apiKey = SessionTokenManager.ApiKey;

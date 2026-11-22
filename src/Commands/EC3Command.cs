@@ -14,6 +14,7 @@ namespace RevitMCPBridge.Commands
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
+            RibbonTelemetry.Click("EC3");
             try
             {
                 var uiApp = commandData.Application;

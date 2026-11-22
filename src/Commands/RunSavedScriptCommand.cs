@@ -10,6 +10,7 @@ using WpfBrush   = System.Windows.Media.SolidColorBrush;
 using WpfBrushes = System.Windows.Media.Brushes;
 using WpfGrid    = System.Windows.Controls.Grid;
 using WpfSV      = System.Windows.Controls.ScrollViewer;
+using RevitMCPBridge2026.AgentFramework;
 
 namespace RevitMCPBridge.Commands
 {
@@ -19,6 +20,7 @@ namespace RevitMCPBridge.Commands
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
+            RibbonTelemetry.Click("RunSavedScript");
             var uiApp  = commandData.Application;
             var apiKey = SessionTokenManager.ApiKey;
             if (string.IsNullOrEmpty(apiKey))

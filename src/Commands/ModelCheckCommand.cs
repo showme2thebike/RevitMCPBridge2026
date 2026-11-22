@@ -12,6 +12,7 @@ using Autodesk.Revit.DB.Architecture;
 using Autodesk.Revit.UI;
 using Newtonsoft.Json.Linq;
 using Serilog;
+using RevitMCPBridge2026.AgentFramework;
 
 namespace RevitMCPBridge.Commands
 {
@@ -24,6 +25,7 @@ namespace RevitMCPBridge.Commands
 
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
+            RibbonTelemetry.Click("ModelCheck");
             try
             {
                 var apiKey = ReadApiKey();
