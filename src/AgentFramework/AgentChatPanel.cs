@@ -102,6 +102,11 @@ namespace RevitMCPBridge2026.AgentFramework
         private bool _subscriptionBlocked;
         // --- auto-update ---
         private Border _updateBanner;
+        // Onboarding card + stage nudges (Eric 2026-11-23, see OnboardingNudge.cs): what the firm has taught us so far.
+        private OnboardingState _onboardingState;
+        private Border _onboardingCard;
+        private bool _onboardingCardHidden;       // "Got it" this session
+        private int _runsThisSession;
         private string _updateBannerVersion;
         private bool _updateBannerStaged;
         private string _updateBannerDismissedVersion;
@@ -2487,8 +2492,8 @@ namespace RevitMCPBridge2026.AgentFramework
 - Annotations: placeTextNote, placeKeynote, tagElements
 - Sheets/Views: createSheet, placeViewOnSheet, duplicateView
 
-ACCESS ALL 705 METHODS:
-The curated tools above are a small subset. Use callMCPMethod to call ANY of the 705 registered Revit methods.
+ACCESS ALL 1,100+ METHODS:
+The curated tools above are a small subset. Use callMCPMethod to call ANY of the 1,100+ registered Revit methods.
 Example: callMCPMethod with method=""classifyAndPackViews"", parameters={}
 Example: callMCPMethod with method=""moveViewToSheet"", parameters={""viewId"":875149,""targetSheetId"":123}
 Use listAllMethods to discover available methods by category. Always prefer callMCPMethod over guessing.
@@ -2502,7 +2507,7 @@ Any user request containing ""vicinity map"", ""site map"", ""location map"", ""
 NEVER import the map as a raster image/PNG — detail lines and text notes ARE the firm standard, not a substitute. NEVER use createVicinityMap — it does not exist and has never existed. NEVER use proxyVicinityMap or any invented method name. NEVER mention API keys or proxies for OSM data.
 
 HALLUCINATION PREVENTION — MANDATORY:
-- NEVER invent MCP method names. The 705 methods are fixed and finite. If unsure whether a method exists, call listAllMethods FIRST — do not guess.
+- NEVER invent MCP method names. The registered methods are fixed and finite (over 1,100). If unsure whether a method exists, call listAllMethods FIRST — do not guess.
 - NEVER describe proxies, cloud APIs, API keys, or external services that are not explicitly named in your knowledge files. They do not exist.
 - NEVER reference a Revit settings panel, menu, or UI element you have not seen in the current session.
 - NEVER invent project names, firm names, or past projects (e.g. ""Robinson project"") — you have no memory of prior sessions unless told explicitly.
@@ -2867,7 +2872,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 if (provider == "anthropic") ShowAnthropicKeyBanner();
                 else if (provider == "bimmonkey") ShowBimMonkeyAuthBanner(401);
             });
-            _agent.OnComplete += () => Dispatcher.Invoke(() => { HideProgress(); SetProcessing(false); OnBriefRunComplete(); });
+            _agent.OnComplete += () => Dispatcher.Invoke(() => { HideProgress(); SetProcessing(false); OnBriefRunComplete(); OnRunCompleteForOnboarding(); });
 
             // TOKEN USAGE — split input/output display matching 0421h format
             _agent.OnUsage += (inputTokens, outputTokens, cacheRead, cacheCreation) => Dispatcher.Invoke(() =>
@@ -2924,6 +2929,10 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             // Fetch firm standards in the background — injected into every prompt once loaded
             if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
                 _ = FetchFirmStandardsAsync();
+
+            // What the firm has taught us so far — drives the first-open card and the stage nudges (OnboardingNudge.cs)
+            if (!string.IsNullOrEmpty(_bimMonkeyApiKey))
+                _ = FetchOnboardingStateAsync();
 
             // Restore learned preferences from last session, then fetch corrections knowledge
             _ = LoadPreferencesAndCorrectionsAsync();
@@ -3392,6 +3401,136 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             };
         }
         // --- end auto-update ---
+
+        // --- onboarding card + stage nudges (OnboardingNudge.cs) ---
+        private async Task FetchOnboardingStateAsync()
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return;
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    RevitMCPBridge.AgentFramework.PluginIdentity.Stamp(client.DefaultRequestHeaders);
+                    client.Timeout = TimeSpan.FromSeconds(10);
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, "https://bimmonkey-production.up.railway.app/api/plugin/onboarding-state");
+                    if (!resp.IsSuccessStatusCode) return;
+                    var obj = JObject.Parse(await resp.Content.ReadAsStringAsync());
+                    var state = new OnboardingState
+                    {
+                        FirmName = obj["firmName"]?.ToString(),
+                        Uploads = obj["uploads"]?.ToObject<int>() ?? 0,
+                        StandardsChars = obj["standardsChars"]?.ToObject<int>() ?? 0,
+                        Corrections = obj["corrections"]?.ToObject<int>() ?? 0,
+                        Rules = obj["rules"]?.ToObject<int>() ?? 0,
+                        Runs = obj["runs"]?.ToObject<int>() ?? 0,
+                    };
+                    _onboardingState = state;
+                    var stage = OnboardingNudge.StageOf(state);
+                    var card = OnboardingNudge.CardText(state);
+                    var next = OnboardingNudge.NextStepText(state);
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        try
+                        {
+                            if (card != null) ShowOnboardingCard(card);
+                            if (next != null) AddSystemMessage(next);
+                        }
+                        catch { }
+                    }));
+                    TelemetryService.Track(_bimMonkeyApiKey, "onboarding_state", metadata: new { stage = stage.ToString(), uploads = state.Uploads, standards_chars = state.StandardsChars, corrections = state.Corrections, rules = state.Rules, runs = state.Runs, card = card != null, next_step = next != null });
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AgentChatPanel] onboarding state: {ex.Message}");
+            }
+        }
+
+        /// <summary>The card above the input: how it learns, and the firm's own rule count. Stays until the first correction or "Got it".</summary>
+        private void ShowOnboardingCard(string text)
+        {
+            if (_onboardingCardHidden) return;
+            HideOnboardingCard();
+            var lines = text.Split('\n');
+            var card = new Border
+            {
+                Margin = new Thickness(8, 4, 8, 4),
+                Padding = new Thickness(14, 12, 14, 12),
+                Background = ChatTheme.SuccessBg,
+                BorderBrush = ChatTheme.SuccessBorder,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6),
+            };
+            var stack = new StackPanel();
+            for (int i = 0; i < lines.Length; i++)
+            {
+                stack.Children.Add(new TextBlock
+                {
+                    Text = lines[i],
+                    Foreground = ChatTheme.SuccessText,
+                    FontSize = i == 0 ? 13 : 12,
+                    FontWeight = i == 0 ? FontWeights.SemiBold : FontWeights.Normal,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, i == 0 ? 0 : 4, 0, 0),
+                });
+            }
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+            var gotIt = MakeUpdateButton("Got it", ChatTheme.Neutral, false);
+            gotIt.Click += (s, e) => { _onboardingCardHidden = true; HideOnboardingCard(); TelemetryService.Track(_bimMonkeyApiKey, "onboarding_nudge", metadata: new { kind = "card_dismissed" }); };
+            buttons.Children.Add(gotIt);
+            stack.Children.Add(buttons);
+            card.Child = stack;
+            _onboardingCard = card;
+            (_bannerHost ?? (Panel)_chatHistory).Children.Add(card);
+            TelemetryService.Track(_bimMonkeyApiKey, "onboarding_nudge", metadata: new { kind = "card_shown" });
+        }
+
+        private void HideOnboardingCard()
+        {
+            if (_onboardingCard == null) return;
+            _bannerHost?.Children.Remove(_onboardingCard);
+            _chatHistory?.Children.Remove(_onboardingCard);
+            _onboardingCard = null;
+        }
+
+        /// <summary>After each completed run: the once-per-session "was everything right?" line for a firm that never corrects.</summary>
+        private void OnRunCompleteForOnboarding()
+        {
+            try
+            {
+                _runsThisSession++;
+                var text = OnboardingNudge.AfterRunText(_onboardingState, _runsThisSession);
+                if (text == null) return;
+                AddSystemMessage(text);
+                TelemetryService.Track(_bimMonkeyApiKey, "onboarding_nudge", metadata: new { kind = "after_run", runs_session = _runsThisSession, runs_total = _onboardingState?.Runs ?? 0 });
+            }
+            catch { }
+        }
+
+        /// <summary>A correction was stored this session: say it was kept, count it, and retire the card.</summary>
+        private void OnCorrectionStoredForOnboarding()
+        {
+            try
+            {
+                var wasLearning = _onboardingState != null && OnboardingNudge.StageOf(_onboardingState) == OnboardingStage.Learning;
+                if (_onboardingState == null) _onboardingState = new OnboardingState();
+                _onboardingState.Corrections++;
+                var text = OnboardingNudge.KeptText(_onboardingState, _onboardingState.Rules > 0 ? _onboardingState.Rules : _onboardingState.Corrections);
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        HideOnboardingCard();
+                        if (!wasLearning) AddSystemMessage(text);
+                    }
+                    catch { }
+                }));
+                if (!wasLearning) TelemetryService.Track(_bimMonkeyApiKey, "onboarding_nudge", metadata: new { kind = "kept", corrections = _onboardingState.Corrections });
+            }
+            catch { }
+        }
+        // --- end onboarding ---
 
         // --- support agent (docs/support-agent.md §3.3) ---
         private const string SupportHelpUrl = "https://bimmonkey.ai/getting-started#keys";
@@ -7303,6 +7442,7 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             SaveMemories(memories);
             _ = SyncMemoryToBackendAsync(memory.Content, "correction", 9);
             _ = SyncCorrectionToBackendAsync(whatISaid, whatWasWrong, correctApproach, parameters?["category"]?.ToString(), parameters?["project"]?.ToString());
+            OnCorrectionStoredForOnboarding();
 
             return JsonConvert.SerializeObject(new
             {
