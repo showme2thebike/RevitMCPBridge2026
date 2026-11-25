@@ -18,7 +18,11 @@ namespace RevitMCPBridge
     {
         private static MCPServer _mcpServer;
         private static UIApplication _uiApplication;
+#if BM_CONNECT
+        private static string _tabName = RevitMCPBridge2026.Connect.ConnectRibbon.TabName;
+#else
         private static string _tabName = "BIM Monkey";
+#endif
         private static MCPRequestHandler _requestHandler;
         private static ExternalEvent _externalEvent;
         private static BackgroundJobHandler _backgroundJobHandler;
@@ -77,6 +81,7 @@ namespace RevitMCPBridge
             try { revitUptimeMs = (long)(DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds; } catch { }
             try
             {
+#if !BM_CONNECT
                 // Register Banana Chat as a dockable pane — must happen before ribbon/tab creation
                 try
                 {
@@ -91,6 +96,7 @@ namespace RevitMCPBridge
                 {
                     Log.Warning(dpEx, "Failed to register Banana Chat dockable pane (non-fatal)");
                 }
+#endif
 
                 // Follow Revit's Light/Dark UI theme in Banana Chat (Revit 2024+ API)
                 try
@@ -134,7 +140,9 @@ namespace RevitMCPBridge
                     // Wire UIApplication into the dockable pane panel now that Revit is fully initialized
                     try
                     {
+#if !BM_CONNECT
                         RevitMCPBridge2026.AgentFramework.BananaChatDockablePane.Instance?.InitializeUiApp(_uiApplication);
+#endif
                     }
                     catch (Exception ex)
                     {
@@ -169,6 +177,12 @@ namespace RevitMCPBridge
                     // the server against the newly active document.
                     _uiApplication.Application.DocumentOpened += (s, e) =>
                     {
+#if BM_CONNECT
+                        // Connect has no chat panel, so the model snapshot (what Agent Access and model history read)
+                        // is pushed here, on Revit's thread, when a project opens.
+                        try { RevitMCPBridge2026.Connect.ModelSnapshot.PushFromRevitThread(_uiApplication, RevitMCPBridge.AgentFramework.SessionTokenManager.ReadBimMonkeyApiKey()); }
+                        catch (Exception snapEx) { Log.Warning(snapEx, "[Connect] snapshot push failed (non-fatal)"); }
+#endif
                         try
                         {
                             if (_mcpServer != null)
@@ -282,7 +296,11 @@ namespace RevitMCPBridge
 
                     if (bimTab != null)
                     {
+#if BM_CONNECT
+                        bimTab.KeyTip = "BC";   // Alt → BC → BIM Monkey Connect (BM stays with the full plugin)
+#else
                         bimTab.KeyTip = "BM";   // Alt → BM → activates BIM Monkey tab
+#endif
                         ribbon.Tabs.Remove(bimTab);
                         int addInsIdx = -1;
                         for (int i = 0; i < ribbon.Tabs.Count; i++)
@@ -327,9 +345,14 @@ namespace RevitMCPBridge
                 // --- end auto-update ---
 
                 // Auto-start server on Revit startup (respects Settings → Auto-start toggle, default: on)
+                // Connect never auto-starts: it shares the pipe name with the full plugin so the desktop connector works
+                // unchanged, and the two must not both listen. The user presses Connect Assistant.
                 try
                 {
                     var settings = MCPSettings.Load();
+#if BM_CONNECT
+                    settings.AutoStartServer = false;
+#endif
                     if (settings.AutoStartServer)
                     {
                         var server = new MCPServer();
@@ -358,6 +381,10 @@ namespace RevitMCPBridge
         
         private void CreateServerPanel(UIControlledApplication application)
         {
+#if BM_CONNECT
+            RevitMCPBridge2026.Connect.ConnectRibbon.Create(application, CreateButtonIcon);
+            if (application != null) return;
+#endif
             var asm = Assembly.GetExecutingAssembly().Location;
 
             // ── AI Enablement ─────────────────────────────────────────────

@@ -39,11 +39,14 @@ namespace RevitMCPBridge.UpdateTests
 
         public static IEnumerable<object[]> ShippedButtons()
         {
-            var app = File.ReadAllText(Path.Combine(Src, "RevitMCPBridgeApp.cs"));
+            // The Connect ribbon (src/Connect/ConnectRibbon.cs, App Store build) reuses several commands and adds its own; a name
+            // that appears in both ribbons is one button with one Click.
+            var app = File.ReadAllText(Path.Combine(Src, "RevitMCPBridgeApp.cs")) + File.ReadAllText(Path.Combine(Src, "Connect", "ConnectRibbon.cs"));
+            var seen = new HashSet<string>();
             foreach (Match m in Button.Matches(app))
             {
                 var name = m.Groups["name"].Value;
-                if (ExternalAssembly.Contains(name)) continue;
+                if (ExternalAssembly.Contains(name) || !seen.Add(name)) continue;
                 yield return new object[] { name, m.Groups["cls"].Value.Split('.').Last() };
             }
         }

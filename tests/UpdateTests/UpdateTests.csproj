@@ -33,6 +33,7 @@
     <Compile Include="..\..\src\Voice\VoiceAudio.cs" Link="Voice\VoiceAudio.cs" />
     <Compile Include="..\..\src\AgentFramework\OnboardingNudge.cs" Link="AgentFramework\OnboardingNudge.cs" />
     <Compile Include="..\..\src\AgentFramework\PublishSet.cs" Link="AgentFramework\PublishSet.cs" />
+    <Compile Include="..\..\src\Connect\ConnectAllowlist.cs" Link="Connect\ConnectAllowlist.cs" />
     <Compile Include="..\..\src\Transport\PipeRpc.cs" Link="Transport\PipeRpc.cs" />
     <Compile Include="..\..\src\Voice\VoiceModelStore.cs" Link="Voice\VoiceModelStore.cs" />
   </ItemGroup>

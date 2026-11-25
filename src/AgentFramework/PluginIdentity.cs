@@ -20,7 +20,13 @@ namespace RevitMCPBridge.AgentFramework
         /// knowledge-api: reads knowledge from the API into memory; needs no content key.
         /// server-prompt: when proxied, sends only its dynamic context and lets the server prepend
         /// the master rules and core knowledge (AgentChatPanel honours inference-config.serverPrompt).</summary>
+#if BM_CONNECT
+        /// <summary>connect: the App Store build. The server refuses chat, scripts, skills and knowledge for this session and
+        /// serves the connect update channel; it binds the edition to the session, not to the client's word (spec §5b).</summary>
+        public const string Capabilities = "connect";
+#else
         public const string Capabilities = "byok-passthrough,knowledge-api,server-prompt";
+#endif
 
         public static readonly string Version =
             Assembly.GetExecutingAssembly()

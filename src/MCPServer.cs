@@ -328,6 +328,10 @@ namespace RevitMCPBridge
                 InitializeMethodRegistry();
             }
 
+#if BM_CONNECT
+            if (!RevitMCPBridge2026.Connect.ConnectAllowlist.IsAllowed(methodName))
+                return RevitMCPBridge2026.Connect.ConnectAllowlist.RefusalJson(methodName);
+#endif
             if (!_methodRegistry.TryGetValue(methodName, out var method))
             {
                 return Helpers.ResponseBuilder.Error(
@@ -587,6 +591,12 @@ namespace RevitMCPBridge
                 var parameters = request["params"] as JObject;
 
                 Log.Information($"Processing method: {method}");
+#if BM_CONNECT
+                // Connect reads the model and publishes sets. Every write — including the pipe's own special cases
+                // (openProject, saveProject, setParameter, executeCommand, …) — is refused here before the switch.
+                if (!RevitMCPBridge2026.Connect.ConnectAllowlist.IsAllowed(method))
+                    return RevitMCPBridge2026.Connect.ConnectAllowlist.RefusalJson(method);
+#endif
                 
                 switch (method)
                 {
@@ -3741,6 +3751,7 @@ namespace RevitMCPBridge
                     // thread instead of via the registry, whose ExecuteInRevitContext wrapper
                     // would block Revit's UI thread on the network (up to 15s) and stall the
                     // serial MCP queue. Only the script execution itself enters Revit context.
+#if !BM_CONNECT
                     case "listSavedScripts":
                         return RevitMCPBridge2026.SavedScriptsMethods.ListSavedScripts(null, parameters);
 
@@ -3758,6 +3769,7 @@ namespace RevitMCPBridge
                                     execParams["is_platform"]?.Value<bool>() == true ? "platform" : "firm",
                                     execParams["name"]?.ToString()),
                                 600_000)); // scripts can run long ops — match executeRevitScript's timeout
+#endif
 
                     default:
                         // Check registry for dynamically registered methods (BMO, CIPS, etc.)

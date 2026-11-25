@@ -17,6 +17,11 @@
     <DefineConstants Condition="'$(RevitYear)' == '2026'">$(DefineConstants);REVIT2026</DefineConstants>
     <DefineConstants Condition="'$(RevitYear)' == '2027'">$(DefineConstants);REVIT2027</DefineConstants>
     <DefineConstants Condition="'$(BetaBuild)' == 'true'">$(DefineConstants);BETA</DefineConstants>
+    <!-- BIM Monkey Connect (App Store build, 2026-11-25): -p:Connect=true. Same source, three capabilities compiled OUT
+         (chat, scripts, voice) and every write method refused (src/Connect/ConnectAllowlist.cs). Own assembly name so it
+         installs side by side with the full plugin for testing. Spec: bimmonkey-ai-git/docs/research/bimmonkey-connect-spec-2026-11-25.md -->
+    <DefineConstants Condition="'$(Connect)' == 'true'">$(DefineConstants);BM_CONNECT</DefineConstants>
+    <AssemblyName Condition="'$(Connect)' == 'true'">BimMonkeyConnect$(RevitYear)</AssemblyName>
     <RootNamespace>RevitMCPBridge</RootNamespace>
     <NoWarn>MSB3277</NoWarn>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
@@ -33,6 +38,55 @@
     <Compile Remove="Properties2025\**" />
     <Compile Remove="tests\**" />
     <Compile Remove="archive\**" />
+  </ItemGroup>
+
+  <!-- Connect: compile OUT (not hide) Banana Chat, the script host, skills, Magic Wand, voice and every command that opens
+       chat with a prompt. tests/UpdateTests/ConnectBuildTests.cs reads this list and the built DLL's types. -->
+  <ItemGroup Condition="'$(Connect)' == 'true'">
+    <Compile Remove="src\AgentFramework\AgentChatPanel.cs" />
+    <Compile Remove="src\AgentFramework\AgentCore.cs" />
+    <Compile Remove="src\AgentFramework\BananaChatDockablePane.cs" />
+    <Compile Remove="src\AgentFramework\LaunchAgentCommand.cs" />
+    <Compile Remove="src\AgentFramework\LaunchComplianceCommand.cs" />
+    <Compile Remove="src\AgentFramework\LaunchRedlineReviewCommand.cs" />
+    <Compile Remove="src\AgentFramework\LaunchVicinityMapCommand.cs" />
+    <Compile Remove="src\AgentFramework\PlaywrightMCPClient.cs" />
+    <Compile Remove="src\AgentFramework\SkillsManager.cs" />
+    <Compile Remove="src\AgentFramework\ToolDefinitions.cs" />
+    <Compile Remove="src\AgentFramework\ScriptGuards.cs" />
+    <Compile Remove="src\AgentFramework\KnowledgeStore.cs" />
+    <Compile Remove="src\AgentFramework\OnboardingNudge.cs" />
+    <Compile Remove="src\ScriptMethods.cs" />
+    <Compile Remove="src\SavedScriptsMethods.cs" />
+    <Compile Remove="src\Voice\**" />
+    <Compile Remove="src\Commands\AnnotationCleanupCommand.cs" />
+    <Compile Remove="src\Commands\DigitizeCommand.cs" />
+    <Compile Remove="src\Commands\MagicWandCommand.cs" />
+    <Compile Remove="src\Commands\ModelCheckCommand.cs" />
+    <Compile Remove="src\Commands\OccupancyCommand.cs" />
+    <Compile Remove="src\Commands\OccupancyDialog.cs" />
+    <Compile Remove="src\Commands\ParcelCommand.cs" />
+    <Compile Remove="src\Commands\ParcelDataDialog.cs" />
+    <Compile Remove="src\Commands\PermitsCommand.cs" />
+    <Compile Remove="src\Commands\PermitHistoryDialog.cs" />
+    <Compile Remove="src\Commands\SiteClimateCommand.cs" />
+    <Compile Remove="src\Commands\SiteClimateDialog.cs" />
+    <Compile Remove="src\Commands\ZoningCommand.cs" />
+    <Compile Remove="src\Commands\ZoningLookupDialog.cs" />
+    <Compile Remove="src\Commands\RunSavedScriptCommand.cs" />
+    <Compile Remove="src\Commands\LastScriptResult.cs" />
+    <Compile Remove="src\Commands\RedlineCancelCommand.cs" />
+    <Compile Remove="src\Commands\RedlineClearCommand.cs" />
+    <Compile Remove="src\Commands\RedlineLoadCommand.cs" />
+    <Compile Remove="src\Commands\RedlineState.cs" />
+    <Compile Remove="src\Commands\EC3Command.cs" />
+    <Compile Remove="src\Commands\EC3SearchDialog.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(Connect)' != 'true'">
+    <Compile Remove="src\Connect\ConnectRibbon.cs" />
+    <Compile Remove="src\Connect\PublishSetCommand.cs" />
+    <Compile Remove="src\Connect\CollaboratorsCommand.cs" />
+    <Compile Remove="src\Connect\PrivacyCommand.cs" />
   </ItemGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
@@ -74,16 +128,16 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" Condition="'$(Connect)' != 'true'" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <!-- DPAPI (CurrentUser) for KnowledgeStore's per-user offline cache; Windows-only, which this is -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
     <PackageReference Include="Serilog" Version="3.1.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
     <!-- Push-to-talk (src/Voice): on-device Whisper + microphone capture. Native libs land in runtimeswin-x64 of the publish folder; build_plugin_zip.ps1 stages them into installer/files/<year>/runtimes/win-x64. -->
-    <PackageReference Include="Whisper.net" Version="1.9.1" />
-    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" />
-    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="Whisper.net" Version="1.9.1" Condition="'$(Connect)' != 'true'" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.1" Condition="'$(Connect)' != 'true'" />
+    <PackageReference Include="NAudio" Version="2.2.1" Condition="'$(Connect)' != 'true'" />
   </ItemGroup>
 
 </Project>
