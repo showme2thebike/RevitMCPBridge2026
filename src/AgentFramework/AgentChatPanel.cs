@@ -2563,6 +2563,9 @@ If the user confirms (yes, sure, save it, etc.), call saveScript with:
 Do not ask for saveScript parameters separately — infer them from the script and conversation.
 Do NOT call saveSkill for C# scripts — saveSkill is for natural-language workflow shortcuts only.
 
+PUBLISH SET — CONFIRMATION MANDATORY:
+publishSet sends an issued set out of the firm: it uploads the sheets to the web app and emails collaborators personal links. First call it WITHOUT confirm; it returns a preview (the exact sheets found and not found, the recipients, the label) and a confirmToken. Show that preview to the user word for word and wait for an explicit yes. Only then call publishSet again with the same parameters plus confirm=true and that confirmToken. Never invent sheet numbers or email addresses — ask. A published set is for collaborators only and stays OUT of the firm's library by default (interim work: progress, bid, revision sets); pass addToLibrary=true only when the user says the set is final/the finished permit or construction set, because that replaces the project's library pages and informs firm standards. After the upload, say exactly what the tool returned: the set publishes when analysis finishes and the Inbox reports the result; do not say ""published"" or ""sent"" before that. Collaborators see ONLY the published PDFs, never the model, standards or library. revokeCollaborator works the same way: list, show, confirm, then confirm=true.
+
 CLARIFY-FIRST — MANDATORY FOR SPATIAL AND REDLINE TASKS:
 Before executing any spatial-layout task (placing viewports, dimensions, annotations, casework, furniture) or any redline-execution task (model changes based on markup or verbal description), ask at least one targeted question first:
 - Spatial tasks: confirm which floor/level; ask if you should pre-check for existing elements in the area
@@ -3533,6 +3536,190 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
         // --- end onboarding ---
 
         // --- support agent (docs/support-agent.md §3.3) ---
+        // ---- Publish from Revit (2026-11-25). Pure parts in PublishSet.cs; this is the Revit + network glue. ----
+        private const string PublishSetUrl = "https://bimmonkey-production.up.railway.app/api/plugin/publish-set";
+        private const string CollaboratorsUrl = "https://bimmonkey-production.up.railway.app/api/projects/collaborators";
+
+        private void Say(string text)
+        {
+            if (Dispatcher.CheckAccess()) AddSystemMessage(text);
+            else Dispatcher.Invoke(() => AddSystemMessage(text));
+        }
+
+        private async Task<string> HandlePublishSetAsync(JObject parameters)
+        {
+            string parseError;
+            var req = RevitMCPBridge2026.AgentFramework.PublishSet.Parse(parameters, out parseError);
+            if (req == null) return JsonConvert.SerializeObject(new { success = false, error = parseError });
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey))
+                return JsonConvert.SerializeObject(new { success = false, error = "No BIM Monkey API key is set in this plugin; add it in Settings before publishing." });
+
+            // 1. the sheets that exist in the active document
+            List<RevitMCPBridge2026.AgentFramework.SheetMatch> matched;
+            List<string> missing;
+            try
+            {
+                var sheetsJson = await ExecuteMCPWithRetryAsync("getAllSheets", new JObject());
+                var sheets = JObject.Parse(sheetsJson);
+                var list = (sheets["sheets"] ?? sheets["result"]?["sheets"] ?? sheets["result"]) as JArray;
+                if (list == null) return JsonConvert.SerializeObject(new { success = false, error = "Could not read the sheet list from Revit. Is a project open?" });
+                RevitMCPBridge2026.AgentFramework.PublishSet.ResolveSheets(list.OfType<JObject>(), req.SheetNumbers, out matched, out missing);
+            }
+            catch (Exception ex) { return JsonConvert.SerializeObject(new { success = false, error = "Could not read the sheets: " + ex.Message }); }
+            if (matched.Count == 0)
+                return JsonConvert.SerializeObject(new { success = false, error = "None of the requested sheets exist in this model" + (missing.Count > 0 ? ": " + string.Join(", ", missing) : "") + ". Call getAllSheets and ask the user which sheets to publish." });
+
+            var token = RevitMCPBridge2026.AgentFramework.PublishSet.ConfirmToken(req.ProjectName, matched.Select(m => m.Number), req.Collaborators.Select(c => c.Email), req.AddToLibrary);
+
+            // 2. preview unless the user already approved exactly this set
+            if (!req.Confirm || !string.Equals(req.ConfirmToken, token, StringComparison.OrdinalIgnoreCase))
+            {
+                TelemetryService.Track(_bimMonkeyApiKey, "publish_set", toolName: "publishSet",
+                    metadata: new { stage = "preview", sheets = matched.Count, missing = missing.Count, collaborators = req.Collaborators.Count, add_to_library = req.AddToLibrary, stale_token = req.Confirm });
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true, needsConfirmation = true, confirmToken = token, sheets = matched.Count, missing,
+                    preview = RevitMCPBridge2026.AgentFramework.PublishSet.PreviewText(req, matched, missing, token),
+                });
+            }
+
+            // 3. export (one PDF per sheet; Revit 2026 cannot combine) and upload
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            string tempDir = Path.Combine(Path.GetTempPath(), "BimMonkeyPublish", Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(tempDir);
+                Say($"Publishing {matched.Count} sheet(s) of \"{req.ProjectName}\": exporting PDFs…");
+                var ids = new JArray(); foreach (var m in matched) ids.Add(m.Id);
+                var exportJson = await ExecuteMCPWithRetryAsync("exportSheetsToPDF", new JObject
+                {
+                    ["sheetIds"] = ids, ["outputFolder"] = tempDir, ["fileName"] = "{SheetNumber} - {SheetName}", ["combineIntoSingle"] = false
+                });
+                var export = JObject.Parse(exportJson);
+                if (export["success"]?.ToObject<bool>() != true)
+                {
+                    TelemetryService.Track(_bimMonkeyApiKey, "publish_set", toolName: "publishSet", success: false, durationMs: sw.ElapsedMilliseconds,
+                        metadata: new { stage = "failed", at = "export", sheets = matched.Count });
+                    return JsonConvert.SerializeObject(new { success = false, error = "PDF export failed: " + (export["error"]?.ToString() ?? "unknown") + ". Nothing was published." });
+                }
+                var files = RevitMCPBridge2026.AgentFramework.PublishSet.OrderExportedFiles((export["exportedFiles"] as JArray)?.OfType<JObject>(), matched)
+                    .Select(f => f["fullPath"]?.ToString()).Where(p => !string.IsNullOrEmpty(p) && File.Exists(p)).ToList();
+                var exportFailed = (export["failedSheets"] as JArray)?.Select(f => (f["sheetNumber"] ?? f)?.ToString()).Where(x => !string.IsNullOrEmpty(x)).ToList() ?? new List<string>();
+                if (files.Count == 0)
+                {
+                    TelemetryService.Track(_bimMonkeyApiKey, "publish_set", toolName: "publishSet", success: false, durationMs: sw.ElapsedMilliseconds,
+                        metadata: new { stage = "failed", at = "export_empty", sheets = matched.Count });
+                    return JsonConvert.SerializeObject(new { success = false, error = "Revit exported no PDF files. Nothing was published." });
+                }
+
+                Say($"Uploading {files.Count} PDF(s) to BIM Monkey…");
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    RevitMCPBridge.AgentFramework.PluginIdentity.Stamp(client.DefaultRequestHeaders);
+                    client.Timeout = TimeSpan.FromMinutes(10);
+                    var form = new System.Net.Http.MultipartFormDataContent();
+                    foreach (var path in files)
+                    {
+                        form.Add(new System.Net.Http.ByteArrayContent(File.ReadAllBytes(path))
+                        {
+                            Headers = { ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/pdf") }
+                        }, "files", Path.GetFileName(path));
+                    }
+                    form.Add(new System.Net.Http.StringContent(req.ProjectName), "projectName");
+                    if (req.Label != null) form.Add(new System.Net.Http.StringContent(req.Label), "label");
+                    form.Add(new System.Net.Http.StringContent(JsonConvert.SerializeObject(req.Notes)), "notes");
+                    form.Add(new System.Net.Http.StringContent(JsonConvert.SerializeObject(req.Collaborators.Select(c => new { name = c.Name, email = c.Email }))), "collaborators");
+                    form.Add(new System.Net.Http.StringContent(JsonConvert.SerializeObject(matched.Select(m => m.Number))), "sheetNumbers");
+                    form.Add(new System.Net.Http.StringContent(req.Notify ? "true" : "false"), "notify");
+                    form.Add(new System.Net.Http.StringContent(req.AddToLibrary ? "true" : "false"), "addToLibrary");
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client, PublishSetUrl, form);
+                    var body = await resp.Content.ReadAsStringAsync();
+                    JObject server = null; try { server = JObject.Parse(body); } catch { }
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        TelemetryService.Track(_bimMonkeyApiKey, "publish_set", toolName: "publishSet", success: false, durationMs: sw.ElapsedMilliseconds,
+                            metadata: new { stage = "failed", at = "upload", status = (int)resp.StatusCode, files = files.Count });
+                        var err = server?["error"]?.ToString() ?? body;
+                        return JsonConvert.SerializeObject(new { success = false, error = $"BIM Monkey did not accept the set ({(int)resp.StatusCode}): {err}. Nothing was published." });
+                    }
+                    var skipped = missing.Concat(exportFailed).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                    var text = RevitMCPBridge2026.AgentFramework.PublishSet.ResultText(server, files.Count, skipped);
+                    Say(text);
+                    TelemetryService.Track(_bimMonkeyApiKey, "publish_set", toolName: "publishSet", success: true, durationMs: sw.ElapsedMilliseconds,
+                        metadata: new { stage = "uploaded", sheets = matched.Count, files = files.Count, skipped = skipped.Count, collaborators = req.Collaborators.Count, notify = req.Notify, add_to_library = req.AddToLibrary, job_id = server?["jobId"]?.ToString(), planned_issue = server?["plannedIssueNumber"]?.ToString() });
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true, published = false, uploaded = files.Count, skipped,
+                        jobId = server?["jobId"], plannedIssueNumber = server?["plannedIssueNumber"], collaborators = server?["collaborators"],
+                        message = text + " Tell the user exactly this; do not claim the set is published or the emails are sent until the Inbox says so.",
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                TelemetryService.Track(_bimMonkeyApiKey, "publish_set", toolName: "publishSet", success: false, durationMs: sw.ElapsedMilliseconds,
+                    metadata: new { stage = "failed", at = "exception", error = ex.Message.Length > 160 ? ex.Message.Substring(0, 160) : ex.Message });
+                return JsonConvert.SerializeObject(new { success = false, error = "Publish failed: " + ex.Message + ". Nothing was published." });
+            }
+            finally
+            {
+                try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
+            }
+        }
+
+        private async Task<string> HandleRevokeCollaboratorAsync(JObject parameters)
+        {
+            var project = parameters?["projectName"]?.ToString()?.Trim();
+            var email = parameters?["email"]?.ToString()?.Trim().ToLowerInvariant();
+            var confirm = parameters?["confirm"]?.Type == JTokenType.Boolean && parameters["confirm"].Value<bool>();
+            if (string.IsNullOrEmpty(project)) return JsonConvert.SerializeObject(new { success = false, error = "projectName is required" });
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return JsonConvert.SerializeObject(new { success = false, error = "No BIM Monkey API key is set in this plugin." });
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    RevitMCPBridge.AgentFramework.PluginIdentity.Stamp(client.DefaultRequestHeaders);
+                    client.Timeout = TimeSpan.FromSeconds(20);
+                    var listResp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, CollaboratorsUrl + "?project=" + Uri.EscapeDataString(project));
+                    var listBody = await listResp.Content.ReadAsStringAsync();
+                    if (!listResp.IsSuccessStatusCode) return JsonConvert.SerializeObject(new { success = false, error = $"Could not read collaborators ({(int)listResp.StatusCode}): {listBody}" });
+                    var parsed = JObject.Parse(listBody);
+                    var active = ((parsed["collaborators"] as JArray) ?? new JArray()).OfType<JObject>()
+                        .Where(c => c["revoked_at"] == null || c["revoked_at"].Type == JTokenType.Null)
+                        .Select(c => new { id = c["id"]?.Value<long>() ?? 0, name = c["name"]?.ToString(), email = c["email"]?.ToString()?.ToLowerInvariant(), questions = c["questions"]?.ToString(), seen = c["last_seen_at"]?.Type == JTokenType.Null ? null : c["last_seen_at"]?.ToString() })
+                        .ToList();
+                    var seats = parsed["seats"];
+                    if (string.IsNullOrEmpty(email))
+                    {
+                        TelemetryService.Track(_bimMonkeyApiKey, "revoke_collaborator", toolName: "revokeCollaborator", metadata: new { stage = "list", active = active.Count });
+                        return JsonConvert.SerializeObject(new { success = true, project, collaborators = active, seats, message = active.Count == 0 ? "No one holds a link to this project's issued sets." : $"{active.Count} collaborator(s) hold a link to \"{project}\"." });
+                    }
+                    var hit = active.FirstOrDefault(c => c.email == email);
+                    if (hit == null)
+                        return JsonConvert.SerializeObject(new { success = false, error = $"No active collaborator with email {email} on \"{project}\".", collaborators = active });
+                    if (!confirm)
+                    {
+                        TelemetryService.Track(_bimMonkeyApiKey, "revoke_collaborator", toolName: "revokeCollaborator", metadata: new { stage = "preview" });
+                        return JsonConvert.SerializeObject(new { success = true, needsConfirmation = true, wouldRevoke = hit,
+                            preview = $"REVOKE PREVIEW — nothing changed yet. {hit.name} <{hit.email}> loses access to the issued sets of \"{project}\" immediately; the sets and other links stay. Ask the user to confirm, then call revokeCollaborator again with confirm=true." });
+                    }
+                    var del = await client.DeleteAsync(CollaboratorsUrl + "/" + hit.id);
+                    var delBody = await del.Content.ReadAsStringAsync();
+                    if (!del.IsSuccessStatusCode)
+                    {
+                        TelemetryService.Track(_bimMonkeyApiKey, "revoke_collaborator", toolName: "revokeCollaborator", success: false, metadata: new { stage = "failed", status = (int)del.StatusCode });
+                        return JsonConvert.SerializeObject(new { success = false, error = $"Revoke failed ({(int)del.StatusCode}): {delBody}" });
+                    }
+                    Say($"Revoked {hit.name}'s link to \"{project}\".");
+                    TelemetryService.Track(_bimMonkeyApiKey, "revoke_collaborator", toolName: "revokeCollaborator", success: true, metadata: new { stage = "revoked" });
+                    return JsonConvert.SerializeObject(new { success = true, revoked = hit, message = $"{hit.name} <{hit.email}> no longer has access to \"{project}\". The issued sets and the other collaborators are unchanged." });
+                }
+            }
+            catch (Exception ex) { return JsonConvert.SerializeObject(new { success = false, error = ex.Message }); }
+        }
+
         private const string SupportHelpUrl = "https://bimmonkey.ai/getting-started#keys";
 
         /// <summary>support_help: server-side answer from the guides + this firm's account state. Returns JSON the model relays.</summary>
@@ -5170,6 +5357,12 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 catch { }
                 return visionResult;
             }
+
+            // Collaboration from Revit (2026-11-25): publish an issued set / manage collaborator links. Both confirm-gated.
+            if (methodName == "publishSet")
+                return await HandlePublishSetAsync(parameters);
+            if (methodName == "revokeCollaborator")
+                return await HandleRevokeCollaboratorAsync(parameters);
 
             // First-line support agent (docs/support-agent.md §3.3) — server-side answer on BIM Monkey's key
             if (methodName == "support_help")

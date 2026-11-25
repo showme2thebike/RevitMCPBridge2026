@@ -404,6 +404,47 @@ Common methods: createWall, placeDoor, placeWindow, createRoom, tagRoom, createS
                         required = new[] { "typeName" }
                     }
                 },
+                // Collaboration (2026-11-25): publish an issued set from Revit and manage who can see it. Two-step by design —
+                // preview + confirm token first, publish only with the token — because this sends email outside the firm.
+                new ToolDefinition
+                {
+                    Name = "publishSet",
+                    Description = @"Publish an issued drawing set from this Revit model to the BIM Monkey web app and share it with collaborators (consultants, contractors). Exports the named sheets to PDF, uploads them as the next issue of the project, archives the project's previous library pages, and emails each collaborator a personal link that shows ONLY the published sheets — never the model, standards or library.
+TWO STEPS, MANDATORY: (1) call WITHOUT confirm → you get a PREVIEW (exact sheets found and not found, recipients, label) and a confirmToken; show the preview to the user verbatim and wait for an explicit yes. (2) only after the user says yes, call again with the SAME parameters plus confirm=true and that confirmToken. Never invent sheet numbers or email addresses; ask. Omit sheetNumbers to publish every sheet in the model.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            projectName   = new { type = "string", description = "Project name exactly as it appears in the web app Library (ask if unsure; getProjectInfo gives the Revit project name, which is usually the same)" },
+                            sheetNumbers  = new { type = "array", items = new { type = "string" }, description = "Sheet numbers to publish, e.g. [\"A1.0\",\"A2.1\"]. Omit for every sheet." },
+                            label         = new { type = "string", description = "Issue label shown to collaborators, e.g. 'Permit set', 'Bid set', 'Revision 2'" },
+                            notes         = new { type = "array", items = new { type = "string" }, description = "Short notes shown with this issue, e.g. 'Floor finishes TBD by owner'" },
+                            collaborators = new { type = "array", items = new { type = "object", properties = new { name = new { type = "string" }, email = new { type = "string" } }, required = new[] { "email" } }, description = "People who get a personal link by email. Omit to publish without inviting anyone yet." },
+                            notify        = new { type = "boolean", description = "false = create the collaborator seats without sending email (default true)" },
+                            addToLibrary  = new { type = "boolean", description = "Default false: collaborators only, the firm library and standards are untouched (progress, bid, revision sets). true ONLY when the user says this is the finished permit/construction set: it replaces the project's library pages and informs firm standards." },
+                            confirm       = new { type = "boolean", description = "true ONLY after the user approved the preview" },
+                            confirmToken  = new { type = "string", description = "The token returned with the preview; required with confirm=true" }
+                        },
+                        required = new[] { "projectName" }
+                    }
+                },
+                new ToolDefinition
+                {
+                    Name = "revokeCollaborator",
+                    Description = @"List the collaborators who hold a link to a project's issued sets, or revoke one person's link (they lose access immediately; the sets and the other links stay). Without email: returns the list. With email and no confirm: returns what would be revoked — confirm with the user first. With email and confirm=true: revokes.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            projectName = new { type = "string", description = "Project name as it appears in the web app Library" },
+                            email       = new { type = "string", description = "The collaborator's email to revoke. Omit to list." },
+                            confirm     = new { type = "boolean", description = "true ONLY after the user approved the revoke" }
+                        },
+                        required = new[] { "projectName" }
+                    }
+                },
                 // Knowledge base tools - load architectural knowledge on demand
                 new ToolDefinition
                 {
