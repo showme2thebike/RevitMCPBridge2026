@@ -2564,7 +2564,7 @@ Do not ask for saveScript parameters separately — infer them from the script a
 Do NOT call saveSkill for C# scripts — saveSkill is for natural-language workflow shortcuts only.
 
 PUBLISH SET — CONFIRMATION MANDATORY:
-publishSet sends an issued set out of the firm: it uploads the sheets to the web app and emails collaborators personal links. First call it WITHOUT confirm; it returns a preview (the exact sheets found and not found, the recipients, the label) and a confirmToken. Show that preview to the user word for word and wait for an explicit yes. Only then call publishSet again with the same parameters plus confirm=true and that confirmToken. Never invent sheet numbers or email addresses — ask. A published set is for collaborators only and stays OUT of the firm's library by default (interim work: progress, bid, revision sets); pass addToLibrary=true only when the user says the set is final/the finished permit or construction set, because that replaces the project's library pages and informs firm standards. After the upload, say exactly what the tool returned: the set publishes when analysis finishes and the Inbox reports the result; do not say ""published"" or ""sent"" before that. Collaborators see ONLY the published PDFs, never the model, standards or library. revokeCollaborator works the same way: list, show, confirm, then confirm=true. getCollaboratorQuestions lists what consultants and clients asked on the firm's shared sets (and which still need the architect) — use it when the user asks what was asked about a project; answerCollaboratorQuestion posts the architect's answer on the set and emails them, preview then confirm=true.
+publishSet sends an issued set out of the firm: it uploads the sheets to the web app and emails collaborators personal links. First call it WITHOUT confirm; it returns a preview (the exact sheets found and not found, the recipients, the label) and a confirmToken. Show that preview to the user word for word and wait for an explicit yes. Only then call publishSet again with the same parameters plus confirm=true and that confirmToken. Never invent sheet numbers or email addresses — ask. A published set is for collaborators only and stays OUT of the firm's library by default (interim work: progress, bid, revision sets); pass addToLibrary=true only when the user says the set is final/the finished permit or construction set, because that replaces the project's library pages and informs firm standards. After the upload, say exactly what the tool returned: the set publishes when analysis finishes and the Inbox reports the result; do not say ""published"" or ""sent"" before that. Collaborators see ONLY the published PDFs, never the model, standards or library. revokeCollaborator works the same way: list, show, confirm, then confirm=true. inviteCollaborator invites someone to an already-published project after the fact (preview, then confirm=true). getCollaboratorQuestions lists what consultants and clients asked on the firm's shared sets (and which still need the architect) — use it when the user asks what was asked about a project; answerCollaboratorQuestion posts the architect's answer on the set and emails them, preview then confirm=true.
 
 CLARIFY-FIRST — MANDATORY FOR SPATIAL AND REDLINE TASKS:
 Before executing any spatial-layout task (placing viewports, dimensions, annotations, casework, furniture) or any redline-execution task (model changes based on markup or verbal description), ask at least one targeted question first:
@@ -3671,6 +3671,42 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
         private const string CollaboratorQuestionsUrl = "https://bimmonkey-production.up.railway.app/api/projects/collaborator-questions";
 
         /// <summary>What collaborators asked on the firm's shared sets (Eric 11/25: "I don't want to have to go into the web app to read").</summary>
+        /// <summary>Invite after the fact (the publishSet tool invites at publish time). Confirm-first: it emails someone outside the firm.</summary>
+        private async Task<string> HandleInviteCollaboratorAsync(JObject parameters)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return JsonConvert.SerializeObject(new { success = false, error = "No BIM Monkey API key is set in this plugin." });
+            var project = parameters?["projectName"]?.ToString()?.Trim();
+            var name = parameters?["name"]?.ToString()?.Trim();
+            var email = parameters?["email"]?.ToString()?.Trim().ToLowerInvariant();
+            var confirm = parameters?["confirm"]?.Type == JTokenType.Boolean && parameters["confirm"].Value<bool>();
+            if (string.IsNullOrEmpty(project) || string.IsNullOrEmpty(email) || !System.Text.RegularExpressions.Regex.IsMatch(email, @"^[^@\s]+@[^@\s]+\.[^@\s]+$"))
+                return JsonConvert.SerializeObject(new { success = false, error = "projectName and a valid email are required; ask the user for the exact address." });
+            if (string.IsNullOrEmpty(name)) name = email.Split('@')[0];
+            if (!confirm)
+                return JsonConvert.SerializeObject(new { success = true, needsConfirmation = true,
+                    preview = $"INVITE PREVIEW — nothing sent yet.\n{name} <{email}> will be emailed a personal link to the issued set(s) of \"{project}\": the published sheets, a vector PDF download, and a question box answered only from those sheets. They see nothing else. Show this to the user and wait for an explicit yes, then call inviteCollaborator again with confirm=true." });
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    RevitMCPBridge.AgentFramework.PluginIdentity.Stamp(client.DefaultRequestHeaders);
+                    client.Timeout = TimeSpan.FromSeconds(20);
+                    var payload = new System.Net.Http.StringContent(JsonConvert.SerializeObject(new { project, name, email }), System.Text.Encoding.UTF8, "application/json");
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client, CollaboratorsUrl, payload);
+                    var body = await resp.Content.ReadAsStringAsync();
+                    TelemetryService.Track(_bimMonkeyApiKey, "tool_call", toolName: "inviteCollaborator", success: resp.IsSuccessStatusCode, metadata: new { project });
+                    if (!resp.IsSuccessStatusCode) { JObject e = null; try { e = JObject.Parse(body); } catch { } return JsonConvert.SerializeObject(new { success = false, error = e?["error"]?.ToString() ?? $"Invite failed ({(int)resp.StatusCode})" }); }
+                    var j = JObject.Parse(body);
+                    var emailed = j["emailed"]?.Value<bool>() == true;
+                    Say($"{name} invited to \"{project}\"" + (emailed ? " and emailed their link." : " (no email went out; give them the link)."));
+                    return JsonConvert.SerializeObject(new { success = true, collaborator = j["collaborator"], url = j["url"], emailed, reinvited = j["reinvited"], seats = j["seats"],
+                        message = $"{name} {(j["reinvited"]?.Value<bool>() == true ? "re-invited" : "invited")} to \"{project}\"{(emailed ? " and emailed their link." : "; no email went out, give them the link.")}" });
+                }
+            }
+            catch (Exception ex) { return JsonConvert.SerializeObject(new { success = false, error = ex.Message }); }
+        }
+
         private async Task<string> HandleCollaboratorQuestionsAsync(JObject parameters)
         {
             if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return JsonConvert.SerializeObject(new { success = false, error = "No BIM Monkey API key is set in this plugin." });
@@ -5433,6 +5469,8 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 return await HandleRevokeCollaboratorAsync(parameters);
             if (methodName == "getCollaboratorQuestions")
                 return await HandleCollaboratorQuestionsAsync(parameters);
+            if (methodName == "inviteCollaborator")
+                return await HandleInviteCollaboratorAsync(parameters);
             if (methodName == "answerCollaboratorQuestion")
                 return await HandleAnswerCollaboratorQuestionAsync(parameters);
 

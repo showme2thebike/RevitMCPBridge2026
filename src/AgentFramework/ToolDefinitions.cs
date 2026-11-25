@@ -431,6 +431,23 @@ TWO STEPS, MANDATORY: (1) call WITHOUT confirm → you get a PREVIEW (exact shee
                 },
                 new ToolDefinition
                 {
+                    Name = "inviteCollaborator",
+                    Description = @"Invite a consultant, contractor or client to a project's issued sets after the fact (publishSet can also invite at publish time). They get an email with a personal link: the published sheets, a vector PDF download, a question box answered from the sheets. CONFIRMATION MANDATORY: call without confirm → preview (name, email, project, what they will receive); show it, wait for the user's yes; call again with confirm=true. Re-inviting the same email keeps their seat and sends a fresh link.",
+                    InputSchema = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            projectName = new { type = "string", description = "Project name as it appears in the web app Library (must have an issued set)" },
+                            name        = new { type = "string" },
+                            email       = new { type = "string" },
+                            confirm     = new { type = "boolean", description = "true ONLY after the user approved the preview" }
+                        },
+                        required = new[] { "projectName", "name", "email" }
+                    }
+                },
+                new ToolDefinition
+                {
                     Name = "getCollaboratorQuestions",
                     Description = @"Questions that consultants, contractors and clients asked on this firm's shared (issued) sets, with Banana Chat's answer from the sheets, the architect's own answer when given, and which ones still need the architect. Use when the user asks what was asked about a project, what collaborators want to know, or what is waiting on them.",
                     InputSchema = new
