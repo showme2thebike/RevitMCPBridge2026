@@ -2564,7 +2564,7 @@ Do not ask for saveScript parameters separately — infer them from the script a
 Do NOT call saveSkill for C# scripts — saveSkill is for natural-language workflow shortcuts only.
 
 PUBLISH SET — CONFIRMATION MANDATORY:
-publishSet sends an issued set out of the firm: it uploads the sheets to the web app and emails collaborators personal links. First call it WITHOUT confirm; it returns a preview (the exact sheets found and not found, the recipients, the label) and a confirmToken. Show that preview to the user word for word and wait for an explicit yes. Only then call publishSet again with the same parameters plus confirm=true and that confirmToken. Never invent sheet numbers or email addresses — ask. A published set is for collaborators only and stays OUT of the firm's library by default (interim work: progress, bid, revision sets); pass addToLibrary=true only when the user says the set is final/the finished permit or construction set, because that replaces the project's library pages and informs firm standards. After the upload, say exactly what the tool returned: the set publishes when analysis finishes and the Inbox reports the result; do not say ""published"" or ""sent"" before that. Collaborators see ONLY the published PDFs, never the model, standards or library. revokeCollaborator works the same way: list, show, confirm, then confirm=true.
+publishSet sends an issued set out of the firm: it uploads the sheets to the web app and emails collaborators personal links. First call it WITHOUT confirm; it returns a preview (the exact sheets found and not found, the recipients, the label) and a confirmToken. Show that preview to the user word for word and wait for an explicit yes. Only then call publishSet again with the same parameters plus confirm=true and that confirmToken. Never invent sheet numbers or email addresses — ask. A published set is for collaborators only and stays OUT of the firm's library by default (interim work: progress, bid, revision sets); pass addToLibrary=true only when the user says the set is final/the finished permit or construction set, because that replaces the project's library pages and informs firm standards. After the upload, say exactly what the tool returned: the set publishes when analysis finishes and the Inbox reports the result; do not say ""published"" or ""sent"" before that. Collaborators see ONLY the published PDFs, never the model, standards or library. revokeCollaborator works the same way: list, show, confirm, then confirm=true. getCollaboratorQuestions lists what consultants and clients asked on the firm's shared sets (and which still need the architect) — use it when the user asks what was asked about a project; answerCollaboratorQuestion posts the architect's answer on the set and emails them, preview then confirm=true.
 
 CLARIFY-FIRST — MANDATORY FOR SPATIAL AND REDLINE TASKS:
 Before executing any spatial-layout task (placing viewports, dimensions, annotations, casework, furniture) or any redline-execution task (model changes based on markup or verbal description), ask at least one targeted question first:
@@ -3666,6 +3666,74 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
             {
                 try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
             }
+        }
+
+        private const string CollaboratorQuestionsUrl = "https://bimmonkey-production.up.railway.app/api/projects/collaborator-questions";
+
+        /// <summary>What collaborators asked on the firm's shared sets (Eric 11/25: "I don't want to have to go into the web app to read").</summary>
+        private async Task<string> HandleCollaboratorQuestionsAsync(JObject parameters)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return JsonConvert.SerializeObject(new { success = false, error = "No BIM Monkey API key is set in this plugin." });
+            var project = parameters?["projectName"]?.ToString()?.Trim();
+            var unansweredOnly = parameters?["unansweredOnly"]?.Type == JTokenType.Boolean && parameters["unansweredOnly"].Value<bool>();
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    RevitMCPBridge.AgentFramework.PluginIdentity.Stamp(client.DefaultRequestHeaders);
+                    client.Timeout = TimeSpan.FromSeconds(20);
+                    var url = CollaboratorQuestionsUrl + (string.IsNullOrEmpty(project) ? "" : "?project=" + Uri.EscapeDataString(project));
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.GetAsync(client, url);
+                    var body = await resp.Content.ReadAsStringAsync();
+                    if (!resp.IsSuccessStatusCode) return JsonConvert.SerializeObject(new { success = false, error = $"Could not read collaborator questions ({(int)resp.StatusCode}): {body}" });
+                    var rows = ((JObject.Parse(body)["questions"] as JArray) ?? new JArray()).OfType<JObject>()
+                        .Where(q => !unansweredOnly || q["architect_answer"] == null || q["architect_answer"].Type == JTokenType.Null)
+                        .Select(q => new
+                        {
+                            id = q["id"], project = q["project_name"]?.ToString(), collaborator = q["name"]?.ToString(), email = q["email"]?.ToString(),
+                            askedAt = q["created_at"]?.ToString(), question = q["question"]?.ToString(), bananaChatAnswer = q["answer"]?.ToString(),
+                            architectAnswer = q["architect_answer"]?.Type == JTokenType.Null ? null : q["architect_answer"]?.ToString(),
+                            status = q["architect_answer"] != null && q["architect_answer"].Type != JTokenType.Null ? "answered by the architect"
+                                   : System.Text.RegularExpressions.Regex.IsMatch(q["answer"]?.ToString() ?? "", "does not show that", System.Text.RegularExpressions.RegexOptions.IgnoreCase) ? "needs the architect" : "answered from the set",
+                        }).ToList();
+                    TelemetryService.Track(_bimMonkeyApiKey, "tool_call", toolName: "getCollaboratorQuestions", metadata: new { count = rows.Count, project });
+                    if (rows.Count == 0) return JsonConvert.SerializeObject(new { success = true, questions = rows, message = string.IsNullOrEmpty(project) ? "No collaborator questions yet. They appear once someone with a share link asks the set." : $"No collaborator questions on \"{project}\" yet." });
+                    return JsonConvert.SerializeObject(new { success = true, questions = rows, needsArchitect = rows.Count(r => r.status == "needs the architect") });
+                }
+            }
+            catch (Exception ex) { return JsonConvert.SerializeObject(new { success = false, error = ex.Message }); }
+        }
+
+        /// <summary>The architect's answer on the set — confirm-first, because it emails someone outside the firm.</summary>
+        private async Task<string> HandleAnswerCollaboratorQuestionAsync(JObject parameters)
+        {
+            if (string.IsNullOrEmpty(_bimMonkeyApiKey)) return JsonConvert.SerializeObject(new { success = false, error = "No BIM Monkey API key is set in this plugin." });
+            var id = parameters?["id"]?.Type == JTokenType.Integer ? parameters["id"].Value<long>() : 0;
+            var answer = parameters?["answer"]?.ToString()?.Trim();
+            var confirm = parameters?["confirm"]?.Type == JTokenType.Boolean && parameters["confirm"].Value<bool>();
+            if (id <= 0 || string.IsNullOrEmpty(answer)) return JsonConvert.SerializeObject(new { success = false, error = "id and answer are required" });
+            if (!confirm)
+                return JsonConvert.SerializeObject(new { success = true, needsConfirmation = true, id, answer,
+                    preview = $"ANSWER PREVIEW — nothing sent yet. This answer will be posted on the collaborator's page for question #{id} and emailed to them:\n\n\"{answer}\"\n\nShow this to the user and wait for an explicit yes, then call answerCollaboratorQuestion again with confirm=true." });
+            try
+            {
+                using (var client = new System.Net.Http.HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("Authorization", $"Bearer {_bimMonkeyApiKey}");
+                    RevitMCPBridge.AgentFramework.PluginIdentity.Stamp(client.DefaultRequestHeaders);
+                    client.Timeout = TimeSpan.FromSeconds(20);
+                    var payload = new System.Net.Http.StringContent(JsonConvert.SerializeObject(new { answer }), System.Text.Encoding.UTF8, "application/json");
+                    var resp = await RevitMCPBridge.AgentFramework.ApiRetry.PostAsync(client, $"{CollaboratorQuestionsUrl}/{id}/answer", payload);
+                    var body = await resp.Content.ReadAsStringAsync();
+                    TelemetryService.Track(_bimMonkeyApiKey, "tool_call", toolName: "answerCollaboratorQuestion", success: resp.IsSuccessStatusCode, metadata: new { id });
+                    if (!resp.IsSuccessStatusCode) return JsonConvert.SerializeObject(new { success = false, error = $"Could not post the answer ({(int)resp.StatusCode}): {body}" });
+                    var j = JObject.Parse(body);
+                    Say($"Answer posted on the set for question #{id}" + (j["emailed"]?.Value<bool>() == true ? " and emailed to the collaborator." : "."));
+                    return JsonConvert.SerializeObject(new { success = true, id, emailed = j["emailed"], message = "Posted on the set" + (j["emailed"]?.Value<bool>() == true ? " and emailed to them." : " (no email went out).") });
+                }
+            }
+            catch (Exception ex) { return JsonConvert.SerializeObject(new { success = false, error = ex.Message }); }
         }
 
         private async Task<string> HandleRevokeCollaboratorAsync(JObject parameters)
@@ -5363,6 +5431,10 @@ At the start of any spatial or redline task, scan the ===CORRECTIONS=== block in
                 return await HandlePublishSetAsync(parameters);
             if (methodName == "revokeCollaborator")
                 return await HandleRevokeCollaboratorAsync(parameters);
+            if (methodName == "getCollaboratorQuestions")
+                return await HandleCollaboratorQuestionsAsync(parameters);
+            if (methodName == "answerCollaboratorQuestion")
+                return await HandleAnswerCollaboratorQuestionAsync(parameters);
 
             // First-line support agent (docs/support-agent.md §3.3) — server-side answer on BIM Monkey's key
             if (methodName == "support_help")
