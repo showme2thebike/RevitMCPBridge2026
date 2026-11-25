@@ -1,0 +1,12 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>BIM Monkey Connect</Name>
+    <Assembly>BimMonkeyConnect2024.dll</Assembly>
+    <FullClassName>RevitMCPBridge.RevitMCPBridgeApp</FullClassName>
+    <ClientId>5C1E7A02-6B3D-4F8E-9A14-2D7C0B9E3F55</ClientId>
+    <VendorId>BimMonkey</VendorId>
+    <VendorDescription>BIM Monkey - https://bimmonkey.ai</VendorDescription>
+    <Description>BIM Monkey Connect for Revit 2024 - publish issued sets, share them with consultants, and let an assistant read your model</Description>
+  </AddIn>
+</RevitAddIns>
